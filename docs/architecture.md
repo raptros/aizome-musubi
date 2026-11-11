@@ -41,12 +41,16 @@ flowchart LR
 | `graph::classify` | port kind (format.dsp → EnumFormat → media.class), channel position, pairing predicate | — |
 | `graph::identity` | live id (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, seq client); ambiguity detection | persists runtime ids |
 | `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, offsets, cell state lookup | allocates the cross-product |
-| `matrix::widget` (`PatchMatrix`) | four regions, scroll offsets (widget state), hit testing, drawing, damage (`invalidate_rect` for hover/focus/line preview), semantics | owns graph data (gets an `Rc<Layout>`) |
+| `matrix::widget` (`PatchMatrix`) | fixed corner, x-scrolling column header, y-scrolling row header, xy-scrolling body; clamped offsets in widget state, pitch-based hit testing, clipped drawing, targeted hover/focus damage and redraw-on-scroll, table semantics | owns graph data (gets an `Rc<Layout>`) |
 | `routes` (List view) | kit `table` over the page's links; Add Route sheet | — |
 | `undo` | transactions of link intents by stable identity; inverse on observed results only | replays runtime ids from another epoch |
 | `app` | `Program`: model, `Msg`, `update`, `view`, menus, settings persistence | does I/O in `view` |
 
 Later phases add: `mixer` (strips, `Fader`, `LevelMeter`; Pulse bridge), `meters` (peak streams on the PipeWire thread), `devices`, `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
+
+## Matrix regions and scrolling
+
+The corner stays fixed; column labels follow x only, row labels follow y only, and the body follows both. Wheel deltas clamp the widget's stored offsets to the content extents. The spike invalidates the affected header regions and the body on scroll (plus the corner in the wheel path), then redraws them; it does not ask the compositor to pixel-scroll overlapping regions. This keeps boundary pixels and clipped rotated labels correct for horizontal, vertical and diagonal movement without coordinating three disjoint scroll commands. Hover and focus instead invalidate old/new row and column bands, including their header labels; keyboard focus that reveals an offscreen cell uses the scroll redraw path. Measured release costs for both scales are in `performance.md`.
 
 ## Threads and messages
 - UI thread: kit event loop, `Program`.

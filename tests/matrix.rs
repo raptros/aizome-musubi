@@ -1,5 +1,5 @@
 use std::{rc::Rc, time::Instant};
-use aizome_kit::{Appearance, Point, Vec2, sidestep_ui::{Key, NamedKey, Modifiers}, testing::{Harness, assert_golden}, theme::ThemeChoice};
+use aizome_kit::{Appearance, Point, Rect, Vec2, sidestep_ui::{Key, NamedKey, Modifiers}, testing::{Harness, assert_golden}, theme::ThemeChoice};
 use aizome_musubi::{app::Musubi, matrix::Layout};
 
 fn harness(n: usize, day: bool) -> Harness<Musubi> {
@@ -65,6 +65,7 @@ fn matrix_frames() {
         let p = Point::new(r.x0 + 270., r.y0 + 230.);
         h.scroll(w, p, Vec2::new(2250., 2200.));
         h.render_frame(w, scale);
+        let whole = Rect::from_origin_size(Point::ZERO, h.size(w));
         for kind in ["hover", "focus", "scroll", "full"] {
             let mut samples = Vec::new();
             for n in 0..80 {
@@ -74,8 +75,15 @@ fn matrix_frames() {
                     "scroll" => h.scroll(w, p, Vec2::new(if n % 2 == 0 { 24. } else { -24. }, if n % 2 == 0 { 24. } else { -24. })),
                     _ => (),
                 }
+                let damage = if kind == "full" {
+                    h.take_damage(w);
+                    vec![whole]
+                } else {
+                    h.take_damage(w)
+                };
+                assert!(!damage.is_empty(), "{kind} produced no damage at sample {n}");
                 let start = Instant::now();
-                if kind == "full" { h.render_rgba(w, scale); } else { h.render_frame(w, scale); }
+                h.render_damage(w, &damage, scale).expect("nonempty damage");
                 if n >= 10 { samples.push(start.elapsed().as_secs_f64() * 1000.); }
             }
             let (p50, p95) = percentile(samples);
