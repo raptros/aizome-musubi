@@ -54,6 +54,7 @@ dependencies = [
  "aizome-kit",
  "libc",
  "pipewire",
+ "serde_json",
 ]
 
 [[package]]

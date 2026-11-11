@@ -37,9 +37,10 @@ flowchart LR
 |---|---|---|
 | `backend::pipewire` | the PipeWire MainLoop/Context/Core/Registry on one thread; proxies, listeners; command execution; epoch; reconnect | sends proxies across threads; blocks on the UI |
 | `backend::fake` | a scriptable graph for tests (same `Backend` trait) | — |
-| `graph` | plain-data store: clients, devices, nodes, ports, links, metadata; sparse `links_by_pair`; pending (out-of-order) children; apply `GraphDelta` | knows about pages or pixels |
-| `graph::classify` | port kind (format.dsp → EnumFormat → media.class), channel position, pairing predicate | — |
-| `graph::identity` | live id (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, seq client); ambiguity detection | persists runtime ids |
+| `graph` | plain-data store: clients, devices, nodes, ports, links, metadata; sparse `links_by_pair` and per-kind port index; pending out-of-order ports/links; epoch-gated `GraphDelta` with cascade removal | knows about pages or pixels |
+| `graph::dump` | `pw-dump` JSON → graph deltas, including port EnumFormat summaries | talks to PipeWire |
+| `graph::classify` | port kind (format.dsp → port EnumFormat → unambiguous media.class), channel position, strict FL/FR pairing | — |
+| `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
 | `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, offsets, cell state lookup | allocates the cross-product |
 | `matrix::widget` (`PatchMatrix`) | fixed corner, x-scrolling column header, y-scrolling row header, xy-scrolling body; clamped offsets in widget state, pitch-based hit testing, clipped drawing, targeted hover/focus damage and redraw-on-scroll, table semantics | owns graph data (gets an `Rc<Layout>`) |
 | `routes` (List view) | kit `table` over the page's links; Add Route sheet | — |
