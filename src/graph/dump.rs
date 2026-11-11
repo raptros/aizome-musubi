@@ -1,8 +1,8 @@
 //! Import `pw-dump` snapshots as the same deltas consumed by a live backend.
 use super::classify::{PortKind, from_enum_format};
 use super::{
-    ClientRecord, DeviceRecord, Direction, GlobalId, GraphDelta, LinkRecord, MetadataRecord, NodeRecord, PortRecord,
-    Properties, Upsert,
+    ClientRecord, DeviceRecord, Direction, GlobalId, GraphDelta, LinkRecord, LinkState, MetadataRecord, NodeRecord,
+    PortRecord, Properties, Upsert,
 };
 use serde_json::Value;
 
@@ -97,7 +97,12 @@ pub fn parse(json: &str, epoch: u64) -> Result<GraphDelta, serde_json::Error> {
                 let (Some(output), Some(input)) = (output, input) else {
                     continue;
                 };
-                Upsert::Link(LinkRecord { id: global_id, output, input, props })
+                let state = match value["info"]["state"].as_str().unwrap_or("active") {
+                    "active" => LinkState::Active,
+                    "error" => LinkState::Error(value["info"]["error"].as_str().unwrap_or("link failed").to_owned()),
+                    _ => LinkState::Negotiating,
+                };
+                Upsert::Link(LinkRecord { id: global_id, output, input, state, props })
             }
             "PipeWire:Interface:Metadata" => Upsert::Metadata(MetadataRecord { id: global_id, props }),
             _ => continue,

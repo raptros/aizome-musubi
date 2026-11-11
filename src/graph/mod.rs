@@ -45,10 +45,18 @@ pub struct PortRecord {
     pub props: Properties,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkState {
+    Active,
+    Negotiating,
+    Error(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkRecord {
     pub id: GlobalId,
     pub output: GlobalId,
     pub input: GlobalId,
+    pub state: LinkState,
     pub props: Properties,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +124,12 @@ impl Graph {
             self.upsert(upsert);
         }
         self.attach_pending();
+    }
+
+    pub fn has_active_link(&self, pair: (GlobalId, GlobalId)) -> bool {
+        self.links_by_pair
+            .get(&pair)
+            .is_some_and(|ids| ids.iter().any(|id| self.links.get(id).is_some_and(|link| link.state == LinkState::Active)))
     }
 
     pub fn kind(&self, port: GlobalId) -> Option<classify::PortKind> {
@@ -260,7 +274,7 @@ mod tests {
         })
     }
     fn link(id: u32, output: u32, input: u32) -> Upsert {
-        Upsert::Link(LinkRecord { id, output, input, props: Properties::new() })
+        Upsert::Link(LinkRecord { id, output, input, state: LinkState::Active, props: Properties::new() })
     }
     fn delta(epoch: u64, upserts: Vec<Upsert>, removals: Vec<u32>) -> GraphDelta {
         GraphDelta { epoch, upserts, removals }

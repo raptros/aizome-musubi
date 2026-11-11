@@ -20,7 +20,7 @@ use std::{
 
 use super::{Backend, Command, Connection, Event, RequestId};
 use crate::graph::{
-    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, NodeRecord, PortRecord, Properties, Upsert,
+    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NodeRecord, PortRecord, Properties, Upsert,
     classify::PortKind,
     legal::{LinkLegality, can_link},
 };
@@ -44,9 +44,13 @@ fn complete(
         results.borrow_mut().push((request, result));
     }
 }
-fn link_seen(actions: &Actions, results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>, output: u32, input: u32) {
-    // Only one observation can satisfy one pending request. Concurrent identical
-    // requests require distinct observed link globals.
+fn link_seen(
+    actions: &Actions,
+    results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
+    output: u32,
+    input: u32,
+    state: &LinkState,
+) {
     let request = actions
         .borrow()
         .iter()
@@ -56,7 +60,11 @@ fn link_seen(actions: &Actions, results: &Rc<RefCell<Vec<(RequestId, Result<(), 
         })
         .min();
     if let Some(id) = request {
-        complete(actions, results, id, Ok(()));
+        match state {
+            LinkState::Active => complete(actions, results, id, Ok(())),
+            LinkState::Error(reason) => complete(actions, results, id, Err(reason.clone())),
+            LinkState::Negotiating => {}
+        }
     }
 }
 
@@ -197,6 +205,7 @@ fn bind(
                 id,
                 output: prop_id(&p, "link.output.port").unwrap_or(0),
                 input: prop_id(&p, "link.input.port").unwrap_or(0),
+                state: LinkState::Negotiating,
                 props: p.clone(),
             }));
             let batch = pending.clone();
@@ -209,9 +218,13 @@ fn bind(
                     merge(&mut record.props, info.props());
                     record.output = info.output_port_id();
                     record.input = info.input_port_id();
-                    record.props.insert("link.state".into(), format!("{:?}", info.state()));
+                    record.state = match info.state() {
+                        pw::link::LinkState::Active => LinkState::Active,
+                        pw::link::LinkState::Error(reason) => LinkState::Error(reason.to_owned()),
+                        _ => LinkState::Negotiating,
+                    };
                     batch.borrow_mut().upsert(Upsert::Link(record.clone()));
-                    link_seen(&link_actions, &link_results, record.output, record.input);
+                    link_seen(&link_actions, &link_results, record.output, record.input, &record.state);
                 })
                 .register();
             Bound::Link(listener, proxy)

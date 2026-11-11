@@ -1,7 +1,7 @@
 use crate::{
     backend::{Backend, Command, Connection, Event, Handle, RequestId, fake::FakeBackend, pipewire::PipeWireBackend},
     graph::{
-        GlobalId, Graph,
+        GlobalId, Graph, LinkState,
         classify::PortKind,
         group::port_label,
         identity::StableId,
@@ -532,9 +532,21 @@ impl Musubi {
         self.layouts = array::from_fn(|i| {
             let page = [Page::Audio, Page::Midi, Page::Midi2, Page::Video][i];
             let mut layout = Layout::from_graph(&self.graph, page, &self.options[i]);
+            for link in self.graph.links.values() {
+                if let Some(cell) = layout.cell_for_pair((link.output, link.input)) {
+                    match &link.state {
+                        LinkState::Active => {}
+                        LinkState::Negotiating => { layout.cells.insert(cell, CellState::Asked); }
+                        LinkState::Error(reason) => {
+                            layout.cells.insert(cell, CellState::Error);
+                            layout.error_reasons.insert(cell, reason.clone());
+                        }
+                    }
+                }
+            }
             for pending in self.pending.values() {
                 if let Some(cell) = layout.cell_for_pair(pending.pair) {
-                    layout.cells.insert(cell, CellState::Asked);
+                    layout.cells.entry(cell).or_insert(CellState::Asked);
                 }
             }
             for (&pair, reason) in &self.errors {
@@ -592,7 +604,7 @@ impl Musubi {
                     "{from_name} · {} → {to_name} · {} · error — {}",
                     describe(source),
                     describe(target),
-                    self.errors.get(&(source, target)).map(String::as_str).unwrap_or("connection refused")
+                    layout.error_reasons.get(&cell).map(String::as_str).unwrap_or("connection refused")
                 ));
             }
             CellState::NotAllowed => {
@@ -1012,7 +1024,7 @@ impl Program for Musubi {
                             continue;
                         };
                         if intent.result.is_some()
-                            && self.graph.links_by_pair.contains_key(&(from, to)) == intent.connect
+                            && (if intent.connect { self.graph.has_active_link((from, to)) } else { !self.graph.links_by_pair.contains_key(&(from, to)) })
                         {
                             intent.observed = true;
                         }
@@ -1022,7 +1034,7 @@ impl Program for Musubi {
                     !self.transactions.iter().flat_map(|t| &t.intents).any(|intent| {
                         intent.request == request
                             && intent.result.is_some()
-                            && self.graph.links_by_pair.contains_key(&pending.pair) == intent.connect
+                            && (if intent.connect { self.graph.has_active_link(pending.pair) } else { !self.graph.links_by_pair.contains_key(&pending.pair) })
                     })
                 });
                 self.refresh_layouts();
@@ -1039,7 +1051,7 @@ impl Program for Musubi {
                         self.notice = Some(reason);
                     }
                 } else if let Some(pending) = self.pending.get(&request) {
-                    let observed = self.graph.links_by_pair.contains_key(&pending.pair);
+                    let observed = self.graph.has_active_link(pending.pair);
                     if let Some(intent) =
                         self.transactions.iter_mut().flat_map(|t| &mut t.intents).find(|i| i.request == request)
                     {

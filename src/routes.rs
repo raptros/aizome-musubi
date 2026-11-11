@@ -5,7 +5,7 @@ use aizome_kit::{column, prelude::*, row};
 
 use crate::{
     app::Msg,
-    graph::{Direction, GlobalId, Graph, classify::PortKind, group::port_label},
+    graph::{Direction, GlobalId, Graph, LinkState, classify::PortKind, group::port_label},
     matrix::Layout,
 };
 
@@ -43,7 +43,11 @@ pub fn routes(
             to: link.input,
             source: port_name(graph, link.output),
             target: port_name(graph, link.input),
-            state: "Connected".into(),
+            state: match &link.state {
+                LinkState::Active => "Connected".into(),
+                LinkState::Negotiating => "Asked".into(),
+                LinkState::Error(reason) => format!("Error: {reason}"),
+            },
             kind: kind_label(graph, link.output, link.input, include_kind),
         })
         .collect();

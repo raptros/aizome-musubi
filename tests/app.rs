@@ -13,7 +13,7 @@ use aizome_musubi::{
 };
 use aizome_musubi::{
     backend::Command,
-    graph::{GraphDelta, LinkRecord, Properties, Upsert},
+    graph::{GraphDelta, LinkRecord, LinkState, Properties, Upsert},
     matrix::layout::{COLUMN_HEADER, Cell, CellState, ROW_HEADER},
 };
 use std::{cell::RefCell, rc::Rc};
@@ -86,6 +86,41 @@ fn click_connect_disconnect_and_failure() {
     assert_eq!(h.program().layout(Page::Audio).unwrap().state(c), CellState::Error);
     h.move_to(w, p);
     assert!(h.program().status_sentence().unwrap().contains("permission denied"));
+}
+
+#[test]
+fn observed_link_states_gate_connect_results_and_show_failure_reason() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let (c, p) = cell(&h, 100, 104);
+    fake.borrow_mut().defer_next_connect();
+    h.click(w, p);
+    let id = fake.borrow().graph.links_by_pair[&(100, 104)][0];
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(c), CellState::Asked);
+    assert_eq!(h.program().transactions[0].intents[0].result, None);
+    fake.borrow_mut().transition_link(id, LinkState::Error("format negotiation failed".into()));
+    while let Some(event) = fake.borrow_mut().next_event() {
+        h.send(Msg::Backend(event));
+    }
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(c), CellState::Error);
+    assert_eq!(h.program().transactions[0].intents[0].result, Some(Err("format negotiation failed".into())));
+    h.move_to(w, p);
+    assert!(h.program().status_sentence().unwrap().contains("format negotiation failed"));
+
+    fake.borrow_mut().remove(id);
+    while let Some(event) = fake.borrow_mut().next_event() {
+        h.send(Msg::Backend(event));
+    }
+    fake.borrow_mut().defer_next_connect();
+    h.click(w, p);
+    let id = fake.borrow().graph.links_by_pair[&(100, 104)][0];
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(c), CellState::Asked);
+    fake.borrow_mut().transition_link(id, LinkState::Active);
+    while let Some(event) = fake.borrow_mut().next_event() {
+        h.send(Msg::Backend(event));
+    }
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(c), CellState::Connected);
+    assert_eq!(h.program().transactions.last().unwrap().intents[0].result, Some(Ok(())));
 }
 
 #[test]
@@ -244,7 +279,7 @@ fn collapsed_cell_expands_and_relink_notice() {
     h.click(w, p);
     h.send(Msg::Backend(Event::Delta(GraphDelta {
         epoch: 1,
-        upserts: vec![Upsert::Link(LinkRecord { id: 9999, output: 100, input: 104, props: Properties::new() })],
+        upserts: vec![Upsert::Link(LinkRecord { id: 9999, output: 100, input: 104, state: LinkState::Active, props: Properties::new() })],
         removals: vec![],
     })));
     assert!(h.program().status_sentence().unwrap().contains("WirePlumber connected"));

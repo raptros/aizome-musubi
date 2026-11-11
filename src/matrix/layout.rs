@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     app::Page,
     graph::{
-        self, Direction, GlobalId, Graph,
+        self, Direction, GlobalId, Graph, LinkState,
         classify::{self, PortKind},
         group::{GroupKey, GroupKind},
     },
@@ -237,7 +237,7 @@ impl Layout {
             cols,
             row_lines,
             col_lines,
-            links: graph.links_by_pair.keys().copied().collect(),
+            links: graph.links.values().filter(|link| link.state == LinkState::Active).map(|link| (link.output, link.input)).collect(),
             cells: HashMap::new(),
             error_reasons: HashMap::new(),
             hidden_from,

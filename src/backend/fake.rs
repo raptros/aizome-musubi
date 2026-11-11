@@ -1,9 +1,9 @@
 //! Deterministic registry simulation for graph, UI and undo tests.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use super::{Backend, Command, Connection, Event};
 use crate::graph::{
-    GlobalId, Graph, GraphDelta, LinkRecord, Properties, Upsert, dump,
+    GlobalId, Graph, GraphDelta, LinkRecord, LinkState, Properties, Upsert, dump,
     legal::{LinkLegality, can_link},
 };
 
@@ -12,6 +12,8 @@ pub struct FakeBackend {
     events: VecDeque<Event>,
     next_id: GlobalId,
     next_failure: Option<String>,
+    defer_next: bool,
+    pending_connect: HashMap<GlobalId, u64>,
     pub commands: Vec<Command>,
 }
 
@@ -26,6 +28,8 @@ impl FakeBackend {
             events: VecDeque::from([Event::Connection(Connection::Up("fake PipeWire".into())), Event::Delta(delta)]),
             next_id,
             next_failure: None,
+            defer_next: false,
+            pending_connect: HashMap::new(),
             commands: Vec::new(),
         })
     }
@@ -33,6 +37,25 @@ impl FakeBackend {
     /// Make the next mutating command fail, without changing the registry.
     pub fn fail_next(&mut self, reason: impl Into<String>) {
         self.next_failure = Some(reason.into());
+    }
+    /// Leave the next successful Connect negotiating until `transition_link`.
+    pub fn defer_next_connect(&mut self) {
+        self.defer_next = true;
+    }
+
+    pub fn transition_link(&mut self, id: GlobalId, state: LinkState) {
+        let Some(mut link) = self.graph.links.get(&id).cloned() else { return };
+        link.state = state.clone();
+        self.publish(GraphDelta { epoch: self.graph.epoch, upserts: vec![Upsert::Link(link)], removals: vec![] });
+        if let Some(request) = self.pending_connect.remove(&id) {
+            match state {
+                LinkState::Active => self.events.push_back(Event::CommandResult { request, result: Ok(()) }),
+                LinkState::Error(reason) => self.events.push_back(Event::CommandResult { request, result: Err(reason) }),
+                LinkState::Negotiating => {
+                    self.pending_connect.insert(id, request);
+                }
+            }
+        }
     }
 
     /// Simulate a registry disappearance and deliver its delta to the Harness.
@@ -71,11 +94,17 @@ impl Backend for FakeBackend {
                         ("link.input.port".into(), input.id.to_string()),
                         ("object.linger".into(), "true".into()),
                     ]);
+                    let state = if self.defer_next { LinkState::Negotiating } else { LinkState::Active };
                     self.publish(GraphDelta {
                         epoch: self.graph.epoch,
-                        upserts: vec![Upsert::Link(LinkRecord { id, output: out.id, input: input.id, props })],
+                        upserts: vec![Upsert::Link(LinkRecord { id, output: out.id, input: input.id, state, props })],
                         removals: vec![],
                     });
+                    if self.defer_next {
+                        self.defer_next = false;
+                        self.pending_connect.insert(id, request);
+                        return;
+                    }
                 }
                 (request, result)
             }
