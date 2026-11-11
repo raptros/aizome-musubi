@@ -204,6 +204,15 @@ fn bind(
                     if let Some(pod) = pod {
                         let category = format_kind(pod);
                         let mut record = param_state.borrow_mut();
+                        if let Ok((MediaType::Video, subtype)) = format_utils::parse_format(pod) {
+                            if let Some(family) = match subtype {
+                                MediaSubtype::Raw => Some("raw"),
+                                MediaSubtype::Dsp => Some("dsp"),
+                                _ => None,
+                            } {
+                                record.props.insert("video.enum.family".into(), family.into());
+                            }
+                        }
                         if !record.enum_formats.contains(&category) {
                             record.enum_formats.push(category);
                         }

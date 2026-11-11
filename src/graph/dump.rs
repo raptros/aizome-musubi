@@ -81,6 +81,17 @@ pub fn parse(json: &str, epoch: u64) -> Result<GraphDelta, serde_json::Error> {
                     .as_array()
                     .map(|formats| formats.iter().map(format_kind).collect())
                     .unwrap_or_default();
+                let mut props = props;
+                if let Some(family) = value["info"]["params"]["EnumFormat"].as_array().and_then(|formats| {
+                    formats.iter().find_map(|format| {
+                        (format["mediaType"].as_str() == Some("video"))
+                            .then(|| format["mediaSubtype"].as_str())
+                            .flatten()
+                            .filter(|subtype| matches!(*subtype, "raw" | "dsp"))
+                    })
+                }) {
+                    props.insert("video.enum.family".into(), family.into());
+                }
                 Upsert::Port(PortRecord {
                     id: global_id,
                     node_id: id(&props, "node.id"),

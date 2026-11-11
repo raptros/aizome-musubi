@@ -345,7 +345,7 @@ impl Layout {
         let first = &graph.ports[&ports[0]];
         Line {
             kind: graph.kind(first.id).unwrap_or(PortKind::Other),
-            video_family: first.props.get("video.format.family").or_else(|| first.props.get("format.dsp")).cloned(),
+            video_family: first.props.get("video.format.family").or_else(|| first.props.get("format.dsp")).or_else(|| first.props.get("video.enum.family")).cloned(),
             ports,
             collapsed,
         }
