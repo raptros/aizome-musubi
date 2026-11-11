@@ -19,7 +19,11 @@ pub enum LinkLegality {
 }
 
 fn video_family(port: &super::PortRecord) -> Option<&str> {
-    port.props.get("video.format.family").or_else(|| port.props.get("format.dsp")).or_else(|| port.props.get("video.enum.family")).map(String::as_str)
+    port.props
+        .get("video.format.family")
+        .or_else(|| port.props.get("format.dsp"))
+        .or_else(|| port.props.get("video.enum.family"))
+        .map(String::as_str)
 }
 
 pub fn can_link(graph: &Graph, out: GlobalId, input: GlobalId) -> LinkLegality {
@@ -95,7 +99,11 @@ mod tests {
     }
     #[test]
     fn raw_enumformat_allows_two_real_shape_video_ports_without_dsp() {
-        use crate::{app::Page, graph::{GraphDelta, Upsert}, matrix::layout::{CellState, Layout, ViewOptions}};
+        use crate::{
+            app::Page,
+            graph::{GraphDelta, Upsert},
+            matrix::layout::{CellState, Layout, ViewOptions},
+        };
         let mut graph = Graph::default();
         graph.apply(dump::parse(include_str!("../../tests/fixtures/private.json"), 1).unwrap());
         let mut node = graph.nodes[&69].clone();

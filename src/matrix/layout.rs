@@ -237,7 +237,12 @@ impl Layout {
             cols,
             row_lines,
             col_lines,
-            links: graph.links.values().filter(|link| link.state == LinkState::Active).map(|link| (link.output, link.input)).collect(),
+            links: graph
+                .links
+                .values()
+                .filter(|link| link.state == LinkState::Active)
+                .map(|link| (link.output, link.input))
+                .collect(),
             cells: HashMap::new(),
             error_reasons: HashMap::new(),
             hidden_from,
@@ -345,7 +350,12 @@ impl Layout {
         let first = &graph.ports[&ports[0]];
         Line {
             kind: graph.kind(first.id).unwrap_or(PortKind::Other),
-            video_family: first.props.get("video.format.family").or_else(|| first.props.get("format.dsp")).or_else(|| first.props.get("video.enum.family")).cloned(),
+            video_family: first
+                .props
+                .get("video.format.family")
+                .or_else(|| first.props.get("format.dsp"))
+                .or_else(|| first.props.get("video.enum.family"))
+                .cloned(),
             ports,
             collapsed,
         }

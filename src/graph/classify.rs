@@ -138,7 +138,8 @@ mod tests {
         p.enum_formats = vec![PortKind::Other];
         assert_eq!(from_enum_format("application", "control"), PortKind::Other);
         assert_eq!(classify(&p, None), PortKind::Other);
-        let midi_node = NodeRecord { props: Properties::from([("media.class".into(), "Stream/Input/Midi".into())]), ..n.clone() };
+        let midi_node =
+            NodeRecord { props: Properties::from([("media.class".into(), "Stream/Input/Midi".into())]), ..n.clone() };
         assert_eq!(classify(&p, Some(&midi_node)), PortKind::Other);
         p.enum_formats = vec![PortKind::Midi];
         assert_eq!(classify(&p, Some(&midi_node)), PortKind::Midi);

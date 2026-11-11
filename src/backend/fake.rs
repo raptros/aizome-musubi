@@ -50,7 +50,9 @@ impl FakeBackend {
         if let Some(request) = self.pending_connect.remove(&id) {
             match state {
                 LinkState::Active => self.events.push_back(Event::CommandResult { request, result: Ok(()) }),
-                LinkState::Error(reason) => self.events.push_back(Event::CommandResult { request, result: Err(reason) }),
+                LinkState::Error(reason) => {
+                    self.events.push_back(Event::CommandResult { request, result: Err(reason) })
+                }
                 LinkState::Negotiating => {
                     self.pending_connect.insert(id, request);
                 }

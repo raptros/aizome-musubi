@@ -20,7 +20,8 @@ use std::{
 
 use super::{Backend, Command, Connection, Event, RequestId};
 use crate::graph::{
-    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NodeRecord, PortRecord, Properties, Upsert,
+    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NodeRecord, PortRecord,
+    Properties, Upsert,
     classify::PortKind,
     legal::{LinkLegality, can_link},
 };

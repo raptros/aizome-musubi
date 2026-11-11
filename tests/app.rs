@@ -135,9 +135,14 @@ fn focus_and_press_remain_valid_after_filter_shrinks_matrix() {
     h.send(Msg::From("USB".into()));
     h.key(w, Key::Named(NamedKey::ArrowDown), Modifiers::NONE);
     h.key(w, Key::Character(" ".into()), Modifiers::NONE);
-    let focused = h.semantics(w).into_iter().find(|(s, _)| {
-        s.role == aizome_kit::widget::SemanticRole::Table && s.label.as_deref() == Some("Audio connections")
-    }).expect("matrix semantics").0;
+    let focused = h
+        .semantics(w)
+        .into_iter()
+        .find(|(s, _)| {
+            s.role == aizome_kit::widget::SemanticRole::Table && s.label.as_deref() == Some("Audio connections")
+        })
+        .expect("matrix semantics")
+        .0;
     assert!(focused.value.is_some());
 }
 
@@ -316,7 +321,13 @@ fn collapsed_cell_expands_and_relink_notice() {
     h.click(w, p);
     h.send(Msg::Backend(Event::Delta(GraphDelta {
         epoch: 1,
-        upserts: vec![Upsert::Link(LinkRecord { id: 9999, output: 100, input: 104, state: LinkState::Active, props: Properties::new() })],
+        upserts: vec![Upsert::Link(LinkRecord {
+            id: 9999,
+            output: 100,
+            input: 104,
+            state: LinkState::Active,
+            props: Properties::new(),
+        })],
         removals: vec![],
     })));
     assert!(h.program().status_sentence().unwrap().contains("WirePlumber connected"));

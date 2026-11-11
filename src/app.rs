@@ -396,9 +396,11 @@ impl Musubi {
     fn replay(&mut self, undo: bool, cx: &mut Cx<Msg>) {
         let index = if undo { self.history.undo() } else { self.history.redo() };
         let Some(index) = index else { return };
-        if self.transactions[index].intents.iter().any(|intent| {
-            intent.result.is_none() || (matches!(intent.result, Some(Ok(()))) && !intent.observed)
-        }) {
+        if self.transactions[index]
+            .intents
+            .iter()
+            .any(|intent| intent.result.is_none() || (matches!(intent.result, Some(Ok(()))) && !intent.observed))
+        {
             self.history.defer(index, undo);
             self.notice = Some(format!("{} waiting for PipeWire.", if undo { "Undo" } else { "Redo" }));
             return;
@@ -543,7 +545,9 @@ impl Musubi {
                 if let Some(cell) = layout.cell_for_pair((link.output, link.input)) {
                     match &link.state {
                         LinkState::Active => {}
-                        LinkState::Negotiating => { layout.cells.insert(cell, CellState::Asked); }
+                        LinkState::Negotiating => {
+                            layout.cells.insert(cell, CellState::Asked);
+                        }
                         LinkState::Error(reason) => {
                             layout.cells.insert(cell, CellState::Error);
                             layout.error_reasons.insert(cell, reason.clone());
@@ -1031,7 +1035,11 @@ impl Program for Musubi {
                             continue;
                         };
                         if intent.result.is_some()
-                            && (if intent.connect { self.graph.has_active_link((from, to)) } else { !self.graph.links_by_pair.contains_key(&(from, to)) })
+                            && (if intent.connect {
+                                self.graph.has_active_link((from, to))
+                            } else {
+                                !self.graph.links_by_pair.contains_key(&(from, to))
+                            })
                         {
                             intent.observed = true;
                         }
@@ -1041,7 +1049,11 @@ impl Program for Musubi {
                     !self.transactions.iter().flat_map(|t| &t.intents).any(|intent| {
                         intent.request == request
                             && intent.result.is_some()
-                            && (if intent.connect { self.graph.has_active_link(pending.pair) } else { !self.graph.links_by_pair.contains_key(&pending.pair) })
+                            && (if intent.connect {
+                                self.graph.has_active_link(pending.pair)
+                            } else {
+                                !self.graph.links_by_pair.contains_key(&pending.pair)
+                            })
                     })
                 });
                 self.refresh_layouts();

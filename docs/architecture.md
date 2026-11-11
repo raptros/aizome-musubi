@@ -21,8 +21,8 @@ Dependencies: `aizome-kit` by path from a sibling Sekka checkout (`../sekka/desk
 ```mermaid
 flowchart LR
   subgraph PW[PipeWire thread — owns every proxy]
-    REG[registry + bound Node/Port/Link/Device/Client/Metadata] --> MODEL_PW[graph store]
-    CMD[command queue pw::channel] --> ACT[link-factory create / registry destroy / metadata / params]
+    REG[registry + bound Node/Port/Link/Device/Client] --> MODEL_PW[graph store]
+    CMD[command queue pw::channel] --> ACT[link-factory create / registry destroy]
   end
   MODEL_PW -- GraphDelta, coalesced per frame --> STREAM[Cx::stream]
   STREAM --> APP[Program::update]
@@ -40,20 +40,20 @@ flowchart LR
 | `backend::fake` | `pw-dump` fixture graph, deterministic link create/destroy deltas and injectable command failures (same `Backend` trait) | touches a PipeWire daemon |
 | `graph` | plain-data store: clients, devices, nodes, ports, links, metadata; sparse `links_by_pair` and per-kind port index; pending out-of-order ports/links; epoch-gated `GraphDelta` with cascade removal | knows about pages or pixels |
 | `graph::dump` | `pw-dump` JSON → graph deltas, including port EnumFormat summaries | talks to PipeWire |
-| `graph::classify` | port kind (format.dsp → port EnumFormat → unambiguous media.class), channel position, strict FL/FR pairing | — |
+| `graph::classify` | port kind (format.dsp → typed port EnumFormat → unambiguous media.class only when no EnumFormat); control type mask distinguishes MIDI 1.0 and UMP, otherwise unknown | — |
 | `graph::group` | MIDI sequencer-client, device, client, node grouping; display labels, kinds and ordered ports | treats runtime IDs as persistent |
-| `graph::legal` | output/input, media and video-format-family preflight; MIDI 1.0↔UMP confirmation | overrides server refusal |
+| `graph::legal` | output/input, media and comparable video raw/DSP EnumFormat-family preflight; MIDI 1.0↔UMP confirmation | overrides server refusal |
 | `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
-| `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, MIDI 1.0 group tags, offsets, sparse observed links plus request/error overrides and error reasons; resolves a visible cell for a port pair | allocates the cross-product |
+| `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, MIDI 1.0 group tags, offsets, active links plus negotiating/error overrides and error reasons; resolves a visible cell for a port pair | allocates the cross-product |
 | `matrix::widget` (`PatchMatrix`) | fixed corner, scrolling headers/body, focus navigation and Table semantics for its focused cell from a shared focus handle; Return opens the row-port inspector; deferred click/line gesture and Bresenham preview | owns graph data or mutates links during pointer movement |
 | `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in sunk wells in a modal Add Route sheet | changes graph data without app transactions |
-| `undo` | consumes `app::Transaction` with stable port identities, intended direction, request ID, result and observed flag; inverse on observed results only | replays runtime ids from another epoch |
+| `undo` | stable port identities and observed intents; retains pending undo/redo entries until the request and its observation settle | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
 
 Later phases add: `mixer` (strips, `Fader`, `LevelMeter`; Pulse bridge), `meters` (peak streams on the PipeWire thread), `devices`, `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
 
-The phase-1 matrix display derives one immutable `Layout` per page after each graph delta. `ViewOptions` supplies pairs, swap, monitors, optional MIDI 1.0, independent From/To filters, and folded group keys. The layout stores ordered group/line metadata, sparse observed link pairs and sparse request-state overrides; `state(cell)` computes visible pair/channel/aggregate states without allocating the row × column product. `hidden_from` and `hidden_to` count filtered physical ports before pair/fold aggregation. The app retains `Rc<Layout>` per page across frames (rather than rebuilding in `view`); pending requests remain asked until the graph observes the intended state and errors retain their server reason.
-The matrix retains its tree key across focus changes: `PatchMatrix` and the app share a focus handle so the widget can publish page-labelled Table semantics, its focused source/destination labels, observed state and server error without wrapping or remounting the matrix. The sparse layout carries error reasons and the page identity; MIDI 1.0 tagging is group metadata, rendered separately from the row group name to reserve room for port labels.
+The phase-1 matrix derives immutable layouts per page after graph deltas. `ViewOptions` supplies pairs, swap, monitors, optional MIDI 1.0, independent From/To filters and folded group keys. Active Link globals alone count as connected; negotiating links display asked, and failed links display error with the PipeWire reason. The live and fixture EnumFormat summaries carry video raw/DSP families even without `format.dsp`; control type masks distinguish MIDI from UMP, and an ambiguous control mask stays unknown. Pending requests stay asked until observation; failed requests retain their reason. Sparse link and request states avoid allocating the row × column product.
+The matrix retains its tree key across layout changes, reconciling focus, hover, press and line cells by surviving port identity or clamping/clearing them when rows shrink. `PatchMatrix` and the app share a focus handle for page-labelled Table semantics and focused cell text.
 
 
 Click or Space submits a single-cell transaction; a line drag (or Shift-Space, arrows, Space) previews an inclusive Bresenham line and submits once on release/application, in the first cell's mode. Collapsed cells expand rather than submit; incompatible pairs are skipped with a reason. Pair-to-pair maps corresponding channels; pair-row-to-mono maps both channels to the one input. `app::Transaction` contains `LinkIntent { from: StableId, to: StableId, connect, request, result, observed }` per attempted link; `result` is the command acknowledgement and `observed` records that the graph reflected its effect. S4c undo must invert **only** successful observed intents, resolving identities against the current graph and skipping missing/ambiguous ports.
@@ -68,7 +68,7 @@ The corner stays fixed; column labels follow x only, row labels follow y only, a
 ## Threads and messages
 - UI thread: kit event loop, `Program`.
 - PipeWire thread: everything PipeWire. Commands in: `Connect{out, in, confirmed, request}`, `Disconnect{link, request}`, `Shutdown` (+ later phases). Events out: `GraphDelta{epoch, upserts, removals}`, `CommandResult{request, Ok|Err(reason)}`, `Connection{Up(version)|Down(reason)}`. Deltas are batched on the PipeWire thread and flushed at most every 16 ms, so a burst (profile switch, app start) is one UI message.
-- `PipeWireBackend` owns a named MainLoop thread, its registry and bound object listeners; its 16 ms timer flushes value-only graph deltas into `Cx::stream`. `global_remove` drops each bound listener and proxy. Core errors tear down the session, advance the epoch, fail pending requests, emit `Down`, and retry with bounded backoff; the first core sync emits `Up`. The app shows per-page live port/link counts or an unavailable state. Connect validates current epoch, ports and graph legality (MIDI conversion needs `confirmed`), creates a lingering link via `link-factory`, and resolves only when the matching link global is observed; disconnect resolves only on `global_remove`. Proxy errors and three-second timeouts fail their requests without declaring a successful mutation.
+- `PipeWireBackend` owns a named MainLoop thread, its registry and bound object listeners; its 16 ms timer flushes value-only graph deltas into `Cx::stream`. `global_remove` drops each bound listener and proxy. Core errors tear down the session, advance the epoch, fail pending requests, emit `Down`, and retry with bounded backoff; the first core sync emits `Up`. Connect validates current epoch, ports and graph legality, creates a lingering link, and resolves successfully only when the matching link becomes active; a Link Error completes with its reason. Disconnect resolves on `global_remove`. Proxy errors and three-second timeouts fail requests without declaring a successful mutation. Metadata monitoring is not part of phase 1.
 
 ## Identity
 - Live actions: `(epoch, GlobalId)`. An epoch ends at disconnect; every pending command fails and the store is cleared.

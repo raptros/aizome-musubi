@@ -278,11 +278,17 @@ impl Widget for PatchMatrix {
             let previous = st.layout.replace(self.layout.clone());
             if let Some(previous) = previous {
                 let remap = |cell: Cell| {
-                    let row = previous.row_lines.get(cell.row).and_then(|line| line.ports.first())
+                    let row = previous
+                        .row_lines
+                        .get(cell.row)
+                        .and_then(|line| line.ports.first())
                         .and_then(|id| self.layout.row_lines.iter().position(|line| line.ports.contains(id)))
                         .or_else(|| (cell.row < self.layout.rows.labels.len()).then_some(cell.row))
                         .or_else(|| self.layout.rows.labels.len().checked_sub(1))?;
-                    let col = previous.col_lines.get(cell.col).and_then(|line| line.ports.first())
+                    let col = previous
+                        .col_lines
+                        .get(cell.col)
+                        .and_then(|line| line.ports.first())
                         .and_then(|id| self.layout.col_lines.iter().position(|line| line.ports.contains(id)))
                         .or_else(|| (cell.col < self.layout.cols.labels.len()).then_some(cell.col))
                         .or_else(|| self.layout.cols.labels.len().checked_sub(1))?;

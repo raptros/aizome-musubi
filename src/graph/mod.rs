@@ -127,9 +127,9 @@ impl Graph {
     }
 
     pub fn has_active_link(&self, pair: (GlobalId, GlobalId)) -> bool {
-        self.links_by_pair
-            .get(&pair)
-            .is_some_and(|ids| ids.iter().any(|id| self.links.get(id).is_some_and(|link| link.state == LinkState::Active)))
+        self.links_by_pair.get(&pair).is_some_and(|ids| {
+            ids.iter().any(|id| self.links.get(id).is_some_and(|link| link.state == LinkState::Active))
+        })
     }
 
     pub fn kind(&self, port: GlobalId) -> Option<classify::PortKind> {
