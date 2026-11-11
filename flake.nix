@@ -37,10 +37,12 @@
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.fontconfig pkgs.wayland pkgs.pipewire ];
         AIZOME_FONT_DIR = fontsFor;
       };
-      checks.${system}.musubi = musubi;
-      checks.${system}.vm = import ./nix/vm-test.nix {
-        inherit pkgs sekka;
-        musubiModule = self.nixosModules.default;
+      checks.${system} = {
+        inherit musubi;
+        vm = import ./nix/vm-test.nix {
+          inherit pkgs sekka;
+          musubiModule = self.nixosModules.default;
+        };
       };
       nixosModules.default = { config, lib, pkgs, ... }: {
         options.programs.musubi.enable = lib.mkEnableOption "Musubi, the PipeWire patchbay for Aizome";
