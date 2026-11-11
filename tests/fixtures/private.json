@@ -5,7 +5,7 @@
     "version": 4,
     "permissions": [ "r", "x", "m" ],
     "info": {
-      "cookie": 2701530689,
+      "cookie": 733058234,
       "user-name": "aidan",
       "host-name": "nyaruko-lives",
       "version": "1.6.11",
@@ -16,7 +16,7 @@
         "application.name": "pipewire",
         "application.process.binary": "pipewire",
         "application.process.host": "nyaruko-lives",
-        "application.process.id": 1176601,
+        "application.process.id": 1180236,
         "application.process.session-id": 4,
         "application.process.user": "aidan",
         "clock.power-of-two-quantum": true,
@@ -3944,11 +3944,11 @@
         "application.name": "pw-cat",
         "application.process.binary": "pw-cat",
         "application.process.host": "nyaruko-lives",
-        "application.process.id": 1176621,
+        "application.process.id": 1180258,
         "application.process.session-id": 4,
         "application.process.user": "aidan",
         "clock.power-of-two-quantum": true,
-        "core.name": "pipewire-aidan-1176621",
+        "core.name": "pipewire-aidan-1180258",
         "core.version": "1.6.11",
         "cpu.max-align": 32,
         "default.clock.max-quantum": 2048,
@@ -3972,7 +3972,7 @@
         "pipewire.protocol": "protocol-native",
         "pipewire.sec.gid": 1000,
         "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
-        "pipewire.sec.pid": 1176621,
+        "pipewire.sec.pid": 1180258,
         "pipewire.sec.socket": "pipewire-0",
         "pipewire.sec.uid": 1000,
         "settings.check-quantum": false,
@@ -3987,476 +3987,29 @@
     "version": 3,
     "permissions": [ "r", "w", "x", "m" ],
     "info": {
-      "max-input-ports": 129,
-      "max-output-ports": 0,
+      "max-input-ports": 0,
+      "max-output-ports": 1,
       "change-mask": [ "input-ports", "output-ports", "state", "props", "params" ],
       "n-input-ports": 0,
-      "n-output-ports": 0,
+      "n-output-ports": 1,
       "state": "suspended",
       "error": null,
       "props": {
-        "adapt.follower.spa-node": "",
         "application.name": "pw-cat",
         "client.id": 36,
-        "clock.quantum-limit": 8192,
-        "factory.id": 9,
-        "library.name": "audioconvert/libspa-audioconvert",
-        "media.category": "Capture",
-        "media.class": "Stream/Input/Audio",
-        "media.filename": "/dev/null",
-        "media.name": "/dev/null",
-        "media.role": "Music",
-        "media.type": "Audio",
-        "node.async": true,
-        "node.autoconnect": true,
-        "node.loop.class": "main",
-        "node.loop.name": "main-loop",
-        "node.name": "pw-cat",
-        "node.rate": "1/48000",
-        "node.want-driver": true,
-        "object.id": 59,
-        "object.register": false,
-        "object.serial": 66,
-        "port.group": "stream.0",
-        "stream.is-live": true,
-        "target.object": "musubi_test_mic"
-      },
-      "params": {
-        "EnumFormat": [
-          {
-            "mediaType": "audio",
-            "mediaSubtype": "raw",
-            "format": "S16LE",
-            "rate": 48000,
-            "channels": 1,
-            "position": [ "MONO" ]
-          }
-        ],
-        "PropInfo": [
-          {
-            "id": "volume",
-            "description": "Volume",
-            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 }
-          },
-          {
-            "id": "mute",
-            "description": "Mute",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            }
-          },
-          {
-            "id": "channelVolumes",
-            "description": "Channel Volumes",
-            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
-            "container": "Array"
-          },
-          {
-            "id": "channelMap",
-            "description": "Channel Map",
-            "type": "",
-            "container": "Array"
-          },
-          {
-            "id": "monitorMute",
-            "description": "Monitor Mute",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            }
-          },
-          {
-            "id": "monitorVolumes",
-            "description": "Monitor Volumes",
-            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
-            "container": "Array"
-          },
-          {
-            "id": "softMute",
-            "description": "Soft Mute",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            }
-          },
-          {
-            "id": "softVolumes",
-            "description": "Soft Volumes",
-            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
-            "container": "Array"
-          },
-          {
-            "name": "monitor.channel-volumes",
-            "description": "Monitor channel volume",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "channelmix.disable",
-            "description": "Disable Channel mixing",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "channelmix.min-volume",
-            "description": "Minimum volume level",
-            "type": { "default": 0.000000, "min": 0.000000, "max": 10.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.max-volume",
-            "description": "Maximum volume level",
-            "type": { "default": 10.000000, "min": 0.000000, "max": 10.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.normalize",
-            "description": "Normalize Volumes",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "channelmix.mix-lfe",
-            "description": "Mix LFE into channels",
-            "type": {
-              "default": true,
-              "alt1": true,
-              "alt2": false
-            },
-            "params": true
-          },
-          {
-            "name": "channelmix.upmix",
-            "description": "Enable upmixing",
-            "type": {
-              "default": true,
-              "alt1": true,
-              "alt2": false
-            },
-            "params": true
-          },
-          {
-            "name": "channelmix.lfe-cutoff",
-            "description": "LFE cutoff frequency",
-            "type": { "default": 0.000000, "min": 0.000000, "max": 1000.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.fc-cutoff",
-            "description": "FC cutoff frequency (Hz)",
-            "type": { "default": 0.000000, "min": 0.000000, "max": 48000.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.rear-delay",
-            "description": "Rear channels delay (ms)",
-            "type": { "default": 0.000000, "min": 0.000000, "max": 1000.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.stereo-widen",
-            "description": "Stereo widen",
-            "type": { "default": 0.000000, "min": 0.000000, "max": 1.000000 },
-            "params": true
-          },
-          {
-            "name": "channelmix.hilbert-taps",
-            "description": "Taps for phase shift of rear",
-            "type": { "default": 0, "min": 0, "max": 255 },
-            "params": true
-          },
-          {
-            "name": "channelmix.upmix-method",
-            "description": "Upmix method to use",
-            "type": "none",
-            "params": true,
-            "labels": [
-              "none",
-              "Disabled",
-              "simple",
-              "Simple upmixing",
-              "psd",
-              "Passive Surround Decoding"
-            ]
-          },
-          {
-            "id": "rate",
-            "description": "Rate scaler",
-            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 }
-          },
-          {
-            "id": "quality",
-            "name": "resample.quality",
-            "description": "Resample Quality",
-            "type": { "default": 4, "min": 0, "max": 14 },
-            "params": true
-          },
-          {
-            "name": "resample.disable",
-            "description": "Disable Resampling",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "dither.noise",
-            "description": "Add noise bits",
-            "type": { "default": 0, "min": 0, "max": 16 },
-            "params": true
-          },
-          {
-            "name": "dither.method",
-            "description": "The dithering method",
-            "type": "none",
-            "params": true,
-            "labels": [
-              "none",
-              "Disabled",
-              "rectangular",
-              "Rectangular dithering",
-              "triangular",
-              "Triangular dithering",
-              "triangular-hf",
-              "Sloped Triangular dithering",
-              "wannamaker3",
-              "Wannamaker 3 dithering",
-              "shaped5",
-              "Lipshitz 5 dithering"
-            ]
-          },
-          {
-            "name": "debug.wav-path",
-            "description": "Path to WAV file",
-            "type": "",
-            "params": true
-          },
-          {
-            "name": "channelmix.lock-volumes",
-            "description": "Disable volume updates",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "audioconvert.filter-graph.disable",
-            "description": "Disable Filter graph updates",
-            "type": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "params": true
-          },
-          {
-            "name": "audioconvert.filter-graph.N",
-            "description": "A filter graph to load",
-            "type": "",
-            "params": true
-          }
-        ],
-        "Props": [
-          {
-            "volume": 1.000000,
-            "mute": false,
-            "channelVolumes": [ ],
-            "channelMap": [ ],
-            "softMute": false,
-            "softVolumes": [ ],
-            "monitorMute": false,
-            "monitorVolumes": [ ],
-            "params": [
-              "monitor.channel-volumes",
-              false,
-              "channelmix.disable",
-              false,
-              "channelmix.min-volume",
-              0.000000,
-              "channelmix.max-volume",
-              10.000000,
-              "channelmix.normalize",
-              false,
-              "channelmix.mix-lfe",
-              true,
-              "channelmix.upmix",
-              true,
-              "channelmix.lfe-cutoff",
-              0.000000,
-              "channelmix.fc-cutoff",
-              0.000000,
-              "channelmix.rear-delay",
-              0.000000,
-              "channelmix.stereo-widen",
-              0.000000,
-              "channelmix.hilbert-taps",
-              0,
-              "channelmix.upmix-method",
-              "none",
-              "resample.quality",
-              4,
-              "resample.disable",
-              false,
-              "dither.noise",
-              0,
-              "dither.method",
-              "none",
-              "debug.wav-path",
-              "",
-              "channelmix.lock-volumes",
-              false,
-              "audioconvert.filter-graph.disable",
-              false,
-              "audioconvert.filter-graph",
-              ""
-            ]
-          }
-        ],
-        "Format": [ ],
-        "EnumPortConfig": [
-          {
-            "direction": "Input",
-            "mode": {
-              "default": "none",
-              "alt1": "none",
-              "alt2": "dsp",
-              "alt3": "convert"
-            },
-            "monitor": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            },
-            "control": {
-              "default": false,
-              "alt1": false,
-              "alt2": true
-            }
-          }
-        ],
-        "PortConfig": [
-          {
-            "direction": "Input",
-            "mode": "none",
-            "monitor": false,
-            "control": false
-          }
-        ],
-        "Latency": [
-          {
-            "direction": "Output",
-            "minQuantum": 0.000000,
-            "maxQuantum": 0.000000,
-            "minRate": 0,
-            "maxRate": 0,
-            "minNs": 0,
-            "maxNs": 0
-          }
-        ],
-        "ProcessLatency": [
-        ],
-        "Tag": [ ]
-      }
-    }
-  },
-  {
-    "id": 60,
-    "type": "PipeWire:Interface:Client",
-    "version": 3,
-    "permissions": [ "r", "w", "x", "m" ],
-    "info": {
-      "change-mask": [ "props" ],
-      "props": {
-        "application.language": "C.UTF-8",
-        "application.name": "pw-cat",
-        "application.process.binary": "pw-cat",
-        "application.process.host": "nyaruko-lives",
-        "application.process.id": 1176622,
-        "application.process.session-id": 4,
-        "application.process.user": "aidan",
-        "clock.power-of-two-quantum": true,
-        "core.name": "pipewire-aidan-1176622",
-        "core.version": "1.6.11",
-        "cpu.max-align": 32,
-        "default.clock.max-quantum": 2048,
-        "default.clock.min-quantum": 32,
-        "default.clock.quantum": 1024,
-        "default.clock.quantum-floor": 4,
-        "default.clock.quantum-limit": 8192,
-        "default.clock.rate": 48000,
-        "default.video.height": 480,
-        "default.video.rate.denom": 1,
-        "default.video.rate.num": 25,
-        "default.video.width": 640,
-        "link.max-buffers": 64,
-        "log.level": 0,
-        "mem.allow-mlock": true,
-        "mem.warn-mlock": false,
-        "module.id": 2,
-        "object.id": 60,
-        "object.serial": 67,
-        "pipewire.access": "unrestricted",
-        "pipewire.protocol": "protocol-native",
-        "pipewire.sec.gid": 1000,
-        "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
-        "pipewire.sec.pid": 1176622,
-        "pipewire.sec.socket": "pipewire-0",
-        "pipewire.sec.uid": 1000,
-        "settings.check-quantum": false,
-        "settings.check-rate": false,
-        "window.x11.display": ":0"
-      }
-    }
-  },
-  {
-    "id": 61,
-    "type": "PipeWire:Interface:Node",
-    "version": 3,
-    "permissions": [ "r", "w", "x", "m" ],
-    "info": {
-      "max-input-ports": 1,
-      "max-output-ports": 0,
-      "change-mask": [ "input-ports", "output-ports", "state", "props", "params" ],
-      "n-input-ports": 1,
-      "n-output-ports": 0,
-      "state": "suspended",
-      "error": null,
-      "props": {
-        "application.name": "pw-cat",
-        "client.id": 60,
         "format.dsp": "8 bit raw midi",
-        "media.category": "Capture",
-        "media.class": "Stream/Input/Midi",
-        "media.filename": "/tmp/musubi-pw.hhfU3xOb/midi-capture.mid",
-        "media.name": "/tmp/musubi-pw.hhfU3xOb/midi-capture.mid",
+        "media.category": "Playback",
+        "media.class": "Stream/Output/Midi",
+        "media.filename": "/tmp/musubi-pw.XKNRCz0J/midi-playback.mid",
+        "media.name": "/tmp/musubi-pw.XKNRCz0J/midi-playback.mid",
         "media.role": "Music",
         "media.type": "Midi",
         "node.async": true,
         "node.loop.class": "main",
         "node.name": "pw-cat",
         "node.want-driver": true,
-        "object.id": 61,
-        "object.serial": 68,
+        "object.id": 59,
+        "object.serial": 66,
         "port.group": "stream.0",
         "stream.is-live": true
       },
@@ -4476,7 +4029,172 @@
     }
   },
   {
+    "id": 60,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [ "r", "x", "m" ],
+    "info": {
+      "direction": "output",
+      "change-mask": [ "props", "params" ],
+      "props": {
+        "format.dsp": "8 bit raw midi",
+        "node.id": 59,
+        "object.id": 60,
+        "object.path": "pw-cat:output_0",
+        "object.serial": 67,
+        "port.alias": "pw-cat:output_1",
+        "port.direction": "out",
+        "port.group": "stream.0",
+        "port.id": 0,
+        "port.name": "output_1"
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control"
+          }
+        ],
+        "Meta": [
+          {
+            "type": "Busy",
+            "size": 8
+          }
+        ],
+        "IO": [
+          {
+            "id": "Buffers",
+            "size": 8
+          },
+          {
+            "id": "AsyncBuffers",
+            "size": 8
+          }
+        ],
+        "Format": [ ],
+        "Buffers": [ ],
+        "Latency": [ ],
+        "Tag": [
+          {
+            "direction": "Output",
+            "info": [
+              5,
+              "media.type",
+              "Midi",
+              "media.category",
+              "Playback",
+              "media.role",
+              "Music",
+              "media.filename",
+              "/tmp/musubi-pw.XKNRCz0J/midi-playback.mid",
+              "media.name",
+              "/tmp/musubi-pw.XKNRCz0J/midi-playback.mid"
+            ]
+          }
+        ],
+        "Capability": [ ],
+        "PeerCapability": [ ]
+      }
+    }
+  },
+  {
     "id": 62,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "change-mask": [ "props" ],
+      "props": {
+        "application.language": "C.UTF-8",
+        "application.name": "pw-cat",
+        "application.process.binary": "pw-cat",
+        "application.process.host": "nyaruko-lives",
+        "application.process.id": 1180257,
+        "application.process.session-id": 4,
+        "application.process.user": "aidan",
+        "clock.power-of-two-quantum": true,
+        "core.name": "pipewire-aidan-1180257",
+        "core.version": "1.6.11",
+        "cpu.max-align": 32,
+        "default.clock.max-quantum": 2048,
+        "default.clock.min-quantum": 32,
+        "default.clock.quantum": 1024,
+        "default.clock.quantum-floor": 4,
+        "default.clock.quantum-limit": 8192,
+        "default.clock.rate": 48000,
+        "default.video.height": 480,
+        "default.video.rate.denom": 1,
+        "default.video.rate.num": 25,
+        "default.video.width": 640,
+        "link.max-buffers": 64,
+        "log.level": 0,
+        "mem.allow-mlock": true,
+        "mem.warn-mlock": false,
+        "module.id": 2,
+        "object.id": 62,
+        "object.serial": 69,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native",
+        "pipewire.sec.gid": 1000,
+        "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
+        "pipewire.sec.pid": 1180257,
+        "pipewire.sec.socket": "pipewire-0",
+        "pipewire.sec.uid": 1000,
+        "settings.check-quantum": false,
+        "settings.check-rate": false,
+        "window.x11.display": ":0"
+      }
+    }
+  },
+  {
+    "id": 64,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "max-input-ports": 1,
+      "max-output-ports": 0,
+      "change-mask": [ "input-ports", "output-ports", "state", "props", "params" ],
+      "n-input-ports": 1,
+      "n-output-ports": 0,
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "application.name": "pw-cat",
+        "client.id": 62,
+        "format.dsp": "8 bit raw midi",
+        "media.category": "Capture",
+        "media.class": "Stream/Input/Midi",
+        "media.filename": "/tmp/musubi-pw.XKNRCz0J/midi-capture.mid",
+        "media.name": "/tmp/musubi-pw.XKNRCz0J/midi-capture.mid",
+        "media.role": "Music",
+        "media.type": "Midi",
+        "node.async": true,
+        "node.loop.class": "main",
+        "node.name": "pw-cat",
+        "node.want-driver": true,
+        "object.id": 64,
+        "object.serial": 71,
+        "port.group": "stream.0",
+        "stream.is-live": true
+      },
+      "params": {
+        "PropInfo": [ ],
+        "Props": [ ],
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control"
+          }
+        ],
+        "Format": [ ],
+        "ProcessLatency": [
+        ]
+      }
+    }
+  },
+  {
+    "id": 65,
     "type": "PipeWire:Interface:Port",
     "version": 3,
     "permissions": [ "r", "x", "m" ],
@@ -4485,10 +4203,10 @@
       "change-mask": [ "props", "params" ],
       "props": {
         "format.dsp": "8 bit raw midi",
-        "node.id": 61,
-        "object.id": 62,
+        "node.id": 64,
+        "object.id": 65,
         "object.path": "pw-cat:input_0",
-        "object.serial": 69,
+        "object.serial": 72,
         "port.alias": "pw-cat:input_1",
         "port.direction": "in",
         "port.group": "stream.0",
@@ -4528,6 +4246,55 @@
     }
   },
   {
+    "id": 61,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "change-mask": [ "props" ],
+      "props": {
+        "application.language": "C.UTF-8",
+        "application.name": "pw-cat",
+        "application.process.binary": "pw-cat",
+        "application.process.host": "nyaruko-lives",
+        "application.process.id": 1180255,
+        "application.process.session-id": 4,
+        "application.process.user": "aidan",
+        "clock.power-of-two-quantum": true,
+        "core.name": "pipewire-aidan-1180255",
+        "core.version": "1.6.11",
+        "cpu.max-align": 32,
+        "default.clock.max-quantum": 2048,
+        "default.clock.min-quantum": 32,
+        "default.clock.quantum": 1024,
+        "default.clock.quantum-floor": 4,
+        "default.clock.quantum-limit": 8192,
+        "default.clock.rate": 48000,
+        "default.video.height": 480,
+        "default.video.rate.denom": 1,
+        "default.video.rate.num": 25,
+        "default.video.width": 640,
+        "link.max-buffers": 64,
+        "log.level": 0,
+        "mem.allow-mlock": true,
+        "mem.warn-mlock": false,
+        "module.id": 2,
+        "object.id": 61,
+        "object.serial": 68,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native",
+        "pipewire.sec.gid": 1000,
+        "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
+        "pipewire.sec.pid": 1180255,
+        "pipewire.sec.socket": "pipewire-0",
+        "pipewire.sec.uid": 1000,
+        "settings.check-quantum": false,
+        "settings.check-rate": false,
+        "window.x11.display": ":0"
+      }
+    }
+  },
+  {
     "id": 63,
     "type": "PipeWire:Interface:Client",
     "version": 3,
@@ -4539,11 +4306,11 @@
         "application.name": "pw-cat",
         "application.process.binary": "pw-cat",
         "application.process.host": "nyaruko-lives",
-        "application.process.id": 1176620,
+        "application.process.id": 1180256,
         "application.process.session-id": 4,
         "application.process.user": "aidan",
         "clock.power-of-two-quantum": true,
-        "core.name": "pipewire-aidan-1176620",
+        "core.name": "pipewire-aidan-1180256",
         "core.version": "1.6.11",
         "cpu.max-align": 32,
         "default.clock.max-quantum": 2048,
@@ -4567,7 +4334,7 @@
         "pipewire.protocol": "protocol-native",
         "pipewire.sec.gid": 1000,
         "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
-        "pipewire.sec.pid": 1176620,
+        "pipewire.sec.pid": 1180256,
         "pipewire.sec.socket": "pipewire-0",
         "pipewire.sec.uid": 1000,
         "settings.check-quantum": false,
@@ -4577,7 +4344,7 @@
     }
   },
   {
-    "id": 64,
+    "id": 66,
     "type": "PipeWire:Interface:Node",
     "version": 3,
     "permissions": [ "r", "w", "x", "m" ],
@@ -4592,7 +4359,7 @@
       "props": {
         "adapt.follower.spa-node": "",
         "application.name": "pw-cat",
-        "client.id": 63,
+        "client.id": 61,
         "clock.quantum-limit": 8192,
         "factory.id": 9,
         "library.name": "audioconvert/libspa-audioconvert",
@@ -4610,9 +4377,9 @@
         "node.name": "pw-cat",
         "node.rate": "1/48000",
         "node.want-driver": true,
-        "object.id": 64,
+        "object.id": 66,
         "object.register": false,
-        "object.serial": 71,
+        "object.serial": 73,
         "port.group": "stream.0",
         "stream.is-live": true,
         "target.object": "musubi_test_speakers"
@@ -4976,7 +4743,405 @@
     }
   },
   {
-    "id": 65,
+    "id": 67,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "max-input-ports": 129,
+      "max-output-ports": 0,
+      "change-mask": [ "input-ports", "output-ports", "state", "props", "params" ],
+      "n-input-ports": 0,
+      "n-output-ports": 0,
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "adapt.follower.spa-node": "",
+        "application.name": "pw-cat",
+        "client.id": 63,
+        "clock.quantum-limit": 8192,
+        "factory.id": 9,
+        "library.name": "audioconvert/libspa-audioconvert",
+        "media.category": "Capture",
+        "media.class": "Stream/Input/Audio",
+        "media.filename": "/dev/null",
+        "media.name": "/dev/null",
+        "media.role": "Music",
+        "media.type": "Audio",
+        "node.async": true,
+        "node.autoconnect": true,
+        "node.loop.class": "main",
+        "node.loop.name": "main-loop",
+        "node.name": "pw-cat",
+        "node.rate": "1/48000",
+        "node.want-driver": true,
+        "object.id": 67,
+        "object.register": false,
+        "object.serial": 74,
+        "port.group": "stream.0",
+        "stream.is-live": true,
+        "target.object": "musubi_test_mic"
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "audio",
+            "mediaSubtype": "raw",
+            "format": "S16LE",
+            "rate": 48000,
+            "channels": 1,
+            "position": [ "MONO" ]
+          }
+        ],
+        "PropInfo": [
+          {
+            "id": "volume",
+            "description": "Volume",
+            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 }
+          },
+          {
+            "id": "mute",
+            "description": "Mute",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            }
+          },
+          {
+            "id": "channelVolumes",
+            "description": "Channel Volumes",
+            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
+            "container": "Array"
+          },
+          {
+            "id": "channelMap",
+            "description": "Channel Map",
+            "type": "",
+            "container": "Array"
+          },
+          {
+            "id": "monitorMute",
+            "description": "Monitor Mute",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            }
+          },
+          {
+            "id": "monitorVolumes",
+            "description": "Monitor Volumes",
+            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
+            "container": "Array"
+          },
+          {
+            "id": "softMute",
+            "description": "Soft Mute",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            }
+          },
+          {
+            "id": "softVolumes",
+            "description": "Soft Volumes",
+            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 },
+            "container": "Array"
+          },
+          {
+            "name": "monitor.channel-volumes",
+            "description": "Monitor channel volume",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "channelmix.disable",
+            "description": "Disable Channel mixing",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "channelmix.min-volume",
+            "description": "Minimum volume level",
+            "type": { "default": 0.000000, "min": 0.000000, "max": 10.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.max-volume",
+            "description": "Maximum volume level",
+            "type": { "default": 10.000000, "min": 0.000000, "max": 10.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.normalize",
+            "description": "Normalize Volumes",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "channelmix.mix-lfe",
+            "description": "Mix LFE into channels",
+            "type": {
+              "default": true,
+              "alt1": true,
+              "alt2": false
+            },
+            "params": true
+          },
+          {
+            "name": "channelmix.upmix",
+            "description": "Enable upmixing",
+            "type": {
+              "default": true,
+              "alt1": true,
+              "alt2": false
+            },
+            "params": true
+          },
+          {
+            "name": "channelmix.lfe-cutoff",
+            "description": "LFE cutoff frequency",
+            "type": { "default": 0.000000, "min": 0.000000, "max": 1000.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.fc-cutoff",
+            "description": "FC cutoff frequency (Hz)",
+            "type": { "default": 0.000000, "min": 0.000000, "max": 48000.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.rear-delay",
+            "description": "Rear channels delay (ms)",
+            "type": { "default": 0.000000, "min": 0.000000, "max": 1000.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.stereo-widen",
+            "description": "Stereo widen",
+            "type": { "default": 0.000000, "min": 0.000000, "max": 1.000000 },
+            "params": true
+          },
+          {
+            "name": "channelmix.hilbert-taps",
+            "description": "Taps for phase shift of rear",
+            "type": { "default": 0, "min": 0, "max": 255 },
+            "params": true
+          },
+          {
+            "name": "channelmix.upmix-method",
+            "description": "Upmix method to use",
+            "type": "none",
+            "params": true,
+            "labels": [
+              "none",
+              "Disabled",
+              "simple",
+              "Simple upmixing",
+              "psd",
+              "Passive Surround Decoding"
+            ]
+          },
+          {
+            "id": "rate",
+            "description": "Rate scaler",
+            "type": { "default": 1.000000, "min": 0.000000, "max": 10.000000 }
+          },
+          {
+            "id": "quality",
+            "name": "resample.quality",
+            "description": "Resample Quality",
+            "type": { "default": 4, "min": 0, "max": 14 },
+            "params": true
+          },
+          {
+            "name": "resample.disable",
+            "description": "Disable Resampling",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "dither.noise",
+            "description": "Add noise bits",
+            "type": { "default": 0, "min": 0, "max": 16 },
+            "params": true
+          },
+          {
+            "name": "dither.method",
+            "description": "The dithering method",
+            "type": "none",
+            "params": true,
+            "labels": [
+              "none",
+              "Disabled",
+              "rectangular",
+              "Rectangular dithering",
+              "triangular",
+              "Triangular dithering",
+              "triangular-hf",
+              "Sloped Triangular dithering",
+              "wannamaker3",
+              "Wannamaker 3 dithering",
+              "shaped5",
+              "Lipshitz 5 dithering"
+            ]
+          },
+          {
+            "name": "debug.wav-path",
+            "description": "Path to WAV file",
+            "type": "",
+            "params": true
+          },
+          {
+            "name": "channelmix.lock-volumes",
+            "description": "Disable volume updates",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "audioconvert.filter-graph.disable",
+            "description": "Disable Filter graph updates",
+            "type": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "params": true
+          },
+          {
+            "name": "audioconvert.filter-graph.N",
+            "description": "A filter graph to load",
+            "type": "",
+            "params": true
+          }
+        ],
+        "Props": [
+          {
+            "volume": 1.000000,
+            "mute": false,
+            "channelVolumes": [ ],
+            "channelMap": [ ],
+            "softMute": false,
+            "softVolumes": [ ],
+            "monitorMute": false,
+            "monitorVolumes": [ ],
+            "params": [
+              "monitor.channel-volumes",
+              false,
+              "channelmix.disable",
+              false,
+              "channelmix.min-volume",
+              0.000000,
+              "channelmix.max-volume",
+              10.000000,
+              "channelmix.normalize",
+              false,
+              "channelmix.mix-lfe",
+              true,
+              "channelmix.upmix",
+              true,
+              "channelmix.lfe-cutoff",
+              0.000000,
+              "channelmix.fc-cutoff",
+              0.000000,
+              "channelmix.rear-delay",
+              0.000000,
+              "channelmix.stereo-widen",
+              0.000000,
+              "channelmix.hilbert-taps",
+              0,
+              "channelmix.upmix-method",
+              "none",
+              "resample.quality",
+              4,
+              "resample.disable",
+              false,
+              "dither.noise",
+              0,
+              "dither.method",
+              "none",
+              "debug.wav-path",
+              "",
+              "channelmix.lock-volumes",
+              false,
+              "audioconvert.filter-graph.disable",
+              false,
+              "audioconvert.filter-graph",
+              ""
+            ]
+          }
+        ],
+        "Format": [ ],
+        "EnumPortConfig": [
+          {
+            "direction": "Input",
+            "mode": {
+              "default": "none",
+              "alt1": "none",
+              "alt2": "dsp",
+              "alt3": "convert"
+            },
+            "monitor": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            },
+            "control": {
+              "default": false,
+              "alt1": false,
+              "alt2": true
+            }
+          }
+        ],
+        "PortConfig": [
+          {
+            "direction": "Input",
+            "mode": "none",
+            "monitor": false,
+            "control": false
+          }
+        ],
+        "Latency": [
+          {
+            "direction": "Output",
+            "minQuantum": 0.000000,
+            "maxQuantum": 0.000000,
+            "minRate": 0,
+            "maxRate": 0,
+            "minNs": 0,
+            "maxNs": 0
+          }
+        ],
+        "ProcessLatency": [
+        ],
+        "Tag": [ ]
+      }
+    }
+  },
+  {
+    "id": 68,
     "type": "PipeWire:Interface:Client",
     "version": 3,
     "permissions": [ "r", "w", "x", "m" ],
@@ -4984,14 +5149,14 @@
       "change-mask": [ "props" ],
       "props": {
         "application.language": "C.UTF-8",
-        "application.name": "pw-dump",
-        "application.process.binary": "pw-dump",
+        "application.name": ".gst-launch-1.0-wrapped",
+        "application.process.binary": ".gst-launch-1.0-wrapped",
         "application.process.host": "nyaruko-lives",
-        "application.process.id": 1176630,
+        "application.process.id": 1180261,
         "application.process.session-id": 4,
         "application.process.user": "aidan",
         "clock.power-of-two-quantum": true,
-        "core.name": "pipewire-aidan-1176630",
+        "core.name": "pipewire-aidan-1180261",
         "core.version": "1.6.11",
         "cpu.max-align": 32,
         "default.clock.max-quantum": 2048,
@@ -5009,13 +5174,181 @@
         "mem.allow-mlock": true,
         "mem.warn-mlock": false,
         "module.id": 2,
-        "object.id": 65,
-        "object.serial": 72,
+        "object.id": 68,
+        "object.serial": 75,
         "pipewire.access": "unrestricted",
         "pipewire.protocol": "protocol-native",
         "pipewire.sec.gid": 1000,
         "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
-        "pipewire.sec.pid": 1176630,
+        "pipewire.sec.pid": 1180261,
+        "pipewire.sec.socket": "pipewire-0",
+        "pipewire.sec.uid": 1000,
+        "settings.check-quantum": false,
+        "settings.check-rate": false,
+        "window.x11.display": ":0"
+      }
+    }
+  },
+  {
+    "id": 69,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "max-input-ports": 0,
+      "max-output-ports": 2,
+      "change-mask": [ "input-ports", "output-ports", "state", "props", "params" ],
+      "n-input-ports": 0,
+      "n-output-ports": 1,
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "adapt.follower.spa-node": "",
+        "client.id": 68,
+        "clock.quantum-limit": 8192,
+        "factory.id": 9,
+        "library.name": "videoconvert/libspa-videoconvert",
+        "media.class": "Video/Source",
+        "media.name": ".gst-launch-1.0-wrapped",
+        "node.async": true,
+        "node.description": ".gst-launch-1.0-wrapped",
+        "node.driver": true,
+        "node.loop.class": "main",
+        "node.loop.name": "pipewire-main-l",
+        "node.name": "musubi_test_video",
+        "node.want-driver": true,
+        "object.id": 69,
+        "object.register": false,
+        "object.serial": 76,
+        "port.group": "stream.0",
+        "stream.is-live": true,
+        "target.object": 0
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "video",
+            "mediaSubtype": "raw",
+            "size": { "width": 320, "height": 240 },
+            "framerate": { "num": 30, "denom": 1 }
+          }
+        ],
+        "PropInfo": [ ],
+        "Props": [ ],
+        "Format": [ ],
+        "EnumPortConfig": [
+          {
+            "direction": "Output",
+            "mode": "passthrough"
+          }
+        ],
+        "PortConfig": [
+          {
+            "direction": "Output",
+            "mode": "passthrough"
+          }
+        ],
+        "Latency": [ ],
+        "ProcessLatency": [
+        ],
+        "Tag": [ ]
+      }
+    }
+  },
+  {
+    "id": 70,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [ "r", "x", "m" ],
+    "info": {
+      "direction": "output",
+      "change-mask": [ "props", "params" ],
+      "props": {
+        "node.id": 69,
+        "object.id": 70,
+        "object.path": "musubi_test_video:capture_0",
+        "object.serial": 77,
+        "port.alias": ".gst-launch-1.0-wrapped:capture_1",
+        "port.direction": "out",
+        "port.group": "stream.0",
+        "port.id": 0,
+        "port.name": "capture_1"
+      },
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "video",
+            "mediaSubtype": "raw",
+            "size": { "width": 320, "height": 240 },
+            "framerate": { "num": 30, "denom": 1 }
+          }
+        ],
+        "Meta": [
+          {
+            "type": "Busy",
+            "size": 8
+          }
+        ],
+        "IO": [
+          {
+            "id": "Buffers",
+            "size": 8
+          },
+          {
+            "id": "AsyncBuffers",
+            "size": 8
+          }
+        ],
+        "Format": [ ],
+        "Buffers": [ ],
+        "Latency": [ ],
+        "Tag": [ ],
+        "Capability": [ ],
+        "PeerCapability": [ ]
+      }
+    }
+  },
+  {
+    "id": 71,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [ "r", "w", "x", "m" ],
+    "info": {
+      "change-mask": [ "props" ],
+      "props": {
+        "application.language": "C.UTF-8",
+        "application.name": "pw-dump",
+        "application.process.binary": "pw-dump",
+        "application.process.host": "nyaruko-lives",
+        "application.process.id": 1180276,
+        "application.process.session-id": 4,
+        "application.process.user": "aidan",
+        "clock.power-of-two-quantum": true,
+        "core.name": "pipewire-aidan-1180276",
+        "core.version": "1.6.11",
+        "cpu.max-align": 32,
+        "default.clock.max-quantum": 2048,
+        "default.clock.min-quantum": 32,
+        "default.clock.quantum": 1024,
+        "default.clock.quantum-floor": 4,
+        "default.clock.quantum-limit": 8192,
+        "default.clock.rate": 48000,
+        "default.video.height": 480,
+        "default.video.rate.denom": 1,
+        "default.video.rate.num": 25,
+        "default.video.width": 640,
+        "link.max-buffers": 64,
+        "log.level": 0,
+        "mem.allow-mlock": true,
+        "mem.warn-mlock": false,
+        "module.id": 2,
+        "object.id": 71,
+        "object.serial": 78,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native",
+        "pipewire.sec.gid": 1000,
+        "pipewire.sec.label": "bwrap//&unpriv_bwrap (enforce)",
+        "pipewire.sec.pid": 1180276,
         "pipewire.sec.socket": "pipewire-0-manager",
         "pipewire.sec.uid": 1000,
         "remote.intention": "manager",

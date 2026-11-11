@@ -6,7 +6,7 @@ keep=0
 if [[ ${1:-} == --keep ]]; then keep=1; shift; fi
 [[ ${1:-} == -- && $# -ge 2 ]] || usage
 shift
-for tool in pipewire pw-dump pw-link pw-cli pw-cat jq; do
+for tool in pipewire pw-dump pw-link pw-cli pw-cat gst-launch-1.0 jq; do
     command -v "$tool" >/dev/null || { echo "missing $tool; enter the pinned Nix shell (see DEVELOPERS.md)" >&2; exit 127; }
 done
 
@@ -61,6 +61,21 @@ pw-cat --record --raw --rate 48000 --channels 1 --format s16 \
 children+=("$!")
 pw-cat --record --midi --force-midi midi --target 0 "$root/midi-capture.mid" \
     >"$root/midi-capture.log" 2>&1 &
+children+=("$!")
+# Format-0 MIDI file: note on, ten-second hold, note off, end of track.
+printf 'MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk\x00\x00\x00\x0d\x00\x90\x3c\x40\xcb\x00\x80\x3c\x00\x00\xff\x2f\x00' >"$root/midi-playback.mid"
+pw-cat --playback --midi --force-midi midi --target 0 "$root/midi-playback.mid" \
+    >"$root/midi-playback.log" 2>&1 &
+children+=("$!")
+# The pinned PipeWire package provides the GStreamer plugin outside GStreamer's
+# usual plugin search path. A software test pattern needs no host video device.
+pipewire_root=$(readlink -f "$(command -v pipewire)")
+pipewire_root=${pipewire_root%/bin/pipewire}
+GST_PLUGIN_PATH="$pipewire_root/lib/gstreamer-1.0${GST_PLUGIN_PATH:+:$GST_PLUGIN_PATH}" \
+    gst-launch-1.0 -q videotestsrc is-live=true pattern=ball ! \
+    pipewiresink mode=provide target-object=0 \
+    stream-properties="props,media.class=(string)Video/Source,node.name=(string)musubi_test_video" \
+    >"$root/video.log" 2>&1 &
 children+=("$!")
 sleep 0.3
 "$@"
