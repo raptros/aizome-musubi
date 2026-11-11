@@ -11,7 +11,7 @@ pub struct Handle { pub epoch: u64, pub id: GlobalId }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Connect { out: Handle, input: Handle, request: RequestId },
+    Connect { out: Handle, input: Handle, confirmed: bool, request: RequestId },
     Disconnect { link: Handle, request: RequestId },
     Shutdown,
 }

@@ -38,6 +38,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 pipewire >"$root/pipewire.log" 2>&1 &
 children+=("$!")
+export MUSUBI_PRIVATE_PIPEWIRE_PID="${children[0]}"
+export MUSUBI_PRIVATE_PIPEWIRE_ROOT="$root"
 for (( attempt=0; attempt<100; attempt++ )); do
     [[ -S "$root/runtime/pipewire-0" ]] && break
     kill -0 "${children[0]}" 2>/dev/null || { cat "$root/pipewire.log" >&2; exit 1; }

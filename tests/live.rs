@@ -1,6 +1,6 @@
 //! Run with MUSUBI_LIVE=1 inside scripts/private-pipewire; never use the host daemon.
-use std::time::{Duration, Instant};
-use aizome_musubi::{backend::{Connection, Event, pipewire::PipeWireBackend}, graph::{Graph, classify::PortKind}};
+use std::{process::Command as ProcessCommand, time::{Duration, Instant}};
+use aizome_musubi::{backend::{Backend, Command, Connection, Event, Handle, pipewire::PipeWireBackend}, graph::{Graph, Direction, classify::PortKind}};
 
 #[test]
 fn enumerates_private_audio_midi_video() {
@@ -30,4 +30,96 @@ fn enumerates_private_audio_midi_video() {
     for id in graph.ports_of_kind(PortKind::Midi).chain(graph.ports_of_kind(PortKind::Video)) {
         assert!(graph.group_key(&graph.ports[&id]).is_some(), "ungrouped port {id}");
     }
+}
+
+#[test]
+fn links_and_recovers_private_daemon() {
+    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") { return; }
+    let mut backend = PipeWireBackend::channel().unwrap();
+    let mut graph = Graph::default();
+    let mut up = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        match backend.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Connection(Connection::Up(_))) => up = true,
+            Ok(Event::Delta(delta)) => graph.apply(delta),
+            _ => {}
+        }
+        if up && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers"))
+            && graph.nodes.values().any(|n| n.props.get("media.class").is_some_and(|n| n == "Stream/Output/Audio"))
+            && graph.ports.len() >= 16 { break; }
+    }
+    assert!(up, "daemon never came up");
+    let epoch = graph.epoch;
+    let speakers = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers")).unwrap().id;
+    let stream = graph.nodes.values().find(|n| n.props.get("media.class").is_some_and(|n| n == "Stream/Output/Audio")).unwrap().id;
+    let ports = |node, direction| {
+        let mut ids: Vec<_> = graph.ports.values().filter(|p| p.node_id == Some(node) && p.direction == direction)
+            .filter(|p| !p.props.get("port.name").is_some_and(|s| s.contains("monitor"))).map(|p| p.id).collect();
+        ids.sort_by_key(|id| graph.ports[id].props.get("audio.channel").cloned());
+        ids
+    };
+    let outputs = ports(stream, Direction::Output);
+    let inputs = ports(speakers, Direction::Input);
+    assert_eq!(outputs.len(), 2); assert_eq!(inputs.len(), 2);
+    let old = Handle { epoch, id: outputs[0] };
+    let input = Handle { epoch, id: inputs[0] };
+    backend.command(Command::Connect { out: old, input: Handle { epoch, id: outputs[1] }, confirmed: false, request: 10 });
+    expect_result(&backend, &mut graph, 10, false);
+    backend.command(Command::Connect { out: Handle { epoch: epoch.wrapping_sub(1), id: outputs[0] }, input, confirmed: false, request: 11 });
+    expect_result(&backend, &mut graph, 11, false);
+    for i in 0..2 {
+        backend.command(Command::Connect { out: Handle { epoch, id: outputs[i] }, input: Handle { epoch, id: inputs[i] }, confirmed: false, request: 12 + i as u64 });
+        expect_result(&backend, &mut graph, 12 + i as u64, true);
+    }
+    let links: Vec<_> = (0..2).map(|i| *graph.links_by_pair.get(&(outputs[i], inputs[i])).expect("link global not observed").last().unwrap()).collect();
+    assert_eq!(links.len(), 2);
+    for (i, id) in links.iter().enumerate() {
+        backend.command(Command::Disconnect { link: Handle { epoch, id: *id }, request: 20 + i as u64 });
+        expect_result(&backend, &mut graph, 20 + i as u64, true);
+    }
+    assert!(links.iter().all(|id| !graph.links.contains_key(id)));
+    let pid = std::env::var("MUSUBI_PRIVATE_PIPEWIRE_PID").expect("private daemon pid");
+    assert!(ProcessCommand::new("kill").arg("-TERM").arg(&pid).status().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut down = false;
+    while Instant::now() < deadline {
+        match backend.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Connection(Connection::Down(_))) => { down = true; break; }
+            Ok(Event::Delta(delta)) => graph.apply(delta),
+            _ => {}
+        }
+    }
+    assert!(down, "daemon shutdown not observed");
+    let mut replacement = ProcessCommand::new("pipewire").spawn().expect("restart private PipeWire");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut restarted = false;
+    while Instant::now() < deadline {
+        match backend.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Connection(Connection::Up(_))) => restarted = true,
+            Ok(Event::Delta(delta)) => graph.apply(delta),
+            _ => {}
+        }
+        if restarted && graph.epoch > epoch { break; }
+    }
+    backend.command(Command::Disconnect { link: Handle { epoch, id: links[0] }, request: 30 });
+    expect_result(&backend, &mut graph, 30, false);
+    assert!(restarted && graph.epoch > epoch, "reconnect did not advance epoch");
+    replacement.kill().unwrap(); replacement.wait().unwrap();
+}
+
+fn expect_result(backend: &PipeWireBackend, graph: &mut Graph, request: u64, success: bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match backend.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Delta(delta)) => graph.apply(delta),
+            Ok(Event::CommandResult { request: id, result }) if id == request => {
+                assert_eq!(result.is_ok(), success, "request {request}: {result:?}");
+                return;
+            }
+            Ok(Event::Connection(Connection::Down(reason))) => panic!("PipeWire down during request {request}: {reason}"),
+            _ => {}
+        }
+    }
+    panic!("request {request} timed out");
 }
