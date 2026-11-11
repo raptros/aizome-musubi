@@ -75,5 +75,24 @@ Evidence and fixture generation: while inside the wrapper, run `pw-dump > repos/
 
 ## VM check
 
-The packaged NixOS VM check is added by the next change. Until then, neither
-the headless goldens nor the private-daemon tests count as VM evidence.
+From the contribution workspace root, commit source first (Nix flakes build
+the committed tree), then run:
+
+```sh
+tools/heavy musubi-vm -- tools/nix-env nix build ./repos/aizome-musubi#checks.x86_64-linux.vm -L --max-jobs 1 --cores 4 --out-link runs/2026-11-11/patchbay/phase1/s5b/vm
+```
+
+`nix/vm-test.nix` imports the pinned Sekka Aizome NixOS module and this
+repository's Musubi module. The disposable 1280×800 guest autologs in to
+`aizome-session` with WirePlumber, two virtual audio sinks, a continuously
+playing `pw-play` stream, `snd-virmidi`, and `vivid`. The Python driver
+spawns the packaged app, obtains widget rectangles through
+`AIZOME_KIT_INSPECT`, and performs pointer and keyboard gestures with
+`aizomectl input`. It selects Channels and filters to the player and
+second sink, clicks the FL cell, checks the live `pw-link -l` state,
+presses Super+Z and checks removal. It then clicks MIDI and patches
+virtual MIDI ports. The test copies its screenshots, input/observation
+JSON, inspector JSON and guest journal to the Nix result; copy the images
+to `runs/` for visual review. A VM check does not certify hardware MIDI,
+camera or physical audio devices. A `vivid` kernel module alone does not
+prove that a PipeWire video port was bridged or patched.
