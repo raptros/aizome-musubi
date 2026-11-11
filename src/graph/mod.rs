@@ -2,8 +2,8 @@
 
 pub mod classify;
 pub mod dump;
-pub mod identity;
 pub mod group;
+pub mod identity;
 pub mod legal;
 
 use std::collections::{HashMap, HashSet};
@@ -130,10 +130,16 @@ impl Graph {
     fn upsert(&mut self, value: Upsert) {
         let id = value.id();
         match value {
-            Upsert::Client(v) => { self.clients.insert(id, v); }
-            Upsert::Device(v) => { self.devices.insert(id, v); }
+            Upsert::Client(v) => {
+                self.clients.insert(id, v);
+            }
+            Upsert::Device(v) => {
+                self.devices.insert(id, v);
+            }
             // Info updates must not cascade-delete existing children.
-            Upsert::Node(v) => { self.nodes.insert(id, v); }
+            Upsert::Node(v) => {
+                self.nodes.insert(id, v);
+            }
             Upsert::Port(v) => {
                 self.ports.remove(&id);
                 self.pending_ports.insert(id, v);
@@ -143,21 +149,27 @@ impl Graph {
                     let pair = (previous.output, previous.input);
                     if let Some(ids) = self.links_by_pair.get_mut(&pair) {
                         ids.retain(|&candidate| candidate != id);
-                        if ids.is_empty() { self.links_by_pair.remove(&pair); }
+                        if ids.is_empty() {
+                            self.links_by_pair.remove(&pair);
+                        }
                     }
                 }
                 self.pending_links.insert(id, v);
             }
-            Upsert::Metadata(v) => { self.metadata.insert(id, v); }
+            Upsert::Metadata(v) => {
+                self.metadata.insert(id, v);
+            }
         }
     }
 
     fn attach_pending(&mut self) {
         // Reclassification is needed if node properties arrive after a port's info.
         self.ports_by_kind.clear();
-        let ready: Vec<_> = self.pending_ports.iter().filter_map(|(&id, port)| {
-            port.node_id.filter(|parent| self.nodes.contains_key(parent)).map(|_| id)
-        }).collect();
+        let ready: Vec<_> = self
+            .pending_ports
+            .iter()
+            .filter_map(|(&id, port)| port.node_id.filter(|parent| self.nodes.contains_key(parent)).map(|_| id))
+            .collect();
         for id in ready {
             let port = self.pending_ports.remove(&id).expect("pending port");
             self.ports.insert(id, port);
@@ -166,9 +178,13 @@ impl Graph {
             let kind = classify::classify(port, port.node_id.and_then(|node| self.nodes.get(&node)));
             self.ports_by_kind.entry(kind).or_default().insert(id);
         }
-        let ready: Vec<_> = self.pending_links.iter().filter_map(|(&id, link)| {
-            (self.ports.contains_key(&link.output) && self.ports.contains_key(&link.input)).then_some(id)
-        }).collect();
+        let ready: Vec<_> = self
+            .pending_links
+            .iter()
+            .filter_map(|(&id, link)| {
+                (self.ports.contains_key(&link.output) && self.ports.contains_key(&link.input)).then_some(id)
+            })
+            .collect();
         for id in ready {
             let link = self.pending_links.remove(&id).expect("pending link");
             self.links_by_pair.entry((link.output, link.input)).or_default().push(id);
@@ -181,24 +197,42 @@ impl Graph {
             let pair = (link.output, link.input);
             if let Some(ids) = self.links_by_pair.get_mut(&pair) {
                 ids.retain(|&candidate| candidate != id);
-                if ids.is_empty() { self.links_by_pair.remove(&pair); }
+                if ids.is_empty() {
+                    self.links_by_pair.remove(&pair);
+                }
             }
         }
         self.pending_links.remove(&id);
         if self.ports.remove(&id).is_some() || self.pending_ports.remove(&id).is_some() {
-            let dependent: Vec<_> = self.links.values().chain(self.pending_links.values())
-                .filter(|link| link.input == id || link.output == id).map(|link| link.id).collect();
-            for link in dependent { self.remove(link); }
+            let dependent: Vec<_> = self
+                .links
+                .values()
+                .chain(self.pending_links.values())
+                .filter(|link| link.input == id || link.output == id)
+                .map(|link| link.id)
+                .collect();
+            for link in dependent {
+                self.remove(link);
+            }
         }
         if self.nodes.remove(&id).is_some() {
-            let dependent: Vec<_> = self.ports.values().chain(self.pending_ports.values())
-                .filter(|port| port.node_id == Some(id)).map(|port| port.id).collect();
-            for port in dependent { self.remove(port); }
+            let dependent: Vec<_> = self
+                .ports
+                .values()
+                .chain(self.pending_ports.values())
+                .filter(|port| port.node_id == Some(id))
+                .map(|port| port.id)
+                .collect();
+            for port in dependent {
+                self.remove(port);
+            }
         }
         self.clients.remove(&id);
         self.devices.remove(&id);
         self.metadata.remove(&id);
-        for ids in self.ports_by_kind.values_mut() { ids.remove(&id); }
+        for ids in self.ports_by_kind.values_mut() {
+            ids.remove(&id);
+        }
     }
 }
 
@@ -206,12 +240,31 @@ impl Graph {
 mod tests {
     use super::*;
     fn props(entries: &[(&str, &str)]) -> Properties {
-        entries.iter().map(|&(k,v)| (k.into(), v.into())).collect()
+        entries.iter().map(|&(k, v)| (k.into(), v.into())).collect()
     }
-    fn node(id: u32) -> Upsert { Upsert::Node(NodeRecord { id, client_id: None, device_id: None, props: props(&[("media.class", "Audio/Sink")]) }) }
-    fn port(id: u32, node_id: u32) -> Upsert { Upsert::Port(PortRecord { id, node_id: Some(node_id), direction: Direction::Input, enum_formats: vec![], props: Properties::new() }) }
-    fn link(id: u32, output: u32, input: u32) -> Upsert { Upsert::Link(LinkRecord { id, output, input, props: Properties::new() }) }
-    fn delta(epoch: u64, upserts: Vec<Upsert>, removals: Vec<u32>) -> GraphDelta { GraphDelta { epoch, upserts, removals } }
+    fn node(id: u32) -> Upsert {
+        Upsert::Node(NodeRecord {
+            id,
+            client_id: None,
+            device_id: None,
+            props: props(&[("media.class", "Audio/Sink")]),
+        })
+    }
+    fn port(id: u32, node_id: u32) -> Upsert {
+        Upsert::Port(PortRecord {
+            id,
+            node_id: Some(node_id),
+            direction: Direction::Input,
+            enum_formats: vec![],
+            props: Properties::new(),
+        })
+    }
+    fn link(id: u32, output: u32, input: u32) -> Upsert {
+        Upsert::Link(LinkRecord { id, output, input, props: Properties::new() })
+    }
+    fn delta(epoch: u64, upserts: Vec<Upsert>, removals: Vec<u32>) -> GraphDelta {
+        GraphDelta { epoch, upserts, removals }
+    }
 
     #[test]
     fn out_of_order_and_sparse_duplicate_links() {
@@ -240,7 +293,16 @@ mod tests {
     fn node_update_reclassifies_port() {
         let mut graph = Graph::default();
         graph.apply(delta(1, vec![node(1), port(2, 1)], vec![]));
-        graph.apply(delta(1, vec![Upsert::Node(NodeRecord { id: 1, client_id: None, device_id: None, props: props(&[("media.class", "Video/Source")]) })], vec![]));
+        graph.apply(delta(
+            1,
+            vec![Upsert::Node(NodeRecord {
+                id: 1,
+                client_id: None,
+                device_id: None,
+                props: props(&[("media.class", "Video/Source")]),
+            })],
+            vec![],
+        ));
         assert_eq!(graph.kind(2), Some(classify::PortKind::Video));
     }
 }

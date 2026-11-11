@@ -2,7 +2,13 @@
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::{fs::{OpenOptionsExt, PermissionsExt}, net::{UnixListener, UnixStream}}},
+    os::{
+        fd::AsRawFd,
+        unix::{
+            fs::{OpenOptionsExt, PermissionsExt},
+            net::{UnixListener, UnixStream},
+        },
+    },
     path::PathBuf,
     time::Duration,
 };
@@ -34,7 +40,11 @@ pub fn claim() -> Result<Claim, String> {
 pub fn claim_in(dir: PathBuf) -> Result<Claim, String> {
     let path = dir.join("aizome-app.musubi.sock");
     let lock = OpenOptions::new()
-        .read(true).write(true).create(true).truncate(false).mode(0o600)
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join("aizome-app.musubi.lock"))
         .map_err(|_| "Could not open Musubi's instance lock")?;
@@ -43,8 +53,7 @@ pub fn claim_in(dir: PathBuf) -> Result<Claim, String> {
         for _ in 0..50 {
             if let Ok(mut socket) = UnixStream::connect(&path) {
                 socket.set_write_timeout(Some(Duration::from_secs(1))).ok();
-                socket.write_all(b"activate\n")
-                    .map_err(|_| "Could not activate the running Musubi")?;
+                socket.write_all(b"activate\n").map_err(|_| "Could not activate the running Musubi")?;
                 return Ok(Claim::Handed);
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -66,10 +75,7 @@ pub fn serve(listener: UnixListener, notify: impl Fn() -> bool + Send + 'static)
             let Ok(socket) = socket else { break };
             socket.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buffer = Vec::new();
-            if socket.take(64).read_to_end(&mut buffer).is_ok()
-                && buffer == b"activate\n"
-                && !notify()
-            {
+            if socket.take(64).read_to_end(&mut buffer).is_ok() && buffer == b"activate\n" && !notify() {
                 break;
             }
         }

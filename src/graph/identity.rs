@@ -34,8 +34,12 @@ fn property<'a>(props: &'a super::Properties, name: &str) -> Option<&'a str> {
 impl Graph {
     fn device_identity(&self, node: &super::NodeRecord) -> (Option<String>, Option<String>) {
         let device = node.device_id.and_then(|id| self.devices.get(&id));
-        (device.and_then(|v| property(&v.props, "device.name")).map(str::to_owned),
-         device.and_then(|v| property(&v.props, "device.serial").or_else(|| property(&v.props, "device.bus-path"))).map(str::to_owned))
+        (
+            device.and_then(|v| property(&v.props, "device.name")).map(str::to_owned),
+            device
+                .and_then(|v| property(&v.props, "device.serial").or_else(|| property(&v.props, "device.bus-path")))
+                .map(str::to_owned),
+        )
     }
 
     fn seq_name(port: &PortRecord) -> Option<String> {
@@ -48,7 +52,8 @@ impl Graph {
         let node = port.node_id.and_then(|id| self.nodes.get(&id))?;
         let (device_name, device_serial_or_bus) = self.device_identity(node);
         Some(StableId::Port {
-            device_name, device_serial_or_bus,
+            device_name,
+            device_serial_or_bus,
             node_name: property(&node.props, "node.name").map(str::to_owned),
             direction: port.direction,
             port_name: property(&port.props, "port.name").map(str::to_owned),
@@ -60,9 +65,14 @@ impl Graph {
         let node = self.nodes.get(&node_id)?;
         let (device_name, device_serial_or_bus) = self.device_identity(node);
         Some(StableId::Group {
-            device_name, device_serial_or_bus,
-            client_name: node.client_id.and_then(|id| self.clients.get(&id))
-                .and_then(|client| property(&client.props, "application.name").or_else(|| property(&client.props, "client.name")))
+            device_name,
+            device_serial_or_bus,
+            client_name: node
+                .client_id
+                .and_then(|id| self.clients.get(&id))
+                .and_then(|client| {
+                    property(&client.props, "application.name").or_else(|| property(&client.props, "client.name"))
+                })
                 .map(str::to_owned),
             node_name: property(&node.props, "node.name").map(str::to_owned),
             sequencer_client_name: sequencer_client_name.map(str::to_owned),
@@ -71,13 +81,27 @@ impl Graph {
 
     pub fn resolve(&self, target: &StableId) -> Resolution {
         let mut ids: Vec<_> = match target {
-            StableId::Port { .. } => self.ports.values().filter(|port| self.stable_port_id(port).as_ref() == Some(target)).map(|port| port.id).collect(),
-            StableId::Group { sequencer_client_name, .. } => self.nodes.values().filter(|node| {
-                if self.stable_group_id(node.id, sequencer_client_name.as_deref()).as_ref() != Some(target) { return false; }
-                sequencer_client_name.as_ref().is_none_or(|name| self.ports.values().any(|port| {
-                    port.node_id == Some(node.id) && Self::seq_name(port).as_ref() == Some(name)
-                }))
-            }).map(|node| node.id).collect(),
+            StableId::Port { .. } => self
+                .ports
+                .values()
+                .filter(|port| self.stable_port_id(port).as_ref() == Some(target))
+                .map(|port| port.id)
+                .collect(),
+            StableId::Group { sequencer_client_name, .. } => self
+                .nodes
+                .values()
+                .filter(|node| {
+                    if self.stable_group_id(node.id, sequencer_client_name.as_deref()).as_ref() != Some(target) {
+                        return false;
+                    }
+                    sequencer_client_name.as_ref().is_none_or(|name| {
+                        self.ports
+                            .values()
+                            .any(|port| port.node_id == Some(node.id) && Self::seq_name(port).as_ref() == Some(name))
+                    })
+                })
+                .map(|node| node.id)
+                .collect(),
         };
         ids.sort_unstable();
         match ids.len() {
@@ -97,8 +121,19 @@ mod tests {
         let mut graph = Graph::default();
         let mut changes = Vec::new();
         for (node, port) in [(1, 2), (3, 4)] {
-            changes.push(Upsert::Node(NodeRecord { id: node, client_id: None, device_id: None, props: Properties::from([("node.name".into(), "shared".into())]) }));
-            changes.push(Upsert::Port(PortRecord { id: port, node_id: Some(node), direction: Direction::Output, enum_formats: vec![], props: Properties::from([("port.name".into(), "out".into())]) }));
+            changes.push(Upsert::Node(NodeRecord {
+                id: node,
+                client_id: None,
+                device_id: None,
+                props: Properties::from([("node.name".into(), "shared".into())]),
+            }));
+            changes.push(Upsert::Port(PortRecord {
+                id: port,
+                node_id: Some(node),
+                direction: Direction::Output,
+                enum_formats: vec![],
+                props: Properties::from([("port.name".into(), "out".into())]),
+            }));
         }
         graph.apply(GraphDelta { epoch: 1, upserts: changes, removals: vec![] });
         let id = graph.stable_port_id(&graph.ports[&2]).unwrap();

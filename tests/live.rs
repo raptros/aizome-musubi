@@ -1,10 +1,18 @@
 //! Run with MUSUBI_LIVE=1 inside scripts/private-pipewire; never use the host daemon.
-use std::{process::Command as ProcessCommand, time::{Duration, Instant}};
-use aizome_musubi::{backend::{Backend, Command, Connection, Event, Handle, pipewire::PipeWireBackend}, graph::{Graph, Direction, classify::PortKind}};
+use aizome_musubi::{
+    backend::{Backend, Command, Connection, Event, Handle, pipewire::PipeWireBackend},
+    graph::{Direction, Graph, classify::PortKind},
+};
+use std::{
+    process::Command as ProcessCommand,
+    time::{Duration, Instant},
+};
 
 #[test]
 fn enumerates_private_audio_midi_video() {
-    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") { return; }
+    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") {
+        return;
+    }
     let backend = PipeWireBackend::channel().unwrap();
     let mut graph = Graph::default();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -16,9 +24,18 @@ fn enumerates_private_audio_midi_video() {
             Ok(Event::Delta(delta)) => graph.apply(delta),
             _ => {}
         }
-        if up && graph.nodes.values().filter(|n| n.props.get("node.name").is_some_and(|s| s.starts_with("musubi_test_"))).count() >= 5
+        if up
+            && graph
+                .nodes
+                .values()
+                .filter(|n| n.props.get("node.name").is_some_and(|s| s.starts_with("musubi_test_")))
+                .count()
+                >= 5
             && graph.ports_of_kind(PortKind::Midi).count() >= 2
-            && graph.ports_of_kind(PortKind::Video).count() >= 1 { break; }
+            && graph.ports_of_kind(PortKind::Video).count() >= 1
+        {
+            break;
+        }
     }
     assert!(up, "initial PipeWire sync did not finish");
     for name in ["musubi_test_speakers", "musubi_test_interface_out", "musubi_test_interface_in", "musubi_test_mic"] {
@@ -34,7 +51,9 @@ fn enumerates_private_audio_midi_video() {
 
 #[test]
 fn links_and_recovers_private_daemon() {
-    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") { return; }
+    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") {
+        return;
+    }
     let mut backend = PipeWireBackend::channel().unwrap();
     let mut graph = Graph::default();
     let mut up = false;
@@ -47,33 +66,70 @@ fn links_and_recovers_private_daemon() {
         }
         // Without a session manager, stream nodes (pw-cat) never get their ports configured,
         // so the sources here are the 4-channel test sink's monitor outputs.
-        if up && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers"))
+        if up
+            && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers"))
             && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_interface_out"))
-            && graph.ports.len() >= 16 { break; }
+            && graph.ports.len() >= 16
+        {
+            break;
+        }
     }
     assert!(up, "daemon never came up");
     let epoch = graph.epoch;
-    let speakers = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers")).unwrap().id;
-    let source = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_interface_out")).unwrap().id;
+    let speakers = graph
+        .nodes
+        .values()
+        .find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers"))
+        .unwrap()
+        .id;
+    let source = graph
+        .nodes
+        .values()
+        .find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_interface_out"))
+        .unwrap()
+        .id;
     let ports = |node, direction| {
-        let mut ids: Vec<_> = graph.ports.values().filter(|p| p.node_id == Some(node) && p.direction == direction).map(|p| p.id).collect();
+        let mut ids: Vec<_> = graph
+            .ports
+            .values()
+            .filter(|p| p.node_id == Some(node) && p.direction == direction)
+            .map(|p| p.id)
+            .collect();
         ids.sort_by_key(|id| graph.ports[id].props.get("audio.channel").cloned());
         ids
     };
     let outputs: Vec<_> = ports(source, Direction::Output).into_iter().take(2).collect();
     let inputs = ports(speakers, Direction::Input);
-    assert_eq!(outputs.len(), 2); assert_eq!(inputs.len(), 2);
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(inputs.len(), 2);
     let old = Handle { epoch, id: outputs[0] };
     let input = Handle { epoch, id: inputs[0] };
-    backend.command(Command::Connect { out: old, input: Handle { epoch, id: outputs[1] }, confirmed: false, request: 10 });
+    backend.command(Command::Connect {
+        out: old,
+        input: Handle { epoch, id: outputs[1] },
+        confirmed: false,
+        request: 10,
+    });
     expect_result(&backend, &mut graph, 10, false);
-    backend.command(Command::Connect { out: Handle { epoch: epoch.wrapping_sub(1), id: outputs[0] }, input, confirmed: false, request: 11 });
+    backend.command(Command::Connect {
+        out: Handle { epoch: epoch.wrapping_sub(1), id: outputs[0] },
+        input,
+        confirmed: false,
+        request: 11,
+    });
     expect_result(&backend, &mut graph, 11, false);
     for i in 0..2 {
-        backend.command(Command::Connect { out: Handle { epoch, id: outputs[i] }, input: Handle { epoch, id: inputs[i] }, confirmed: false, request: 12 + i as u64 });
+        backend.command(Command::Connect {
+            out: Handle { epoch, id: outputs[i] },
+            input: Handle { epoch, id: inputs[i] },
+            confirmed: false,
+            request: 12 + i as u64,
+        });
         expect_result(&backend, &mut graph, 12 + i as u64, true);
     }
-    let links: Vec<_> = (0..2).map(|i| *graph.links_by_pair.get(&(outputs[i], inputs[i])).expect("link global not observed").last().unwrap()).collect();
+    let links: Vec<_> = (0..2)
+        .map(|i| *graph.links_by_pair.get(&(outputs[i], inputs[i])).expect("link global not observed").last().unwrap())
+        .collect();
     assert_eq!(links.len(), 2);
     for (i, id) in links.iter().enumerate() {
         backend.command(Command::Disconnect { link: Handle { epoch, id: *id }, request: 20 + i as u64 });
@@ -86,7 +142,10 @@ fn links_and_recovers_private_daemon() {
     let mut down = false;
     while Instant::now() < deadline {
         match backend.recv_timeout(Duration::from_millis(100)) {
-            Ok(Event::Connection(Connection::Down(_))) => { down = true; break; }
+            Ok(Event::Connection(Connection::Down(_))) => {
+                down = true;
+                break;
+            }
             Ok(Event::Delta(delta)) => graph.apply(delta),
             _ => {}
         }
@@ -101,12 +160,15 @@ fn links_and_recovers_private_daemon() {
             Ok(Event::Delta(delta)) => graph.apply(delta),
             _ => {}
         }
-        if restarted && graph.epoch > epoch { break; }
+        if restarted && graph.epoch > epoch {
+            break;
+        }
     }
     backend.command(Command::Disconnect { link: Handle { epoch, id: links[0] }, request: 30 });
     expect_result(&backend, &mut graph, 30, false);
     assert!(restarted && graph.epoch > epoch, "reconnect did not advance epoch");
-    replacement.kill().unwrap(); replacement.wait().unwrap();
+    replacement.kill().unwrap();
+    replacement.wait().unwrap();
 }
 
 fn expect_result(backend: &PipeWireBackend, graph: &mut Graph, request: u64, success: bool) {
@@ -118,7 +180,9 @@ fn expect_result(backend: &PipeWireBackend, graph: &mut Graph, request: u64, suc
                 assert_eq!(result.is_ok(), success, "request {request}: {result:?}");
                 return;
             }
-            Ok(Event::Connection(Connection::Down(reason))) => panic!("PipeWire down during request {request}: {reason}"),
+            Ok(Event::Connection(Connection::Down(reason))) => {
+                panic!("PipeWire down during request {request}: {reason}")
+            }
             _ => {}
         }
     }

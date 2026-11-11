@@ -7,7 +7,10 @@ use crate::graph::{GlobalId, GraphDelta};
 pub type RequestId = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Handle { pub epoch: u64, pub id: GlobalId }
+pub struct Handle {
+    pub epoch: u64,
+    pub id: GlobalId,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -24,7 +27,10 @@ pub enum Event {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Connection { Up(String), Down(String) }
+pub enum Connection {
+    Up(String),
+    Down(String),
+}
 
 pub trait Backend {
     fn command(&mut self, command: Command);

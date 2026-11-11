@@ -1,4 +1,7 @@
-use aizome_musubi::{app::Musubi, instance::{self, Claim}};
+use aizome_musubi::{
+    app::Musubi,
+    instance::{self, Claim},
+};
 
 fn main() {
     let mut args = std::env::args().skip(1);
