@@ -28,7 +28,23 @@ def until(description, check, seconds=30):
         except (AssertionError, KeyError, StopIteration):
             pass
         time.sleep(0.3)
+    diagnose(description)
     raise AssertionError(description)
+
+
+def diagnose(description):
+    # A failed check discards $out, so the evidence for the failure goes to the log.
+    try:
+        print(f"--- diagnosis for {description!r}")
+        print("window:", json.dumps(window()))
+        for e in elements():
+            print("element:", json.dumps({k: e.get(k) for k in ("name", "text", "role", "label", "value", "rect")}))
+        print("inputs:", json.dumps(inputs[-12:]))
+        print("links:", user("pw-link -l"))
+        print("ports:", json.dumps([(p.get("port.direction"), n.get("node.name"), n.get("node.description"))
+                                    for p, n in ports()]))
+    except Exception as e:  # diagnosis must never hide the original failure
+        print("diagnosis failed:", e)
 
 
 def window():
