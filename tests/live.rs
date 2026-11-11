@@ -20,17 +20,20 @@ fn harness_clicks_private_interface_to_speakers() {
     }
     let mut app = Musubi::default();
     app.live = true;
-    // The test sink's outputs are monitor ports; show them, one line per channel.
-    app.options[0].monitors = true;
-    app.options[0].pairs = false;
     let mut h = Harness::new(app);
     let w = h.window();
-    let port = |app: &Musubi, node: &str, channel: &str| {
+    // The test sink's outputs are monitor ports; show them, one line per channel.
+    // Set through the app's own messages: launch loads persisted view options.
+    h.send(aizome_musubi::app::Msg::Monitors(true));
+    h.send(aizome_musubi::app::Msg::Pairs(false));
+    // Each null sink has an input and a monitor output per channel: match the direction too.
+    let port = |app: &Musubi, node: &str, channel: &str, direction: Direction| {
         app.graph
             .ports
             .values()
             .find(|p| {
-                p.props.get("audio.channel").is_some_and(|v| v == channel)
+                p.direction == direction
+                    && p.props.get("audio.channel").is_some_and(|v| v == channel)
                     && p.node_id
                         .and_then(|id| app.graph.nodes.get(&id))
                         .and_then(|n| n.props.get("node.name"))
@@ -41,7 +44,10 @@ fn harness_clicks_private_interface_to_speakers() {
     // Wait until the displayed layout (not only the graph) holds the route.
     assert!(
         h.settle(Duration::from_secs(15), |app| {
-            match (port(app, "musubi_test_interface_out", "AUX0"), port(app, "musubi_test_speakers", "FL")) {
+            match (
+                port(app, "musubi_test_interface_out", "AUX0", Direction::Output),
+                port(app, "musubi_test_speakers", "FL", Direction::Input),
+            ) {
                 (Some(from), Some(to)) => {
                     app.layout(Page::Audio).is_some_and(|l| l.cell_for_pair((from, to)).is_some())
                 }
@@ -68,8 +74,8 @@ fn harness_clicks_private_interface_to_speakers() {
             .map(|n| (&n.id, &n.props))
             .collect::<Vec<_>>(),
     );
-    let from = port(h.program(), "musubi_test_interface_out", "AUX0").unwrap();
-    let to = port(h.program(), "musubi_test_speakers", "FL").unwrap();
+    let from = port(h.program(), "musubi_test_interface_out", "AUX0", Direction::Output).unwrap();
+    let to = port(h.program(), "musubi_test_speakers", "FL", Direction::Input).unwrap();
     let layout = h.program().layout(Page::Audio).unwrap();
     let cell = layout.cell_for_pair((from, to)).unwrap();
     assert_eq!(layout.state(cell), CellState::Empty);
