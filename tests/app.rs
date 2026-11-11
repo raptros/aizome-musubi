@@ -303,7 +303,7 @@ fn fake_backend_updates_counts_and_unavailable_state() {
     }
     assert!(h.program().layout(Page::Audio).is_some());
     h.send(Msg::Backend(Event::Connection(Connection::Down("private daemon stopped".into()))));
-    assert!(h.find(w, "PipeWire unavailable.").is_some());
+    assert!(h.find(w, "PipeWire isn't answering. Musubi keeps trying.").is_some());
     h.send(Msg::Backend(Event::Connection(Connection::Up("restarted".into()))));
     assert!(h.find(w, "Audio 0 ports · 0 links").is_some());
 }
@@ -372,5 +372,127 @@ fn empty_patchbay_in_night_and_day() {
         assert!(h.theme().has_ui_font(), "Run with AIZOME_FONT_DIR set to Sekka's fonts");
         let w = h.window();
         assert_golden(&mut h, w, format!("tests/snapshots/empty-{name}.png"), 1.);
+    }
+}
+
+#[test]
+fn list_selection_delete_undo_and_semantics() {
+    let (mut h, _fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let rows = h.program().graph.links.len();
+    h.send(Msg::List(false));
+    let (_, point) = cell(&h, 100, 120);
+    h.click(w, point);
+    h.send(Msg::List(true));
+    assert_eq!(h.program().graph.links.len(), rows + 1);
+    let semantics = h.semantics(w);
+    assert!(semantics.iter().any(|(s, _)| s.role == aizome_kit::widget::SemanticRole::Table
+        && s.value.as_deref().is_some_and(|v| v.contains("rows"))));
+    assert!(h.find(w, "Connected").is_some());
+    let layout = h.program().layout(Page::Audio).unwrap();
+    let mut routes = aizome_musubi::routes::routes(&h.program().graph, layout, false, &[], &[]);
+    aizome_musubi::routes::sort(&mut routes, 0, true);
+    let index = routes.iter().position(|r| r.from == 100 && r.to == 120).unwrap();
+    h.send(Msg::SelectRoutes(vec![index]));
+    assert!(h.semantics(w).iter().any(|(s, _)| s.label.as_deref().is_some_and(|v| v.contains(" · "))));
+    h.send(Msg::DeleteRoutes);
+    assert!(!h.program().graph.links_by_pair.contains_key(&(100, 120)));
+    h.send(Msg::Undo);
+    assert!(h.program().graph.links_by_pair.contains_key(&(100, 120)));
+}
+
+#[test]
+fn midi2_toggle_and_page_specific_controls() {
+    let (mut h, _) = interactive(include_str!("fixtures/midi.json"));
+    let w = h.window();
+    h.send(Msg::Page(Page::Midi2));
+    assert!(h.find_id(w, "show-midi-1").is_some());
+    assert!(h.find_id(w, "pairs-channels").is_none());
+    assert!(h.find_id(w, "monitors").is_none());
+    h.send(Msg::ShowMidi1(true));
+    assert!(h.program().layout(Page::Midi2).unwrap().rows.groups.iter().any(|g| g.name.ends_with("1.0")));
+}
+
+#[test]
+fn keyboard_add_route_and_midi_confirmation() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    h.send(Msg::List(true));
+    assert!(h.click_text(w, "Add Route…"));
+    let sheet = *h.windows().last().unwrap();
+    h.type_text(sheet, "AUX0");
+    h.named(sheet, NamedKey::Tab, Modifiers::NONE);
+    h.named(sheet, NamedKey::ArrowDown, Modifiers::NONE);
+    h.named(sheet, NamedKey::Tab, Modifiers::NONE);
+    h.type_text(sheet, "AUX0");
+    h.named(sheet, NamedKey::Tab, Modifiers::NONE);
+    h.named(sheet, NamedKey::ArrowDown, Modifiers::NONE);
+    h.named(sheet, NamedKey::Tab, Modifiers::NONE);
+    h.named(sheet, NamedKey::Tab, Modifiers::NONE);
+    h.named(sheet, NamedKey::Enter, Modifiers::NONE);
+    assert!(
+        fake.borrow().commands.iter().any(|c| matches!(c, Command::Connect { .. })),
+        "keyboard route did not connect"
+    );
+    assert!(h.semantics(w).iter().any(|(s, _)| s.label.as_deref() == Some("Connected")));
+}
+
+#[test]
+fn persistence_options_and_fold_relaunch() {
+    let temp = std::env::temp_dir().join(format!("musubi-s4d-{}", std::process::id()));
+    std::fs::create_dir_all(&temp).unwrap();
+    unsafe {
+        std::env::set_var("MUSUBI_TEST_CONFIG", "1");
+        std::env::set_var("XDG_CONFIG_HOME", temp.join("config"));
+        std::env::set_var("XDG_STATE_HOME", temp.join("state"));
+    }
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let mut h = Harness::new(Musubi::with_fake(fake));
+    h.send(Msg::Pairs(true));
+    h.send(Msg::Swap);
+    h.send(Msg::List(true));
+    let key = h.program().layout(Page::Audio).unwrap().rows.groups[0].key.clone().unwrap();
+    h.send(Msg::ContextAction(aizome_musubi::app::ContextAction::Fold(key)));
+    h.advance(std::time::Duration::from_millis(400));
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 2).unwrap()));
+    let h2 = Harness::new(Musubi::with_fake(fake));
+    assert!(h2.program().options[0].pairs && h2.program().options[0].swap && h2.program().options[0].list);
+    assert!(!h2.program().options[0].folded.is_empty());
+    drop((h, h2));
+    unsafe {
+        std::env::remove_var("MUSUBI_TEST_CONFIG");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_STATE_HOME");
+    }
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn s4d_night_day_goldens() {
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        let appearance = Appearance { theme, reduced_motion: true, ..Appearance::default() };
+        let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+        let mut h = Harness::with(Musubi::with_fake(fake), appearance, true);
+        h.send(Msg::List(true));
+        h.send(Msg::From("USB".into()));
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/list-filtered-{mode}.png"), 1.);
+        h.send(Msg::AddRoute);
+        let sheet = *h.windows().last().unwrap();
+        assert_golden(&mut h, sheet, format!("tests/snapshots/add-route-sheet-{mode}.png"), 1.);
+        h.send(Msg::CloseRoute);
+        let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/midi.json"), 1).unwrap()));
+        let mut h = Harness::with(Musubi::with_fake(fake), appearance, true);
+        h.send(Msg::Page(Page::Midi2));
+        h.send(Msg::ShowMidi1(true));
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/midi2-show-midi1-{mode}.png"), 1.);
+        let (_, p) = cell(&h, 20, 41);
+        h.click(h.window(), p);
+        assert_golden(&mut h, w, format!("tests/snapshots/midi2-confirm-{mode}.png"), 1.);
+        let mut h = Harness::with(Musubi::default(), appearance, true);
+        h.send(Msg::Backend(Event::Connection(Connection::Down("private daemon stopped".into()))));
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/unavailable-{mode}.png"), 1.);
     }
 }

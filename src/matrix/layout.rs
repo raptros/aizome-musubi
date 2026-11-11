@@ -136,6 +136,7 @@ pub struct ViewOptions {
     pub swap: bool,
     pub monitors: bool,
     pub show_midi_1: bool,
+    pub list: bool,
     pub from: String,
     pub to: String,
     pub folded: HashSet<GroupKey>,
@@ -204,10 +205,22 @@ impl Layout {
             Page::Midi2 => &[PortKind::Ump],
             Page::Video => &[PortKind::Video],
         };
-        let (from_groups, from_lines, hidden_from) =
-            Self::axis_from_graph(graph, Direction::Output, kinds, options, &options.from);
-        let (to_groups, to_lines, hidden_to) =
-            Self::axis_from_graph(graph, Direction::Input, kinds, options, &options.to);
+        let (from_groups, from_lines, hidden_from) = Self::axis_from_graph(
+            graph,
+            Direction::Output,
+            kinds,
+            options,
+            &options.from,
+            page == Page::Midi2 && options.show_midi_1,
+        );
+        let (to_groups, to_lines, hidden_to) = Self::axis_from_graph(
+            graph,
+            Direction::Input,
+            kinds,
+            options,
+            &options.to,
+            page == Page::Midi2 && options.show_midi_1,
+        );
         let (rows, row_lines, cols, col_lines) = if options.swap {
             (to_groups, to_lines, from_groups, from_lines)
         } else {
@@ -233,6 +246,7 @@ impl Layout {
         kinds: &[PortKind],
         options: &ViewOptions,
         filter: &str,
+        tag_midi: bool,
     ) -> (Axis, Vec<Line>, usize) {
         let mut groups = Vec::new();
         let mut lines = Vec::new();
@@ -276,6 +290,7 @@ impl Layout {
             }
             let port_count = filtered.len();
             let collapsed = options.folded.contains(&group.key);
+            let midi_group = tag_midi && filtered.iter().all(|id| graph.kind(*id) == Some(PortKind::Midi));
             let mut labels = Vec::new();
             if collapsed {
                 let first = graph::group::port_label(&graph.ports[&filtered[0]]);
@@ -306,7 +321,7 @@ impl Layout {
                 }
             }
             groups.push((
-                group.label,
+                if midi_group { format!("{} · 1.0", group.label) } else { group.label },
                 format!("{port_count} ports"),
                 group.kind.into(),
                 Some(group.key),

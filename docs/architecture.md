@@ -46,7 +46,7 @@ flowchart LR
 | `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
 | `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, offsets, sparse observed links plus request/error overrides; resolves a visible cell for a port pair | allocates the cross-product |
 | `matrix::widget` (`PatchMatrix`) | fixed corner, scrolling headers/body, focus navigation, deferred click/line gesture and Bresenham preview; pointer capture and Escape cancellation; emits cell/context intents | owns graph data or mutates links during pointer movement |
-| `routes` (List view) | kit `table` over the page's links; Add Route sheet | — |
+| `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in a modal Add Route sheet | changes graph data without app transactions |
 | `undo` | consumes `app::Transaction` with stable port identities, intended direction, request ID, result and observed flag; inverse on observed results only | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
 
@@ -74,7 +74,7 @@ The corner stays fixed; column labels follow x only, row labels follow y only, a
 
 ## Files
 - Settings `$XDG_CONFIG_HOME/aizome/musubi.toml` (view options per page).
-- State `$XDG_STATE_HOME/aizome/musubi/` (folded groups, window).
+- Settings are per-page booleans (pairs, swap, monitors, MIDI 1.0, List); From/To queries stay transient. State `state.toml` stores folded groups by the existing composite stable group identity, not PipeWire global IDs. On each graph delta, saved identities are mapped to live group keys; absent groups remain saved until they return. App debounces changes for 350 ms and writes via a same-directory temporary file and rename. Harness persistence tests opt in through `MUSUBI_TEST_CONFIG` and isolated XDG directories.
 - Data `$XDG_DATA_HOME/aizome/musubi/` (setups, effect chains; later phases).
 - One instance: `$XDG_RUNTIME_DIR/aizome-app.musubi.sock`.
 

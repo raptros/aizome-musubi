@@ -12,13 +12,14 @@ use crate::{
         Layout, MatrixMsg, PatchMatrix,
         layout::{Cell, CellState, ViewOptions},
     },
+    persistence, routes,
     undo::History,
 };
 use aizome_kit::{Rect, column, prelude::*, row};
 use std::{
     array,
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -84,6 +85,24 @@ pub enum Msg {
     Matrix(MatrixMsg),
     Backend(Event),
     Confirm(Vec<Cell>, bool),
+    ConfirmRoute(GlobalId, GlobalId),
+    List(bool),
+    ShowMidi1(bool),
+    SelectRoutes(Vec<usize>),
+    SortRoutes((usize, bool)),
+    InspectRoute(usize),
+    DeleteRoutes,
+    AddRoute,
+    CloseRoute,
+    RouteFromFilter(String),
+    RouteToFilter(String),
+    RouteFromSelected(Option<GlobalId>),
+    RouteToSelected(Option<GlobalId>),
+    ConnectRoute,
+    Persist(u64),
+    DisconnectSelection,
+    ConnectInOrder,
+    CollapseAll,
     ContextAction(ContextAction),
     Pairs(bool),
     Monitors(bool),
@@ -115,6 +134,16 @@ pub struct Musubi {
     connection: Option<Connection>,
     matrix_spike: Option<Rc<Layout>>,
     pub options: [ViewOptions; 4],
+    route_selection: Vec<(GlobalId, GlobalId)>,
+    route_sort: (usize, bool),
+    route_sheet: Option<WindowKey>,
+    route_from_filter: String,
+    route_to_filter: String,
+    route_from: Option<GlobalId>,
+    route_to: Option<GlobalId>,
+    persisted_folds: [HashSet<String>; 4],
+    persist_generation: u64,
+    persist_enabled: bool,
     layouts: [Option<Rc<Layout>>; 4],
     hovered: Option<Cell>,
     selected: Option<StableId>,
@@ -137,6 +166,48 @@ impl Musubi {
     }
     pub fn layout(&self, page: Page) -> Option<&Layout> {
         self.layouts[Self::index(page)].as_deref()
+    }
+    fn route_rows(&self) -> Vec<routes::Route> {
+        let Some(layout) = self.layout(self.page) else { return Vec::new() };
+        let pending: Vec<_> = self.pending.values().map(|p| p.pair).collect();
+        let errors: Vec<_> = self.errors.iter().map(|(&(from, to), error)| (from, to, error.clone())).collect();
+        let mut rows = routes::routes(
+            &self.graph,
+            layout,
+            self.page == Page::Midi2 && self.options[2].show_midi_1,
+            &pending,
+            &errors,
+        );
+        routes::sort(&mut rows, self.route_sort.0, self.route_sort.1);
+        rows
+    }
+    fn persist_later(&mut self, cx: &mut Cx<Msg>) {
+        if !self.persist_enabled {
+            return;
+        }
+        self.persist_generation += 1;
+        cx.after(Duration::from_millis(350), Msg::Persist(self.persist_generation));
+    }
+    fn connect_route(&mut self, from: GlobalId, to: GlobalId, cx: &mut Cx<Msg>) {
+        match can_link(&self.graph, from, to) {
+            LinkLegality::Forbidden(reason) => self.notice = Some(format!("Not allowed: {}", reason_text(reason))),
+            LinkLegality::NeedsConfirmation(_) if !self.conversion_confirmed => {
+                cx.alert(
+                    self.window,
+                    Alert::new(
+                        "MIDI conversion",
+                        "PipeWire converts between MIDI 2.0 and MIDI 1.0. Some messages don't survive the conversion.",
+                    )
+                    .default_button("Connect", Msg::ConfirmRoute(from, to))
+                    .cancel_button("Cancel"),
+                );
+            }
+            _ => {
+                if let Some(index) = self.submit_pairs(vec![(from, to, true)], cx) {
+                    self.history.record(index);
+                }
+            }
+        }
     }
     /// The Harness and fake backend use the same command path as the live app.
     pub fn with_fake(fake: Rc<RefCell<FakeBackend>>) -> Self {
@@ -356,12 +427,20 @@ impl Musubi {
             format!("{} skipped: {}.", if undo { "Undo" } else { "Redo" }, skipped.join(", "))
         });
     }
-    fn fold(&mut self, key: crate::graph::group::GroupKey) {
-        let set = &mut self.options[Self::index(self.page)].folded;
+    fn fold(&mut self, key: crate::graph::group::GroupKey, cx: &mut Cx<Msg>) {
+        let index = Self::index(self.page);
+        let stable = persistence::stable_group(&self.graph, &key);
+        let set = &mut self.options[index].folded;
         if !set.insert(key.clone()) {
             set.remove(&key);
+            if let Some(stable) = stable {
+                self.persisted_folds[index].remove(&stable);
+            }
+        } else if let Some(stable) = stable {
+            self.persisted_folds[index].insert(stable);
         }
         self.refresh_layouts();
+        self.persist_later(cx);
     }
     fn context_menu(&self, cell: Cell, column: bool, cx: &mut Cx<Msg>) {
         let Some(layout) = &self.layouts[Self::index(self.page)] else { return };
@@ -396,7 +475,7 @@ impl Musubi {
     }
     fn context_action(&mut self, action: ContextAction, cx: &mut Cx<Msg>) {
         match action {
-            ContextAction::Fold(key) => self.fold(key),
+            ContextAction::Fold(key) => self.fold(key, cx),
             ContextAction::Copy(id) => {
                 if let Some(name) = self.graph.ports.get(&id).and_then(|port| port.props.get("port.name")) {
                     cx.set_clipboard_text(name);
@@ -462,13 +541,16 @@ impl Musubi {
         });
     }
     fn counts(&self) -> (usize, usize) {
-        let kind = self.kind();
-        let ports = self.graph.ports_of_kind(kind).count();
+        let visible = |kind| {
+            kind == Some(self.kind())
+                || self.page == Page::Midi2 && self.options[2].show_midi_1 && kind == Some(PortKind::Midi)
+        };
+        let ports = self.graph.ports.values().filter(|port| visible(self.graph.kind(port.id))).count();
         let links = self
             .graph
             .links
             .values()
-            .filter(|link| self.graph.kind(link.output) == Some(kind) && self.graph.kind(link.input) == Some(kind))
+            .filter(|link| visible(self.graph.kind(link.output)) && visible(self.graph.kind(link.input)))
             .count();
         (ports, links)
     }
@@ -530,13 +612,7 @@ impl Musubi {
         container(
             column![
                 text(self.page.title()).size(28.).semibold(),
-                text(match &self.connection {
-                    Some(Connection::Down(_)) => "PipeWire unavailable.",
-                    _ => "Not connected to PipeWire yet.",
-                })
-                .size(20.)
-                .role(Role::Text2),
-                text("Musubi keeps trying to reach the server.").role(Role::Text2).wrap(),
+                text("PipeWire isn't answering. Musubi keeps trying.").size(20.).role(Role::Text2).wrap(),
             ]
             .spacing(12.),
         )
@@ -577,7 +653,6 @@ impl Musubi {
                     .into(),
             );
             for (heading, outgoing) in [("Goes to", true), ("Comes from", false)] {
-                body.push(caption(heading).into());
                 let mut links: Vec<_> = self
                     .graph
                     .links
@@ -585,9 +660,13 @@ impl Musubi {
                     .filter(|link| if outgoing { link.output == port.id } else { link.input == port.id })
                     .collect();
                 links.sort_by_key(|link| (link.output, link.input));
+                if links.is_empty() {
+                    continue;
+                }
+                body.push(caption(heading).into());
                 for link in links {
                     let other = if outgoing { link.input } else { link.output };
-                    let name = self.graph.ports.get(&other).map(port_label).unwrap_or_else(|| format!("Port {other}"));
+                    let name = routes::port_name(&self.graph, other);
                     body.push(
                         row![
                             text(name).size(12.).wrap().width(Fill),
@@ -662,6 +741,11 @@ impl Program for Musubi {
     }
 
     fn launched(&mut self, cx: &mut Cx<Msg>) {
+        self.persist_enabled = self.live || (self.fake.is_some() && std::env::var_os("MUSUBI_TEST_CONFIG").is_some());
+        if self.persist_enabled {
+            self.options = persistence::load_options();
+            self.persisted_folds = persistence::load_folds();
+        }
         self.window = cx.open_window(WindowSpec::new("Musubi — Patchbay").size(1280., 800.).min_size(900., 560.));
         if let Some(instance) = &self.instance {
             let sender = cx.stream();
@@ -701,6 +785,120 @@ impl Program for Musubi {
                 self.commands_for(vec![cell], state != Some(CellState::Connected), cx);
             }
             Msg::Matrix(MatrixMsg::Line(cells, connect)) => self.commands_for(cells, connect, cx),
+            Msg::ConfirmRoute(from, to) => {
+                self.conversion_confirmed = true;
+                self.connect_route(from, to, cx);
+            }
+            Msg::List(list) => {
+                self.options[Self::index(self.page)].list = list;
+                self.persist_later(cx);
+            }
+            Msg::ShowMidi1(show) => {
+                self.options[2].show_midi_1 = show;
+                self.refresh_layouts();
+                self.persist_later(cx);
+            }
+            Msg::SelectRoutes(indices) => {
+                let rows = self.route_rows();
+                self.route_selection =
+                    indices.into_iter().filter_map(|i| rows.get(i).map(|r| (r.from, r.to))).collect();
+            }
+            Msg::SortRoutes(sort) => self.route_sort = sort,
+            Msg::InspectRoute(index) => {
+                if let Some(route) = self.route_rows().get(index) {
+                    self.selected = self.graph.ports.get(&route.from).and_then(|p| self.graph.stable_port_id(p));
+                    self.inspector = true;
+                }
+            }
+            Msg::DeleteRoutes => {
+                let pairs: Vec<_> = self.route_selection.iter().map(|&(a, b)| (a, b, false)).collect();
+                if let Some(index) = self.submit_pairs(pairs, cx) {
+                    self.history.record(index);
+                }
+                self.route_selection.clear();
+            }
+            Msg::AddRoute => {
+                if self.route_sheet.is_none() {
+                    self.route_sheet = Some(cx.show_sheet(self.window));
+                    self.route_from_filter.clear();
+                    self.route_to_filter.clear();
+                    self.route_from = None;
+                    self.route_to = None;
+                    cx.focus("route-from-search");
+                }
+            }
+            Msg::CloseRoute => {
+                if let Some(sheet) = self.route_sheet.take() {
+                    cx.close_window(sheet);
+                }
+            }
+            Msg::RouteFromFilter(value) => {
+                self.route_from_filter = value;
+                self.route_from = None;
+            }
+            Msg::RouteToFilter(value) => {
+                self.route_to_filter = value;
+                self.route_to = None;
+            }
+            Msg::RouteFromSelected(value) => self.route_from = value,
+            Msg::RouteToSelected(value) => self.route_to = value,
+            Msg::ConnectRoute => {
+                if let (Some(from), Some(to)) = (self.route_from, self.route_to) {
+                    self.update(Msg::CloseRoute, cx);
+                    self.connect_route(from, to, cx);
+                }
+            }
+            Msg::Persist(generation) if generation == self.persist_generation => {
+                if let Err(error) = persistence::save_options(&self.options)
+                    .and_then(|_| persistence::save_folds(&self.graph, &self.options, &self.persisted_folds))
+                {
+                    self.notice = Some(format!("Could not save view settings: {error}"));
+                }
+            }
+            Msg::Persist(_) => {}
+            Msg::DisconnectSelection => {
+                let Some(id) = self.selected.as_ref().and_then(|id| match self.graph.resolve(id) {
+                    crate::graph::identity::Resolution::Unique(id) => Some(id),
+                    _ => None,
+                }) else {
+                    return;
+                };
+                let pairs = self
+                    .graph
+                    .links
+                    .values()
+                    .filter(|l| l.output == id || l.input == id)
+                    .map(|l| (l.output, l.input, false))
+                    .collect();
+                if let Some(index) = self.submit_pairs(pairs, cx) {
+                    self.history.record(index);
+                }
+            }
+            Msg::ConnectInOrder => {
+                if let Some(layout) = self.layout(self.page) {
+                    let cells = (0..layout.row_lines.len().min(layout.col_lines.len()))
+                        .map(|i| Cell { row: i, col: i })
+                        .collect();
+                    self.commands_for(cells, true, cx);
+                }
+            }
+            Msg::CollapseAll => {
+                let keys: Vec<_> = self
+                    .graph
+                    .groups(crate::graph::Direction::Output)
+                    .into_iter()
+                    .chain(self.graph.groups(crate::graph::Direction::Input))
+                    .map(|g| g.key)
+                    .collect();
+                for key in keys {
+                    self.options[Self::index(self.page)].folded.insert(key.clone());
+                    if let Some(stable) = persistence::stable_group(&self.graph, &key) {
+                        self.persisted_folds[Self::index(self.page)].insert(stable);
+                    }
+                }
+                self.refresh_layouts();
+                self.persist_later(cx);
+            }
             Msg::Matrix(MatrixMsg::Context(cell, column)) => self.context_menu(cell, column, cx),
             Msg::Confirm(cells, connect) => {
                 self.conversion_confirmed = true;
@@ -710,15 +908,18 @@ impl Program for Musubi {
             Msg::Pairs(pairs) => {
                 self.options[Self::index(self.page)].pairs = pairs;
                 self.refresh_layouts();
+                self.persist_later(cx);
             }
             Msg::Monitors(monitors) => {
                 self.options[Self::index(self.page)].monitors = monitors;
                 self.refresh_layouts();
+                self.persist_later(cx);
             }
             Msg::Swap => {
                 let options = &mut self.options[Self::index(self.page)];
                 options.swap = !options.swap;
                 self.refresh_layouts();
+                self.persist_later(cx);
             }
             Msg::From(from) => {
                 self.options[Self::index(self.page)].from = from;
@@ -765,6 +966,9 @@ impl Program for Musubi {
                     }
                 }
                 self.graph.apply(delta);
+                if self.persist_enabled {
+                    persistence::restore_folds(&self.graph, &mut self.options, &self.persisted_folds);
+                }
                 for transaction in &mut self.transactions {
                     for intent in &mut transaction.intents {
                         let (
@@ -817,7 +1021,26 @@ impl Program for Musubi {
         }
     }
 
-    fn view(&self, _window: WindowKey) -> Element<Msg> {
+    fn view(&self, window: WindowKey) -> Element<Msg> {
+        if self.route_sheet == Some(window) {
+            let (from, to) = self
+                .layout(self.page)
+                .map(|layout| {
+                    (
+                        routes::endpoints(&self.graph, layout, true, &self.route_from_filter),
+                        routes::endpoints(&self.graph, layout, false, &self.route_to_filter),
+                    )
+                })
+                .unwrap_or_default();
+            return routes::sheet(
+                from,
+                to,
+                &self.route_from_filter,
+                &self.route_to_filter,
+                self.route_from,
+                self.route_to,
+            );
+        }
         let mut side = column![
             row![
                 container(aizome_kit::icon(Icon::Music).size(18.).role(Role::Accent))
@@ -836,6 +1059,23 @@ impl Program for Musubi {
         for (page, icon, title) in Page::ALL {
             side = side.push(sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title));
         }
+        let version = match &self.connection {
+            Some(Connection::Up(version)) => format!("PipeWire {version}"),
+            _ => "PipeWire".to_owned(),
+        };
+        let status = if matches!(self.connection, Some(Connection::Up(_))) { "●" } else { "○" };
+        side = side.push(spacer()).push(
+            container(
+                row![
+                    text(status).role(if status == "●" { Role::Success } else { Role::Danger }),
+                    text(version).size(12.)
+                ]
+                .spacing(7.),
+            )
+            .padding(12.)
+            .fill(Tone::Chrome)
+            .border(Edge::Line),
+        );
         let (ports, links) = self.counts();
         let content: Element<Msg> = if self.matrix_spike.is_none()
             && ports == 0
@@ -857,23 +1097,60 @@ impl Program for Musubi {
         } else if let Some(layout) = self.matrix_spike.as_ref().filter(|_| self.page == Page::Audio).or_else(|| {
             self.layouts[Self::index(self.page)].as_ref().filter(|_| matches!(self.connection, Some(Connection::Up(_))))
         }) {
-            PatchMatrix::new(layout.clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
+            if self.options[Self::index(self.page)].list {
+                let rows = self.route_rows();
+                let selected = rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, row)| self.route_selection.contains(&(row.from, row.to)).then_some(i))
+                    .collect();
+                column![
+                    row![
+                        button("Add Route…").on_press(Msg::AddRoute).id("add-route"),
+                        button("Delete Selected").on_press(Msg::DeleteRoutes).enabled(!self.route_selection.is_empty())
+                    ]
+                    .spacing(8.)
+                    .padding(10.),
+                    routes::view(
+                        rows,
+                        selected,
+                        self.route_sort,
+                        self.page == Page::Midi2 && self.options[2].show_midi_1
+                    ),
+                ]
+                .width(Fill)
+                .height(Fill)
+                .into()
+            } else {
+                PatchMatrix::new(layout.clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
+            }
         } else {
             self.unavailable()
         };
         let title = format!("{} {ports} ports · {links} links", self.page.title());
         let options = &self.options[Self::index(self.page)];
-        let controls = toolbar(vec![
+        let mut controls: Vec<Element<Msg>> = vec![
             text(title).semibold().into(),
-            segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
-                .on_select(|index| Msg::Pairs(index == 0))
-                .id("pairs-channels")
+            segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
+                .on_select(|index| Msg::List(index == 1))
+                .id("matrix-list")
                 .into(),
-            checkbox("Monitors", options.monitors)
-                .on_toggle(Msg::Monitors)
-                .enabled(self.page == Page::Audio)
-                .id("monitors")
-                .into(),
+        ];
+        if self.page == Page::Audio {
+            controls.push(
+                segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
+                    .on_select(|index| Msg::Pairs(index == 0))
+                    .id("pairs-channels")
+                    .into(),
+            );
+            controls.push(checkbox("Monitors", options.monitors).on_toggle(Msg::Monitors).id("monitors").into());
+        }
+        if self.page == Page::Midi2 {
+            controls.push(
+                checkbox("Show MIDI 1.0", options.show_midi_1).on_toggle(Msg::ShowMidi1).id("show-midi-1").into(),
+            );
+        }
+        controls.extend([
             button("Swap").compact().on_press(Msg::Swap).id("swap").into(),
             button("Undo")
                 .compact()
@@ -885,10 +1162,12 @@ impl Program for Musubi {
             search_field(&options.from).placeholder("From").on_change(Msg::From).width(125.).id("from-filter").into(),
             search_field(&options.to).placeholder("To").on_change(Msg::To).width(125.).id("to-filter").into(),
         ]);
-        let status = self.status_sentence().unwrap_or_else(|| match &self.connection {
-            Some(Connection::Down(error)) => error.clone(),
-            _ => String::new(),
-        });
+        let controls = toolbar(controls);
+        let status = if let Some(Connection::Down(error)) = &self.connection {
+            error.clone()
+        } else {
+            self.status_sentence().unwrap_or_default()
+        };
         let right = if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
@@ -912,6 +1191,27 @@ impl Program for Musubi {
                     .checked(self.page == *page),
             );
         }
+        let options = &self.options[Self::index(self.page)];
+        view = view
+            .separator()
+            .item(MenuItem::new("Matrix", Msg::List(false)).checked(!options.list))
+            .item(MenuItem::new("List", Msg::List(true)).checked(options.list))
+            .item(MenuItem::new("Pairs", Msg::Pairs(true)).checked(options.pairs).enabled(self.page == Page::Audio))
+            .item(
+                MenuItem::new("Channels", Msg::Pairs(false)).checked(!options.pairs).enabled(self.page == Page::Audio),
+            )
+            .item(
+                MenuItem::new("Show Monitors", Msg::Monitors(!options.monitors))
+                    .checked(options.monitors)
+                    .enabled(self.page == Page::Audio),
+            )
+            .item(
+                MenuItem::new("Show MIDI 1.0", Msg::ShowMidi1(!options.show_midi_1))
+                    .checked(options.show_midi_1)
+                    .enabled(self.page == Page::Midi2),
+            )
+            .item(MenuItem::new("Swap Axes", Msg::Swap).shortcut(Shortcut::cmd('S').alt()).checked(options.swap))
+            .item(MenuItem::new("Collapse All Groups", Msg::CollapseAll));
         let edit = Menu::new("Edit")
             .item(
                 MenuItem::new(
@@ -931,9 +1231,27 @@ impl Program for Musubi {
                 .shortcut(Shortcut::cmd('Z').shift())
                 .enabled(self.history.redo_label(&self.transactions).is_some()),
             );
+        let edit = edit
+            .item(
+                MenuItem::new("Delete Selected Routes", Msg::DeleteRoutes)
+                    .shortcut(Shortcut::key(aizome_kit::menu::ShortcutKey::Delete))
+                    .enabled(options.list && !self.route_selection.is_empty()),
+            )
+            .item(
+                MenuItem::new("Remove Selected Routes", Msg::DeleteRoutes)
+                    .shortcut(Shortcut::key(aizome_kit::menu::ShortcutKey::Backspace))
+                    .enabled(options.list && !self.route_selection.is_empty()),
+            );
         view = view.item(
             MenuItem::new("Inspector", Msg::Inspector).shortcut(Shortcut::cmd('I').alt()).checked(self.inspector),
         );
-        MenuBar::standard(&self.info()).replace("Edit", edit).with_menu(view)
+        let routing = Menu::new("Routing")
+            .item(
+                MenuItem::new("Disconnect All from Selection", Msg::DisconnectSelection)
+                    .enabled(self.selected.is_some()),
+            )
+            .item(MenuItem::new("Connect in Order", Msg::ConnectInOrder))
+            .item(MenuItem::new("Add Route…", Msg::AddRoute));
+        MenuBar::standard(&self.info()).replace("Edit", edit).with_menu(view).with_menu(routing)
     }
 }

@@ -131,7 +131,7 @@ impl Graph {
                     let label = if seq_label(port).is_some_and(|name| name.contains("Midi Through")) {
                         "Midi Through".to_owned()
                     } else {
-                        seq_label(port).unwrap_or("ALSA MIDI").to_owned()
+                        seq_label(port).unwrap_or("ALSA MIDI (other)").to_owned()
                     };
                     (if label == "Midi Through" { GroupKind::Virtual } else { GroupKind::Hardware }, label)
                 }
@@ -245,7 +245,7 @@ mod tests {
                 .any(|g| g.label == "Keystep" && g.key == (GroupKey::MidiClient { bridge: 10, client: "28".into() }))
         );
         assert!(sources.iter().any(|g| g.label == "Midi Through" && g.kind == GroupKind::Virtual));
-        assert!(sources.iter().any(|g| g.label == "ALSA MIDI"));
+        assert!(sources.iter().any(|g| g.label == "ALSA MIDI (other)"));
         assert!(sources.iter().any(|g| g.label == "Ardour"));
     }
     #[test]
