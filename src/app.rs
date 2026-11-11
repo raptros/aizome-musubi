@@ -1,4 +1,5 @@
-use crate::instance;
+use crate::{instance, matrix::{Layout, MatrixMsg, PatchMatrix}};
+use std::rc::Rc;
 use aizome_kit::{column, row, prelude::*};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,13 +33,38 @@ impl Page {
 pub enum Msg {
     Page(Page),
     Activated,
+    Matrix(MatrixMsg),
 }
 
 #[derive(Default)]
 pub struct Musubi {
     pub page: Page,
     pub instance: Option<instance::Instance>,
+    matrix_spike: Option<Rc<Layout>>,
     window: WindowKey,
+}
+
+impl Musubi {
+    /// Synthetic geometry exists only in Harness tests, never in the shipped app.
+    pub fn for_matrix_test(layout: Rc<Layout>) -> Self {
+        Self { matrix_spike: Some(layout), ..Self::default() }
+    }
+    fn unavailable(&self) -> Element<Msg> {
+        container(
+            column![
+                text(self.page.title()).size(28.).semibold(),
+                text("Not connected to PipeWire yet.").size(20.).role(Role::Text2),
+                text("This page cannot display ports or change connections in this build.")
+                    .role(Role::Text2)
+                    .wrap(),
+            ]
+            .spacing(12.),
+        )
+        .padding(36.)
+        .width(Fill)
+        .height(Fill)
+        .into()
+    }
 }
 
 impl Program for Musubi {
@@ -66,6 +92,7 @@ impl Program for Musubi {
         match msg {
             Msg::Page(page) => self.page = page,
             Msg::Activated => cx.activate(self.window),
+            Msg::Matrix(_) => {}
         }
     }
 
@@ -98,26 +125,24 @@ impl Program for Musubi {
                     .id(title),
             );
         }
+        let content: Element<Msg> = if self.page == Page::Audio {
+            if let Some(layout) = &self.matrix_spike {
+                PatchMatrix::new(layout.clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
+            } else {
+                self.unavailable()
+            }
+        } else {
+            self.unavailable()
+        };
         let main = column![
             toolbar(vec![text(self.page.title()).semibold().into()]),
-            container(
-                column![
-                    text(self.page.title()).size(28.).semibold(),
-                    text("Not connected to PipeWire yet.").size(20.).role(Role::Text2),
-                    text("This page cannot display ports or change connections in this build.")
-                        .role(Role::Text2)
-                        .wrap(),
-                ]
-                .spacing(12.),
-            )
-            .padding(36.)
-            .width(Fill)
-            .height(Fill),
+            content,
             status_bar(vec![status_text("PipeWire: not connected")]),
         ]
         .height(Fill);
         sidebar_layout(side, main).into()
     }
+
 
     fn menus(&self) -> MenuBar<Msg> {
         let mut view = Menu::new("View");
