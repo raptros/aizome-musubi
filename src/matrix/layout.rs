@@ -59,6 +59,7 @@ pub struct Group {
     pub end: usize,
     pub key: Option<GroupKey>,
     pub collapsed: bool,
+    pub midi_1: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -72,14 +73,17 @@ pub struct Axis {
 impl Axis {
     pub fn new(groups: Vec<(String, String, Kind, Vec<String>)>) -> Self {
         Self::from_groups(
-            groups.into_iter().map(|(name, detail, kind, labels)| (name, detail, kind, None, false, labels)).collect(),
+            groups
+                .into_iter()
+                .map(|(name, detail, kind, labels)| (name, detail, kind, None, false, false, labels))
+                .collect(),
         )
     }
 
-    fn from_groups(groups: Vec<(String, String, Kind, Option<GroupKey>, bool, Vec<String>)>) -> Self {
+    fn from_groups(groups: Vec<(String, String, Kind, Option<GroupKey>, bool, bool, Vec<String>)>) -> Self {
         let (mut entries, mut labels, mut offsets) = (Vec::new(), Vec::new(), Vec::new());
         let mut at = 0.0;
-        for (name, detail, kind, key, collapsed, ports) in groups {
+        for (name, detail, kind, key, collapsed, midi_1, ports) in groups {
             if ports.is_empty() {
                 continue;
             }
@@ -92,7 +96,7 @@ impl Axis {
                 labels.push(port);
                 at += PITCH;
             }
-            entries.push(Group { name, detail, kind, first, end: labels.len(), key, collapsed });
+            entries.push(Group { name, detail, kind, first, end: labels.len(), key, collapsed, midi_1 });
         }
         Self { groups: entries, labels, offsets, extent: at }
     }
@@ -147,6 +151,7 @@ pub struct Layout {
     pub rows: Axis,
     pub cols: Axis,
     /// Sparse request-state overrides, keyed by displayed cell. S4b owns and fills this map.
+    pub error_reasons: HashMap<Cell, String>,
     pub cells: HashMap<Cell, CellState>,
     pub row_lines: Vec<Line>,
     pub col_lines: Vec<Line>,
@@ -154,6 +159,7 @@ pub struct Layout {
     pub hidden_from: usize,
     pub hidden_to: usize,
     pub revision: u64,
+    pub page: Page,
     pub swapped: bool,
 }
 
@@ -233,10 +239,12 @@ impl Layout {
             col_lines,
             links: graph.links_by_pair.keys().copied().collect(),
             cells: HashMap::new(),
+            error_reasons: HashMap::new(),
             hidden_from,
             hidden_to,
             revision: graph.epoch,
             swapped: options.swap,
+            page,
         }
     }
 
@@ -321,11 +329,12 @@ impl Layout {
                 }
             }
             groups.push((
-                if midi_group { format!("{} · 1.0", group.label) } else { group.label },
+                group.label,
                 format!("{port_count} ports"),
                 group.kind.into(),
                 Some(group.key),
                 collapsed,
+                midi_group,
                 labels,
             ));
         }
@@ -390,6 +399,7 @@ impl Layout {
             rows: axis(rows, true),
             cols: axis(cols, false),
             cells,
+            error_reasons: HashMap::new(),
             row_lines: vec![],
             col_lines: vec![],
             links: HashSet::new(),
@@ -397,6 +407,7 @@ impl Layout {
             hidden_to: 0,
             revision: 1,
             swapped: false,
+            page: Page::Audio,
         }
     }
 }

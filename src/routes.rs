@@ -176,23 +176,30 @@ pub fn sheet(
                     search_field(from_query)
                         .placeholder("Search sources")
                         .on_change(Msg::RouteFromFilter)
+                        .on_blur(Msg::RouteFromFocus)
                         .id("route-from-search"),
-                    virtual_list(source.len(), 28., move |i| text(sources[i].1.clone()))
-                        .selected(
-                            source
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, (id, _))| (Some(*id) == from_selected).then_some(i))
-                        )
-                        .on_select({
-                            let source = source.clone();
-                            move |rows| Msg::RouteFromSelected(rows.first().map(|&i| source[i].0))
-                        })
-                        .on_activate({
-                            let source = source.clone();
-                            move |i| Msg::RouteFromSelected(Some(source[i].0))
-                        })
-                        .id("route-from-list")
+                    container(
+                        virtual_list(source.len(), 28., move |i| text(sources[i].1.clone()))
+                            .selected(
+                                source
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, (id, _))| (Some(*id) == from_selected).then_some(i))
+                            )
+                            .on_select({
+                                let source = source.clone();
+                                move |rows| Msg::RouteFromSelected(rows.first().map(|&i| source[i].0))
+                            })
+                            .on_activate({
+                                let source = source.clone();
+                                move |i| Msg::RouteFromActivate(source[i].0)
+                            })
+                            .id("route-from-list"),
+                    )
+                    .fill(Tone::Sunk)
+                    .border(Edge::Line)
+                    .width(Fill)
+                    .height(Fill),
                 ]
                 .spacing(8.)
                 .width(Fill),
@@ -201,23 +208,30 @@ pub fn sheet(
                     search_field(to_query)
                         .placeholder("Search destinations")
                         .on_change(Msg::RouteToFilter)
+                        .on_blur(Msg::RouteToFocus)
                         .id("route-to-search"),
-                    virtual_list(target.len(), 28., move |i| text(targets[i].1.clone()))
-                        .selected(
-                            target
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, (id, _))| (Some(*id) == to_selected).then_some(i))
-                        )
-                        .on_select({
-                            let target = target.clone();
-                            move |rows| Msg::RouteToSelected(rows.first().map(|&i| target[i].0))
-                        })
-                        .on_activate({
-                            let target = target.clone();
-                            move |i| Msg::RouteToSelected(Some(target[i].0))
-                        })
-                        .id("route-to-list")
+                    container(
+                        virtual_list(target.len(), 28., move |i| text(targets[i].1.clone()))
+                            .selected(
+                                target
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, (id, _))| (Some(*id) == to_selected).then_some(i))
+                            )
+                            .on_select({
+                                let target = target.clone();
+                                move |rows| Msg::RouteToSelected(rows.first().map(|&i| target[i].0))
+                            })
+                            .on_activate({
+                                let target = target.clone();
+                                move |i| Msg::RouteToActivate(target[i].0)
+                            })
+                            .id("route-to-list"),
+                    )
+                    .fill(Tone::Sunk)
+                    .border(Edge::Line)
+                    .width(Fill)
+                    .height(Fill),
                 ]
                 .spacing(8.)
                 .width(Fill),

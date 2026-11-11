@@ -38,6 +38,36 @@ fn cell(h: &Harness<Musubi>, from: u32, to: u32) -> (Cell, Point) {
 }
 
 #[test]
+fn matrix_semantics_follow_focus_and_return_opens_row_inspector() {
+    use aizome_kit::widget::{SemanticAction, SemanticRole};
+
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let table = |h: &Harness<Musubi>| {
+        h.semantics(w)
+            .into_iter()
+            .find(|(s, _)| s.role == SemanticRole::Table && s.label.as_deref() == Some("Audio connections"))
+            .expect("matrix table")
+            .0
+    };
+    assert_eq!(table(&h).value, None);
+    let (_, point) = cell(&h, 100, 120);
+    h.click(w, point);
+    h.key(w, Key::Named(NamedKey::ArrowRight), Modifiers::NONE);
+    let focused = table(&h);
+    assert!(focused.value.as_deref().is_some_and(|v| v.contains(" → ") && v.contains(", not connected")));
+    assert!(focused.actions.contains(&SemanticAction::Click));
+    h.key(w, Key::Named(NamedKey::ArrowLeft), Modifiers::NONE);
+    fake.borrow_mut().fail_next("permission denied");
+    h.click(w, point);
+    assert!(table(&h).value.as_deref().is_some_and(|v| v.ends_with("error: permission denied")));
+    h.key(w, Key::Named(NamedKey::Enter), Modifiers::NONE);
+    assert!(h.find_id(w, "inspector").is_some());
+    let label = aizome_musubi::graph::group::port_label(&h.program().graph.ports[&100]);
+    assert!(h.find(w, &label).is_some(), "Return should inspect the row port");
+}
+
+#[test]
 fn click_connect_disconnect_and_failure() {
     let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
     let w = h.window();
@@ -402,6 +432,23 @@ fn list_selection_delete_undo_and_semantics() {
 }
 
 #[test]
+fn every_page_shows_only_its_toolbar_options() {
+    let (mut h, _) = interactive(include_str!("fixtures/midi.json"));
+    let w = h.window();
+    for (page, audio, midi2) in [
+        (Page::Audio, true, false),
+        (Page::Midi, false, false),
+        (Page::Midi2, false, true),
+        (Page::Video, false, false),
+    ] {
+        h.send(Msg::Page(page));
+        assert_eq!(h.find_id(w, "pairs-channels").is_some(), audio, "{page:?}");
+        assert_eq!(h.find_id(w, "monitors").is_some(), audio, "{page:?}");
+        assert_eq!(h.find_id(w, "show-midi-1").is_some(), midi2, "{page:?}");
+    }
+}
+
+#[test]
 fn midi2_toggle_and_page_specific_controls() {
     let (mut h, _) = interactive(include_str!("fixtures/midi.json"));
     let w = h.window();
@@ -410,7 +457,7 @@ fn midi2_toggle_and_page_specific_controls() {
     assert!(h.find_id(w, "pairs-channels").is_none());
     assert!(h.find_id(w, "monitors").is_none());
     h.send(Msg::ShowMidi1(true));
-    assert!(h.program().layout(Page::Midi2).unwrap().rows.groups.iter().any(|g| g.name.ends_with("1.0")));
+    assert!(h.program().layout(Page::Midi2).unwrap().rows.groups.iter().any(|g| g.midi_1));
 }
 
 #[test]

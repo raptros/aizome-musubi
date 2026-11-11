@@ -18,7 +18,7 @@ use crate::{
 use aizome_kit::{Rect, column, prelude::*, row};
 use std::{
     array,
-    cell::RefCell,
+    cell::{Cell as SharedCell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
@@ -96,6 +96,10 @@ pub enum Msg {
     CloseRoute,
     RouteFromFilter(String),
     RouteToFilter(String),
+    RouteFromFocus,
+    RouteToFocus,
+    RouteFromActivate(GlobalId),
+    RouteToActivate(GlobalId),
     RouteFromSelected(Option<GlobalId>),
     RouteToSelected(Option<GlobalId>),
     ConnectRoute,
@@ -146,6 +150,7 @@ pub struct Musubi {
     persist_enabled: bool,
     layouts: [Option<Rc<Layout>>; 4],
     hovered: Option<Cell>,
+    matrix_focus: Rc<SharedCell<Option<Cell>>>,
     selected: Option<StableId>,
     inspector: bool,
     pub transactions: Vec<Transaction>,
@@ -532,9 +537,10 @@ impl Musubi {
                     layout.cells.insert(cell, CellState::Asked);
                 }
             }
-            for &pair in self.errors.keys() {
+            for (&pair, reason) in &self.errors {
                 if let Some(cell) = layout.cell_for_pair(pair) {
                     layout.cells.insert(cell, CellState::Error);
+                    layout.error_reasons.insert(cell, reason.clone());
                 }
             }
             Some(Rc::new(layout))
@@ -775,10 +781,15 @@ impl Program for Musubi {
             Msg::Page(page) => {
                 self.page = page;
                 self.hovered = None;
+                self.matrix_focus.set(None);
             }
             Msg::Activated => cx.activate(self.window),
             Msg::Matrix(MatrixMsg::Hover(cell)) => self.hovered = cell,
             Msg::Matrix(MatrixMsg::Focus(cell)) => self.select_cell(cell, false),
+            Msg::Matrix(MatrixMsg::Inspect(cell)) => {
+                self.select_cell(cell, false);
+                self.inspector = true;
+            }
             Msg::Matrix(MatrixMsg::Select(cell, column)) => self.select_cell(cell, column),
             Msg::Matrix(MatrixMsg::Toggle(cell)) => {
                 let state = self.layouts[Self::index(self.page)].as_ref().map(|l| l.state(cell));
@@ -839,6 +850,28 @@ impl Program for Musubi {
             Msg::RouteToFilter(value) => {
                 self.route_to_filter = value;
                 self.route_to = None;
+            }
+            Msg::RouteFromFocus => {
+                if self.route_from.is_none() {
+                    self.route_from = self.layout(self.page).and_then(|layout| {
+                        routes::endpoints(&self.graph, layout, true, &self.route_from_filter).first().map(|v| v.0)
+                    });
+                }
+            }
+            Msg::RouteToFocus => {
+                if self.route_to.is_none() {
+                    self.route_to = self.layout(self.page).and_then(|layout| {
+                        routes::endpoints(&self.graph, layout, false, &self.route_to_filter).first().map(|v| v.0)
+                    });
+                }
+            }
+            Msg::RouteFromActivate(id) => {
+                self.route_from = Some(id);
+                self.update(Msg::ConnectRoute, cx);
+            }
+            Msg::RouteToActivate(id) => {
+                self.route_to = Some(id);
+                self.update(Msg::ConnectRoute, cx);
             }
             Msg::RouteFromSelected(value) => self.route_from = value,
             Msg::RouteToSelected(value) => self.route_to = value,
@@ -1055,7 +1088,8 @@ impl Program for Musubi {
             divider().edge(Edge::Line),
             caption("PATCHBAY"),
         ]
-        .spacing(8.);
+        .spacing(8.)
+        .width(Fill);
         for (page, icon, title) in Page::ALL {
             side = side.push(sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title));
         }
@@ -1073,8 +1107,8 @@ impl Program for Musubi {
                 .spacing(7.),
             )
             .padding(12.)
-            .fill(Tone::Chrome)
-            .border(Edge::Line),
+            .edges(Edge::Line, Sides::TOP)
+            .width(Fill),
         );
         let (ports, links) = self.counts();
         let content: Element<Msg> = if self.matrix_spike.is_none()
@@ -1122,7 +1156,10 @@ impl Program for Musubi {
                 .height(Fill)
                 .into()
             } else {
-                PatchMatrix::new(layout.clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
+                PatchMatrix::new(layout.clone(), self.matrix_focus.clone(), Msg::Matrix)
+                    .id("matrix")
+                    .width(Fill)
+                    .height(Fill)
             }
         } else {
             self.unavailable()

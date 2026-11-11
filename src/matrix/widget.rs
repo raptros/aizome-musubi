@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::cell::Cell as SharedCell;
 use std::rc::Rc;
 
 use aizome_kit::element::MsgFn;
@@ -7,7 +9,7 @@ use aizome_kit::sidestep_ui::{Key, NamedKey, PointerButton};
 use aizome_kit::text::TextSpec;
 use aizome_kit::theme::Theme;
 use aizome_kit::widget::{
-    Event, EventCx, FocusRing, Focusable, LayoutCx, PaintCx, SemanticRole, Semantics, Status, Widget,
+    Event, EventCx, FocusRing, Focusable, LayoutCx, PaintCx, SemanticAction, SemanticRole, Semantics, Status, Widget,
 };
 use aizome_kit::{Align, Color, Element, FontSpec, Point, Rect, Role, Size, Vec2};
 
@@ -21,6 +23,7 @@ pub enum MatrixMsg {
     Focus(Cell),
     Select(Cell, bool),
     Context(Cell, bool),
+    Inspect(Cell),
 }
 
 /// Inclusive raster line, independent of pointer sampling frequency.
@@ -63,11 +66,16 @@ struct State {
 pub struct PatchMatrix {
     layout: Rc<Layout>,
     on_event: aizome_kit::element::MsgMap<MatrixMsg>,
+    focused: Rc<SharedCell<Option<Cell>>>,
 }
 
 impl PatchMatrix {
-    pub fn new<Msg: Send + 'static>(layout: Rc<Layout>, f: impl Fn(MatrixMsg) -> Msg + 'static) -> Element<Msg> {
-        Element::new(Self { layout, on_event: aizome_kit::element::MsgMap::new(f) }, vec![])
+    pub fn new<Msg: Send + 'static>(
+        layout: Rc<Layout>,
+        focused: Rc<SharedCell<Option<Cell>>>,
+        f: impl Fn(MatrixMsg) -> Msg + 'static,
+    ) -> Element<Msg> {
+        Element::new(Self { layout, focused, on_event: aizome_kit::element::MsgMap::new(f) }, vec![])
     }
 
     fn view(size: Size) -> (Rect, Rect, Rect, Rect) {
@@ -124,6 +132,7 @@ impl PatchMatrix {
         let x = self.layout.cols.offsets[next.col];
         let y = self.layout.rows.offsets[next.row];
         let after = {
+            self.focused.set(Some(next));
             let st = cx.state::<State>();
             st.focused = Some(next);
             st.offset.x = st
@@ -357,7 +366,12 @@ impl Widget for PatchMatrix {
             cx.canvas.clip_rect(Rect::new(x + 3., 8., x + width - 3., 116.));
             cx.canvas.translate(Vec2::new(x + width / 2. - 4., 99.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-            let text = cx.layout_text(&group.name, &group_name, Some(86.));
+            let name = if group.midi_1 {
+                Cow::Owned(format!("{} · 1.0", group.name))
+            } else {
+                Cow::Borrowed(group.name.as_str())
+            };
+            let text = cx.layout_text(&name, &group_name, Some(86.));
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
             group_icon(group.kind, &group.name).draw(
@@ -390,9 +404,16 @@ impl Widget for PatchMatrix {
             cx.canvas.fill_rect(Rect::new(3., y, rows.x1 - 2., y + height), t.raised());
             cx.canvas.fill_rect(Rect::new(3., y, 6., y + height), kind_color(&t, group.kind));
             group_icon(group.kind, &group.name).draw(&mut cx.canvas, Point::new(9., y + 3.), 14., t.text2());
-            cx.draw_text_in(&group.name, &group_name, Rect::new(25., y, rows.x1 - 59., y + 20.), Align::Start);
+            let name_end = if group.midi_1 { 97. } else { 120. };
+            cx.draw_text_in(&group.name, &group_name, Rect::new(25., y, name_end, y + 20.), Align::Start);
+            if group.midi_1 {
+                let badge = Rect::new(99., y + 3., 121., y + 17.);
+                cx.canvas.fill_rect(badge, t.chrome());
+                outline(cx, badge, t.line(), 1.);
+                cx.draw_text_in("1.0", &TextSpec::new(FontSpec::mono(9.), t.text2()), badge, Align::Center);
+            }
             if group.end > group.first + 1 {
-                cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., rows.x1 - 59., y + 38.), Align::Start);
+                cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., 120., y + 38.), Align::Start);
             }
         }
         for row in visible_rows.clone() {
@@ -401,7 +422,7 @@ impl Widget for PatchMatrix {
             cx.draw_text_in(
                 &self.layout.rows.labels[row],
                 spec,
-                Rect::new(rows.x1 - 64., y, rows.x1 - 8., y + PITCH),
+                Rect::new(124., y, rows.x1 - 8., y + PITCH),
                 Align::Start,
             );
         }
@@ -656,7 +677,7 @@ impl Widget for PatchMatrix {
                         return Status::Handled;
                     }
                     Key::Named(NamedKey::Enter) => {
-                        self.notify(cx, MatrixMsg::Focus(current));
+                        self.notify(cx, MatrixMsg::Inspect(current));
                         return Status::Handled;
                     }
                     _ => return Status::Ignored,
@@ -673,11 +694,37 @@ impl Widget for PatchMatrix {
     }
 
     fn semantics(&self) -> Option<Semantics> {
-        // The full enumerable link table is a distinct view in S4. This widget
-        // exposes its current cell without allocating O(rows × columns) nodes.
+        let value = self.focused.get().and_then(|cell| {
+            let (row, col) = (self.layout.rows.labels.get(cell.row)?, self.layout.cols.labels.get(cell.col)?);
+            let (from, to, from_label, to_label) = if self.layout.swapped {
+                (&self.layout.cols, &self.layout.rows, col, row)
+            } else {
+                (&self.layout.rows, &self.layout.cols, row, col)
+            };
+            let (r, c) = if self.layout.swapped { (cell.col, cell.row) } else { (cell.row, cell.col) };
+            let state = match self.layout.state(cell) {
+                CellState::Connected => "connected".to_owned(),
+                CellState::Half => "partly connected".to_owned(),
+                CellState::Asked => "asked".to_owned(),
+                CellState::Error => format!(
+                    "error: {}",
+                    self.layout.error_reasons.get(&cell).map(String::as_str).unwrap_or("connection refused")
+                ),
+                CellState::NotAllowed => "not allowed".to_owned(),
+                CellState::Count(_) => "collapsed".to_owned(),
+                CellState::Empty => "not connected".to_owned(),
+            };
+            Some(format!(
+                "{} · {from_label} → {} · {to_label}, {state}",
+                from.groups[from.group_of(r)].name,
+                to.groups[to.group_of(c)].name,
+            ))
+        });
         Some(Semantics {
             role: SemanticRole::Table,
-            label: Some("Patch matrix, source rows and destination columns".into()),
+            label: Some(format!("{} connections", self.layout.page.title())),
+            actions: if value.is_some() { vec![SemanticAction::Click] } else { Vec::new() },
+            value,
             ..Default::default()
         })
     }
