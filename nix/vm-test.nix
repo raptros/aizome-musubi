@@ -36,7 +36,9 @@ pkgs.testers.runNixOSTest {
         };
       }) [ "musubi-vm-default" "musubi-vm-patch" ];
     };
-    boot.kernelModules = [ "snd-seq" "snd-virmidi" "vivid" ];
+    # No video device: the test kernel has no `vivid` module, so the VM
+    # check covers audio and MIDI only.
+    boot.kernelModules = [ "snd-seq" "snd-virmidi" ];
     environment.systemPackages = [ pkgs.pipewire pkgs.alsa-utils pkgs.jq ];
     # A stream connected to the default sink gets WirePlumber-managed output
     # ports, which can then be patched to the other sink by Musubi.

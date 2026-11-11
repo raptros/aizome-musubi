@@ -85,17 +85,19 @@ tools/heavy musubi-vm -- tools/nix-env nix build ./repos/aizome-musubi#checks.x8
 `nix/vm-test.nix` imports the pinned Sekka Aizome NixOS module and this
 repository's Musubi module. The disposable 1280×800 guest autologs in to
 `aizome-session` with WirePlumber, two virtual audio sinks, a continuously
-playing `pw-play` stream, `snd-virmidi`, and `vivid`. The Python driver
+playing `pw-play` stream and `snd-virmidi`. The Python driver
 spawns the packaged app, obtains widget rectangles through
 `AIZOME_KIT_INSPECT`, and performs pointer and keyboard gestures with
 `aizomectl input`. It selects Channels and filters to the player and
 second sink, clicks the FL cell, checks the live `pw-link -l` state,
-presses Super+Z and checks removal. It then clicks MIDI and patches
-virtual MIDI ports. The test copies its screenshots, input/observation
-JSON, inspector JSON and guest journal to the Nix result; copy the images
-to `runs/` for visual review. A VM check does not certify hardware MIDI,
-camera or physical audio devices. A `vivid` kernel module alone does not
-prove that a PipeWire video port was bridged or patched.
+presses Super+Z and checks removal. It then clicks MIDI, filters to the
+virtual clients, clicks the first cell and checks that a Link global joins
+exactly virmidi 0-0's output port to its input port. The test copies its
+screenshots, input/observation JSON, inspector JSON and guest journal to the
+Nix result; copy the images to `runs/` for visual review. A VM check does not
+certify hardware MIDI, camera or physical audio devices, and it has no video
+device: the test kernel lacks `vivid`, so Video routing is covered only by
+fixtures and the private PipeWire's software video source.
 
 A failing run keeps no result, so the driver prints its evidence (window,
 inspected elements, recent inputs, links, ports) to the build log before it

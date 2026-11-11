@@ -117,8 +117,16 @@ def ports():
     # jq writes missing keys as null: make every value a string.
     clean = lambda props: {k: (v if isinstance(v, str) else "" if v is None else str(v)) for k, v in props.items()}
     nodes = {str(o["id"]): clean(o["props"]) for o in dump if o["type"].endswith(":Node")}
-    return [(clean(o["props"]), nodes.get(str(o["props"].get("node.id")), {}))
+    return [(dict(clean(o["props"]), id=str(o["id"])), nodes.get(str(o["props"].get("node.id")), {}))
             for o in dump if o["type"].endswith(":Port")]
+
+
+def linked(output_port, input_port):
+    # A Link global with exactly these endpoints, as PipeWire reports it.
+    found = user(
+        "pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Link\")"
+        f" | select(.info[\"output-port-id\"] == {output_port} and .info[\"input-port-id\"] == {input_port})] | length'")
+    return int(found.strip()) > 0
 
 
 def link_list():
@@ -172,12 +180,17 @@ try:
                         for k in ("port.name", "port.alias"))]
         assert any(p.get("port.direction") == "out" for p, _ in midi), midi
         assert any(p.get("port.direction") == "in" for p, _ in midi), midi
+        # Filtered to the virtual clients, the first row is client 0-0's output
+        # and the first column client 0-0's input.
+        first = lambda direction: next(p["id"] for p, _ in midi if p.get("port.direction") == direction
+                                       and any("0-0" in p.get(k, "") for k in ("port.name", "port.alias")))
+        source, destination = first("out"), first("in")
+        assert not linked(source, destination), (source, destination)
         filter_("from-filter", "Virtual Raw MIDI")
         filter_("to-filter", "Virtual Raw MIDI")
         until("filtered MIDI matrix", lambda: element("matrix"))
-        before = link_list()
         click(*cell())
-        until("MIDI link added", lambda: link_list() != before)
+        until("virmidi 0-0 output linked to 0-0 input", lambda: linked(source, destination))
         capture("05-midi-linked")
     machine.fail("coredumpctl --no-pager list aizome-musubi")
 finally:
