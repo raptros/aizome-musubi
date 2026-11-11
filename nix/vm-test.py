@@ -90,10 +90,16 @@ def cell():
 
 
 def ports():
-    dump = json.loads(user("pw-dump"))
-    nodes = {str(o["id"]): o["info"].get("props", {}) for o in dump if o.get("type", "").endswith(":Node")}
-    return [(o["info"].get("props", {}), nodes.get(str(o["info"].get("props", {}).get("node.id")), {}))
-            for o in dump if o.get("type", "").endswith(":Port")]
+    # The full pw-dump exceeds the test driver's command-output limit.
+    dump = json.loads(user(
+        "pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" or .type == \"PipeWire:Interface:Port\")"
+        " | {id, type, props: (.info.props | {\"node.id\": .[\"node.id\"],"
+        " \"node.name\": .[\"node.name\"], \"node.description\": .[\"node.description\"],"
+        " \"port.direction\": .[\"port.direction\"], \"format.dsp\": .[\"format.dsp\"]})}]'"
+    ))
+    nodes = {str(o["id"]): o["props"] for o in dump if o["type"].endswith(":Node")}
+    return [(o["props"], nodes.get(str(o["props"].get("node.id")), {}))
+            for o in dump if o["type"].endswith(":Port")]
 
 
 def link_list():

@@ -37,11 +37,11 @@ pkgs.testers.runNixOSTest {
       }) [ "musubi-vm-default" "musubi-vm-patch" ];
     };
     boot.kernelModules = [ "snd-seq" "snd-virmidi" "vivid" ];
-    environment.systemPackages = [ pkgs.pipewire pkgs.alsa-utils ];
+    environment.systemPackages = [ pkgs.pipewire pkgs.alsa-utils pkgs.jq ];
     # A stream connected to the default sink gets WirePlumber-managed output
     # ports, which can then be patched to the other sink by Musubi.
     systemd.user.services.musubi-vm-player = {
-      description = "Endless stereo test tone for Musubi";
+      description = "Endless silent stereo stream for Musubi";
       wantedBy = [ "default.target" ];
       after = [ "pipewire.service" "wireplumber.service" ];
       serviceConfig = {
