@@ -111,10 +111,13 @@ def ports():
         "pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" or .type == \"PipeWire:Interface:Port\")"
         " | {id, type, props: (.info.props | {\"node.id\": .[\"node.id\"],"
         " \"node.name\": .[\"node.name\"], \"node.description\": .[\"node.description\"],"
-        " \"port.direction\": .[\"port.direction\"], \"format.dsp\": .[\"format.dsp\"]})}]'"
+        " \"port.direction\": .[\"port.direction\"], \"format.dsp\": .[\"format.dsp\"],"
+        " \"port.name\": .[\"port.name\"], \"port.alias\": .[\"port.alias\"]})}]'"
     ))
-    nodes = {str(o["id"]): o["props"] for o in dump if o["type"].endswith(":Node")}
-    return [(o["props"], nodes.get(str(o["props"].get("node.id")), {}))
+    # jq writes missing keys as null: make every value a string.
+    clean = lambda props: {k: (v if isinstance(v, str) else "" if v is None else str(v)) for k, v in props.items()}
+    nodes = {str(o["id"]): clean(o["props"]) for o in dump if o["type"].endswith(":Node")}
+    return [(clean(o["props"]), nodes.get(str(o["props"].get("node.id")), {}))
             for o in dump if o["type"].endswith(":Port")]
 
 
@@ -162,8 +165,11 @@ try:
         click_element("MIDI")
         until("MIDI matrix", lambda: element("matrix"))
         capture("04-midi-before")
+        # ALSA MIDI reaches PipeWire through the bridge node; snd-virmidi's
+        # clients show up in the bridge's port names and aliases.
         midi = [(p, n) for p, n in ports() if "midi" in p.get("format.dsp", "").lower()
-                and ("Virtual Raw MIDI" in n.get("node.description", "") or "VirMIDI" in n.get("node.name", ""))]
+                and any("VirMIDI" in p.get(k, "") or "Virtual Raw MIDI" in p.get(k, "")
+                        for k in ("port.name", "port.alias"))]
         assert any(p.get("port.direction") == "out" for p, _ in midi), midi
         assert any(p.get("port.direction") == "in" for p, _ in midi), midi
         filter_("from-filter", "Virtual Raw MIDI")
