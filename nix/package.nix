@@ -17,11 +17,12 @@ in rustPlatform.buildRustPackage {
   AIZOME_FONT_DIR = fonts;
   LD_LIBRARY_PATH = lib.makeLibraryPath [ fontconfig wayland pipewire ];
   # Headless Harness goldens use only pinned fonts; no running PipeWire is accessed.
-  # Cargo (CARGO_HOME) and the Harness tests (settings, state) write under HOME;
-  # give the whole build a private one, so an unsandboxed builder (portable Nix)
-  # never creates /homeless-shelter.
+  # Cargo's registry cache defaults to $HOME/.cargo; under an unsandboxed builder
+  # (portable Nix) that creates /homeless-shelter and fails later derivations'
+  # purity check. Keep it private. HOME itself stays unset-like (/homeless-shelter),
+  # as the Harness goldens were drawn with no font cache under HOME.
   preConfigure = ''
-    export HOME=$(mktemp -d)
+    export CARGO_HOME=$(mktemp -d)
   '';
   preCheck = ''export RUST_TEST_THREADS=1'';
   postInstall = ''
