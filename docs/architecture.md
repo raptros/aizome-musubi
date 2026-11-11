@@ -52,6 +52,9 @@ flowchart LR
 
 Later phases add: `mixer` (strips, `Fader`, `LevelMeter`; Pulse bridge), `meters` (peak streams on the PipeWire thread), `devices`, `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
 
+The phase-1 matrix display derives one immutable `Layout` per page after each graph delta. `ViewOptions` supplies pairs, swap, monitors, optional MIDI 1.0, independent From/To filters, and folded group keys. The layout stores ordered group/line metadata, sparse observed link pairs and sparse request-state overrides; `state(cell)` computes visible pair/channel/aggregate states without allocating the row × column product. `hidden_from` and `hidden_to` count filtered physical ports before pair/fold aggregation. The app retains `Rc<Layout>` per page across frames (rather than rebuilding in `view`); request-state updates and editing actions belong to the next interaction stage.
+
+
 ## Matrix regions and scrolling
 
 The corner stays fixed; column labels follow x only, row labels follow y only, and the body follows both. Wheel deltas clamp the widget's stored offsets to the content extents. The spike invalidates the affected header regions and the body on scroll (plus the corner in the wheel path), then redraws them; it does not ask the compositor to pixel-scroll overlapping regions. This keeps boundary pixels and clipped rotated labels correct for horizontal, vertical and diagonal movement without coordinating three disjoint scroll commands. Hover and focus instead invalidate old/new row and column bands, including their header labels; keyboard focus that reveals an offscreen cell uses the scroll redraw path. Measured release costs for both scales are in `performance.md`.
