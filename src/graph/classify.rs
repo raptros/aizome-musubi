@@ -43,6 +43,9 @@ pub fn classify(port: &PortRecord, node: Option<&NodeRecord>) -> PortKind {
         if rest.iter().any(|&kind| kind != first) {
             return PortKind::Other;
         }
+        // A control EnumFormat with no distinguishable MIDI/UMP type cannot
+        // inherit MIDI 1.0 from a broad node media.class.
+        return PortKind::Other;
     }
     let class = node.and_then(|node| node.props.get("media.class")).map(String::as_str);
     match class {
@@ -135,6 +138,12 @@ mod tests {
         p.enum_formats = vec![PortKind::Other];
         assert_eq!(from_enum_format("application", "control"), PortKind::Other);
         assert_eq!(classify(&p, None), PortKind::Other);
+        let midi_node = NodeRecord { props: Properties::from([("media.class".into(), "Stream/Input/Midi".into())]), ..n.clone() };
+        assert_eq!(classify(&p, Some(&midi_node)), PortKind::Other);
+        p.enum_formats = vec![PortKind::Midi];
+        assert_eq!(classify(&p, Some(&midi_node)), PortKind::Midi);
+        p.enum_formats = vec![PortKind::Ump];
+        assert_eq!(classify(&p, Some(&midi_node)), PortKind::Ump);
         p.enum_formats = vec![PortKind::Audio, PortKind::Video];
         assert_eq!(classify(&p, Some(&n)), PortKind::Other);
     }

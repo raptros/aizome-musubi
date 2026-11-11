@@ -116,10 +116,24 @@ fn merge(to: &mut Properties, from: Option<&DictRef>) {
 fn prop_id(p: &Properties, key: &str) -> Option<u32> {
     p.get(key).and_then(|s| s.parse().ok())
 }
+fn control_kind(types: u32) -> PortKind {
+    let midi = 1_u32 << spa::sys::SPA_CONTROL_Midi;
+    let ump = 1_u32 << spa::sys::SPA_CONTROL_UMP;
+    match types {
+        value if value == midi => PortKind::Midi,
+        value if value == ump => PortKind::Ump,
+        _ => PortKind::Other,
+    }
+}
 fn format_kind(pod: &spa::pod::Pod) -> PortKind {
     match format_utils::parse_format(pod) {
         Ok((MediaType::Audio, MediaSubtype::Raw)) => PortKind::Audio,
-        Ok((MediaType::Application, MediaSubtype::Control)) => PortKind::Midi,
+        Ok((MediaType::Application, MediaSubtype::Control)) => pod
+            .as_object()
+            .ok()
+            .and_then(|object| object.find_prop(spa::utils::Id(spa::sys::SPA_FORMAT_CONTROL_types)))
+            .and_then(|property| property.value().get_int().ok())
+            .map_or(PortKind::Other, |types| control_kind(types as u32)),
         Ok((MediaType::Video, _)) => PortKind::Video,
         _ => PortKind::Other,
     }
@@ -634,5 +648,12 @@ mod tests {
         batch.remove(4);
         let delta = batch.drain().unwrap();
         assert_eq!(delta.removals, vec![4]);
+    }
+    #[test]
+    fn distinguishes_control_midi_and_ump_from_enumformat_mask() {
+        assert_eq!(control_kind(1 << spa::sys::SPA_CONTROL_Midi), PortKind::Midi);
+        assert_eq!(control_kind(1 << spa::sys::SPA_CONTROL_UMP), PortKind::Ump);
+        assert_eq!(control_kind((1 << spa::sys::SPA_CONTROL_Midi) | (1 << spa::sys::SPA_CONTROL_UMP)), PortKind::Other);
+        assert_eq!(control_kind(0), PortKind::Other);
     }
 }
