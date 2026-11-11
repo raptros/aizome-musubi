@@ -125,7 +125,7 @@ try:
         until("Audio matrix", lambda: element("matrix"))
         capture("01-audio-before")
         click_element("pairs-channels", "Channels")
-        filter_("from-filter", "Musubi VM Player")
+        filter_("from-filter", "pw-play")
         filter_("to-filter", "musubi-vm-patch")
         until("filtered Audio matrix", lambda: element("matrix"))
         before = link_list()

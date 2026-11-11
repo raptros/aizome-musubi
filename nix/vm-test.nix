@@ -45,7 +45,7 @@ pkgs.testers.runNixOSTest {
       wantedBy = [ "default.target" ];
       after = [ "pipewire.service" "wireplumber.service" ];
       serviceConfig = {
-        ExecStart = "${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --properties={\\\"node.name\\\":\\\"musubi_vm_player\\\",\\\"node.description\\\":\\\"Musubi VM Player\\\"} /dev/zero";
+        ExecStart = "${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --target=musubi-vm-default --properties={\\\"node.name\\\":\\\"musubi_vm_player\\\",\\\"node.description\\\":\\\"Musubi_VM_Player\\\"} /dev/zero";
         Restart = "always";
         RestartSec = 2;
       };
