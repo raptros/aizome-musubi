@@ -1,0 +1,429 @@
+[
+  {
+    "id": 1,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 1,
+        "object.serial": 10001,
+        "client.name": "ardour",
+        "application.name": "Ardour",
+        "client.api": "jack"
+      }
+    }
+  },
+  {
+    "id": 2,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 2,
+        "object.serial": 10002,
+        "client.name": "midi 2 synth",
+        "application.name": "MIDI 2 Synth",
+        "client.api": "pipewire"
+      }
+    }
+  },
+  {
+    "id": 10,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 10,
+        "object.serial": 10010,
+        "node.name": "Midi-Bridge",
+        "node.description": "ALSA MIDI Bridge",
+        "media.class": "Midi/Bridge"
+      }
+    }
+  },
+  {
+    "id": 11,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 11,
+        "object.serial": 10011,
+        "node.name": "ardour.midi",
+        "node.description": "Ardour MIDI",
+        "media.class": "Stream/Output/Midi",
+        "client.id": 1
+      }
+    }
+  },
+  {
+    "id": 12,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 12,
+        "object.serial": 10012,
+        "node.name": "midi2.synth",
+        "node.description": "MIDI 2 Synth",
+        "media.class": "Stream/Input/Midi",
+        "client.id": 2
+      }
+    }
+  },
+  {
+    "id": 20,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 20,
+        "object.serial": 10020,
+        "node.id": 10,
+        "port.direction": "out",
+        "port.id": 20,
+        "port.name": "capture_0",
+        "port.alias": "Launchkey:Keyboard",
+        "port.group": "client_24",
+        "format.dsp": "8 bit raw midi",
+        "api.alsa.seq.client.name": "Launchkey"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 21,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 21,
+        "object.serial": 10021,
+        "node.id": 10,
+        "port.direction": "out",
+        "port.id": 21,
+        "port.name": "capture_1",
+        "port.alias": "Keystep:Keys",
+        "port.group": "",
+        "format.dsp": "8 bit raw midi",
+        "api.alsa.seq.client.id": "28",
+        "api.alsa.seq.client.name": "Keystep"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 22,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 22,
+        "object.serial": 10022,
+        "node.id": 10,
+        "port.direction": "out",
+        "port.id": 22,
+        "port.name": "capture_2",
+        "port.alias": "Midi Through:Port-0",
+        "port.group": "client_14",
+        "format.dsp": "8 bit raw midi",
+        "api.alsa.seq.client.name": "Midi Through"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 23,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 23,
+        "object.serial": 10023,
+        "node.id": 10,
+        "port.direction": "out",
+        "port.id": 23,
+        "port.name": "capture_unknown",
+        "port.alias": "capture_unknown",
+        "port.group": "",
+        "format.dsp": "8 bit raw midi"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 30,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 30,
+        "object.serial": 10030,
+        "node.id": 10,
+        "port.direction": "in",
+        "port.id": 30,
+        "port.name": "playback_0",
+        "port.alias": "10:playback_0",
+        "port.group": "client_24",
+        "format.dsp": "8 bit raw midi",
+        "api.alsa.seq.client.name": "Launchkey"
+      },
+      "direction": "input",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 31,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 31,
+        "object.serial": 10031,
+        "node.id": 11,
+        "port.direction": "in",
+        "port.id": 31,
+        "port.name": "midi_in",
+        "port.alias": "11:midi_in",
+        "port.group": "stream.0",
+        "format.dsp": "8 bit raw midi"
+      },
+      "direction": "input",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 32,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 32,
+        "object.serial": 10032,
+        "node.id": 11,
+        "port.direction": "out",
+        "port.id": 32,
+        "port.name": "midi_out",
+        "port.alias": "11:midi_out",
+        "port.group": "stream.0",
+        "format.dsp": "8 bit raw midi"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "Midi"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 40,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 40,
+        "object.serial": 10040,
+        "node.id": 12,
+        "port.direction": "out",
+        "port.id": 40,
+        "port.name": "ump_out",
+        "port.alias": "12:ump_out",
+        "port.group": "stream.0",
+        "format.dsp": "32 bit raw UMP"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "UMP"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 41,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 41,
+        "object.serial": 10041,
+        "node.id": 12,
+        "port.direction": "in",
+        "port.id": 41,
+        "port.name": "ump_in",
+        "port.alias": "12:ump_in",
+        "port.group": "stream.0",
+        "format.dsp": "32 bit raw UMP"
+      },
+      "direction": "input",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "application",
+            "mediaSubtype": "control",
+            "format": "UMP"
+          }
+        ]
+      }
+    }
+  }
+]

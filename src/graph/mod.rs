@@ -3,6 +3,8 @@
 pub mod classify;
 pub mod dump;
 pub mod identity;
+pub mod group;
+pub mod legal;
 
 use std::collections::{HashMap, HashSet};
 

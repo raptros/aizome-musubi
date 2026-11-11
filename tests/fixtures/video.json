@@ -1,0 +1,184 @@
+[
+  {
+    "id": 1,
+    "type": "PipeWire:Interface:Device",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 1,
+        "object.serial": 10001,
+        "device.name": "v4l2.camera",
+        "device.description": "USB Camera",
+        "device.bus": "usb",
+        "device.serial": "CAM123"
+      }
+    }
+  },
+  {
+    "id": 2,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 2,
+        "object.serial": 10002,
+        "client.name": "camera viewer",
+        "application.name": "Camera Viewer",
+        "client.api": "pulse"
+      }
+    }
+  },
+  {
+    "id": 10,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 10,
+        "object.serial": 10010,
+        "node.name": "v4l2.camera.source",
+        "node.description": "USB Camera Source",
+        "media.class": "Video/Source",
+        "device.id": 1
+      }
+    }
+  },
+  {
+    "id": 11,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 11,
+        "object.serial": 10011,
+        "node.name": "camera.viewer",
+        "node.description": "Camera Capture",
+        "media.class": "Stream/Input/Video",
+        "client.id": 2
+      }
+    }
+  },
+  {
+    "id": 20,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 20,
+        "object.serial": 10020,
+        "node.id": 10,
+        "port.direction": "out",
+        "port.id": 20,
+        "port.name": "capture_1",
+        "port.alias": "10:capture_1",
+        "port.group": "stream.0",
+        "format.dsp": "32 bit float RGBA video",
+        "video.format.family": "RGBA"
+      },
+      "direction": "output",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "video",
+            "mediaSubtype": "dsp",
+            "format": "RGBA"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 21,
+    "type": "PipeWire:Interface:Port",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 21,
+        "object.serial": 10021,
+        "node.id": 11,
+        "port.direction": "in",
+        "port.id": 21,
+        "port.name": "input_1",
+        "port.alias": "11:input_1",
+        "port.group": "stream.0",
+        "format.dsp": "32 bit float RGBA video",
+        "video.format.family": "RGBA"
+      },
+      "direction": "input",
+      "params": {
+        "EnumFormat": [
+          {
+            "mediaType": "video",
+            "mediaSubtype": "dsp",
+            "format": "RGBA"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 30,
+    "type": "PipeWire:Interface:Link",
+    "version": 3,
+    "permissions": [
+      "r",
+      "m"
+    ],
+    "info": {
+      "change_mask": [
+        "props"
+      ],
+      "props": {
+        "object.id": 30,
+        "object.serial": 10030,
+        "link.output.port": 20,
+        "link.input.port": 21
+      },
+      "output-port-id": 20,
+      "input-port-id": 21,
+      "state": "active"
+    }
+  }
+]

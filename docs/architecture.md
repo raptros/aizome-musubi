@@ -36,10 +36,13 @@ flowchart LR
 | Module | Owns | Never |
 |---|---|---|
 | `backend::pipewire` | the PipeWire MainLoop/Context/Core/Registry on one thread; proxies, listeners; command execution; epoch; reconnect | sends proxies across threads; blocks on the UI |
-| `backend::fake` | a scriptable graph for tests (same `Backend` trait) | — |
+| `backend` | epoch-scoped handles; `Connect`/`Disconnect`/`Shutdown` commands and observed `Delta`/`CommandResult`/`Connection` events | guesses server results from requests |
+| `backend::fake` | `pw-dump` fixture graph, deterministic link create/destroy deltas and injectable command failures (same `Backend` trait) | touches a PipeWire daemon |
 | `graph` | plain-data store: clients, devices, nodes, ports, links, metadata; sparse `links_by_pair` and per-kind port index; pending out-of-order ports/links; epoch-gated `GraphDelta` with cascade removal | knows about pages or pixels |
 | `graph::dump` | `pw-dump` JSON → graph deltas, including port EnumFormat summaries | talks to PipeWire |
 | `graph::classify` | port kind (format.dsp → port EnumFormat → unambiguous media.class), channel position, strict FL/FR pairing | — |
+| `graph::group` | MIDI sequencer-client, device, client, node grouping; display labels, kinds and ordered ports | treats runtime IDs as persistent |
+| `graph::legal` | output/input, media and video-format-family preflight; MIDI 1.0↔UMP confirmation | overrides server refusal |
 | `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
 | `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, offsets, cell state lookup | allocates the cross-product |
 | `matrix::widget` (`PatchMatrix`) | fixed corner, x-scrolling column header, y-scrolling row header, xy-scrolling body; clamped offsets in widget state, pitch-based hit testing, clipped drawing, targeted hover/focus damage and redraw-on-scroll, table semantics | owns graph data (gets an `Rc<Layout>`) |
