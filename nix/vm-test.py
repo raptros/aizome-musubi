@@ -141,7 +141,9 @@ try:
         until("Audio matrix", lambda: element("matrix"))
         capture("01-audio-before")
         click_element("pairs-channels", "Channels")
-        filter_("from-filter", "pw-play")
+        # The player's group is its client, which pw-play names "pw-cat"
+        # (application.name); "pw-" matches either spelling.
+        filter_("from-filter", "pw-")
         filter_("to-filter", "musubi-vm-patch")
         until("filtered Audio matrix", lambda: element("matrix"))
         before = link_list()
