@@ -12,6 +12,7 @@ use crate::{
         Layout, MatrixMsg, PatchMatrix,
         layout::{Cell, CellState, ViewOptions},
     },
+    undo::History,
 };
 use aizome_kit::{Rect, column, prelude::*, row};
 use std::{
@@ -65,6 +66,12 @@ pub struct Transaction {
     pub intents: Vec<LinkIntent>,
 }
 
+impl Transaction {
+    pub fn label(&self) -> &'static str {
+        if self.intents.first().is_some_and(|intent| intent.connect) { "Connect" } else { "Disconnect" }
+    }
+}
+
 #[derive(Clone)]
 struct Pending {
     pair: (GlobalId, GlobalId),
@@ -78,6 +85,15 @@ pub enum Msg {
     Backend(Event),
     Confirm(Vec<Cell>, bool),
     ContextAction(ContextAction),
+    Pairs(bool),
+    Monitors(bool),
+    Swap,
+    From(String),
+    To(String),
+    Undo,
+    Redo,
+    Inspector,
+    Unlink(GlobalId, GlobalId),
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +117,10 @@ pub struct Musubi {
     pub options: [ViewOptions; 4],
     layouts: [Option<Rc<Layout>>; 4],
     hovered: Option<Cell>,
+    selected: Option<StableId>,
+    inspector: bool,
     pub transactions: Vec<Transaction>,
+    history: History,
     pending: HashMap<RequestId, Pending>,
     errors: HashMap<(GlobalId, GlobalId), String>,
     next_request: RequestId,
@@ -216,7 +235,9 @@ impl Musubi {
             }
         }
         if !transaction.intents.is_empty() {
+            let index = self.transactions.len();
             self.transactions.push(transaction);
+            self.history.record(index);
             self.refresh_layouts();
             for command in commands {
                 self.send_command(command);
@@ -228,6 +249,112 @@ impl Musubi {
                 }
             }
         }
+    }
+    fn pump_fake(&mut self, cx: &mut Cx<Msg>) {
+        if let Some(fake) = &self.fake {
+            let events = std::iter::from_fn(|| fake.borrow_mut().next_event()).collect::<Vec<_>>();
+            for event in events {
+                self.update(Msg::Backend(event), cx);
+            }
+        }
+    }
+
+    /// Execute explicit physical links (inspector and history need not be visible in the matrix).
+    fn submit_pairs(&mut self, pairs: Vec<(GlobalId, GlobalId, bool)>, cx: &mut Cx<Msg>) -> Option<usize> {
+        let mut transaction = Transaction::default();
+        let mut commands = Vec::new();
+        for (from, to, connect) in pairs {
+            let existing = self.graph.links_by_pair.get(&(from, to)).and_then(|ids| ids.first()).copied();
+            if existing.is_some() == connect {
+                continue;
+            }
+            let (Some(from_id), Some(to_id)) = (
+                self.graph.ports.get(&from).and_then(|p| self.graph.stable_port_id(p)),
+                self.graph.ports.get(&to).and_then(|p| self.graph.stable_port_id(p)),
+            ) else {
+                continue;
+            };
+            self.next_request += 1;
+            let request = self.next_request;
+            let epoch = self.graph.epoch;
+            let command = if connect {
+                Command::Connect {
+                    out: Handle { epoch, id: from },
+                    input: Handle { epoch, id: to },
+                    confirmed: self.conversion_confirmed,
+                    request,
+                }
+            } else {
+                Command::Disconnect { link: Handle { epoch, id: existing.expect("present") }, request }
+            };
+            self.pending.insert(request, Pending { pair: (from, to) });
+            self.errors.remove(&(from, to));
+            transaction.intents.push(LinkIntent {
+                from: from_id,
+                to: to_id,
+                connect,
+                request,
+                result: None,
+                observed: false,
+            });
+            commands.push(command);
+            if connect {
+                self.removed.remove(&(from, to));
+            } else {
+                self.removed.insert((from, to), Instant::now());
+            }
+        }
+        if transaction.intents.is_empty() {
+            return None;
+        }
+        let index = self.transactions.len();
+        self.transactions.push(transaction);
+        self.refresh_layouts();
+        for command in commands {
+            self.send_command(command);
+        }
+        self.pump_fake(cx);
+        Some(index)
+    }
+
+    fn replay(&mut self, undo: bool, cx: &mut Cx<Msg>) {
+        let index = if undo { self.history.undo() } else { self.history.redo() };
+        let Some(index) = index else { return };
+        let mut pairs = Vec::new();
+        let mut skipped = Vec::new();
+        for intent in &self.transactions[index].intents {
+            if !intent.observed || !matches!(intent.result, Some(Ok(()))) {
+                continue;
+            }
+            let from = self.graph.resolve(&intent.from);
+            let to = self.graph.resolve(&intent.to);
+            match (from, to) {
+                (crate::graph::identity::Resolution::Unique(from), crate::graph::identity::Resolution::Unique(to)) => {
+                    pairs.push((from, to, !intent.connect));
+                }
+                (from, to) => {
+                    let reason = if matches!(from, crate::graph::identity::Resolution::Ambiguous(_))
+                        || matches!(to, crate::graph::identity::Resolution::Ambiguous(_))
+                    {
+                        "ambiguous"
+                    } else {
+                        "missing"
+                    };
+                    skipped.push(format!("{reason} port"));
+                }
+            }
+        }
+        let replay = self.submit_pairs(pairs, cx);
+        if undo {
+            self.history.after_undo(replay);
+        } else {
+            self.history.after_redo(replay);
+        }
+        self.notice = Some(if skipped.is_empty() {
+            if undo { "Undo applied.".into() } else { "Redo applied.".into() }
+        } else {
+            format!("{} skipped: {}.", if undo { "Undo" } else { "Redo" }, skipped.join(", "))
+        });
     }
     fn fold(&mut self, key: crate::graph::group::GroupKey) {
         let set = &mut self.options[Self::index(self.page)].folded;
@@ -418,6 +545,102 @@ impl Musubi {
         .height(Fill)
         .into()
     }
+    fn select_cell(&mut self, cell: Cell, column: bool) {
+        let Some(layout) = self.layout(self.page) else { return };
+        let line = if column { layout.col_lines.get(cell.col) } else { layout.row_lines.get(cell.row) };
+        self.selected = line
+            .and_then(|line| line.ports.first())
+            .and_then(|id| self.graph.ports.get(id))
+            .and_then(|port| self.graph.stable_port_id(port));
+    }
+
+    fn inspector_view(&self) -> Element<Msg> {
+        let mut body: Vec<Element<Msg>> = vec![text("INSPECTOR").size(11.).semibold().role(Role::Text2).into()];
+        let selected = self.selected.as_ref().and_then(|id| match self.graph.resolve(id) {
+            crate::graph::identity::Resolution::Unique(id) => self.graph.ports.get(&id),
+            _ => None,
+        });
+        if let Some(port) = selected {
+            let group = self
+                .graph
+                .groups(port.direction)
+                .into_iter()
+                .find(|group| group.ports.contains(&port.id))
+                .map(|group| group.label)
+                .unwrap_or_default();
+            body.push(text(port_label(port)).size(19.).semibold().wrap().into());
+            body.push(
+                text(format!("{:?} · {group}", self.graph.kind(port.id).unwrap_or(PortKind::Other)))
+                    .size(12.)
+                    .role(Role::Text2)
+                    .wrap()
+                    .into(),
+            );
+            for (heading, outgoing) in [("Goes to", true), ("Comes from", false)] {
+                body.push(caption(heading).into());
+                let mut links: Vec<_> = self
+                    .graph
+                    .links
+                    .values()
+                    .filter(|link| if outgoing { link.output == port.id } else { link.input == port.id })
+                    .collect();
+                links.sort_by_key(|link| (link.output, link.input));
+                for link in links {
+                    let other = if outgoing { link.input } else { link.output };
+                    let name = self.graph.ports.get(&other).map(port_label).unwrap_or_else(|| format!("Port {other}"));
+                    body.push(
+                        row![
+                            text(name).size(12.).wrap().width(Fill),
+                            button("Unlink")
+                                .compact()
+                                .on_press(Msg::Unlink(link.output, link.input))
+                                .id(format!("unlink:{}:{}", link.output, link.input))
+                                .height(24.),
+                        ]
+                        .spacing(4.)
+                        .into(),
+                    );
+                }
+            }
+            body.push(caption("FACTS").into());
+            let node = port.node_id.and_then(|id| self.graph.nodes.get(&id));
+            let device = node.and_then(|node| node.device_id).and_then(|id| self.graph.devices.get(&id));
+            let client = node.and_then(|node| node.client_id).and_then(|id| self.graph.clients.get(&id));
+            let facts = [
+                ("Node name", node.and_then(|n| n.props.get("node.name"))),
+                ("Port name", port.props.get("port.name")),
+                ("Alias", port.props.get("port.alias")),
+                ("Channel", port.props.get("audio.channel")),
+                ("format.dsp", port.props.get("format.dsp")),
+                (
+                    "Device",
+                    device.and_then(|d| d.props.get("device.description").or_else(|| d.props.get("device.name"))),
+                ),
+                ("Client", client.and_then(|c| c.props.get("application.name").or_else(|| c.props.get("client.name")))),
+                ("object.serial", port.props.get("object.serial")),
+            ];
+            for (name, value) in facts {
+                body.push(text(name).size(11.).role(Role::Text3).into());
+                body.push(
+                    text(value.map(String::as_str).unwrap_or("—"))
+                        .size(11.)
+                        .mono()
+                        .wrap()
+                        .selectable()
+                        .width(Fill)
+                        .into(),
+                );
+            }
+        } else {
+            body.push(text("Select a port in the matrix.").role(Role::Text2).wrap().into());
+        }
+        container(scroll(column(body).spacing(7.).padding(12.).width(Fill)).width(Fill).height(Fill))
+            .fill(Tone::Surface)
+            .width(260.)
+            .height(Fill)
+            .id("inspector")
+            .into()
+    }
 }
 
 fn reason_text(reason: Reason) -> &'static str {
@@ -471,7 +694,8 @@ impl Program for Musubi {
             }
             Msg::Activated => cx.activate(self.window),
             Msg::Matrix(MatrixMsg::Hover(cell)) => self.hovered = cell,
-            Msg::Matrix(MatrixMsg::Focus(_)) => {}
+            Msg::Matrix(MatrixMsg::Focus(cell)) => self.select_cell(cell, false),
+            Msg::Matrix(MatrixMsg::Select(cell, column)) => self.select_cell(cell, column),
             Msg::Matrix(MatrixMsg::Toggle(cell)) => {
                 let state = self.layouts[Self::index(self.page)].as_ref().map(|l| l.state(cell));
                 self.commands_for(vec![cell], state != Some(CellState::Connected), cx);
@@ -483,6 +707,35 @@ impl Program for Musubi {
                 self.commands_for(cells, connect, cx);
             }
             Msg::ContextAction(action) => self.context_action(action, cx),
+            Msg::Pairs(pairs) => {
+                self.options[Self::index(self.page)].pairs = pairs;
+                self.refresh_layouts();
+            }
+            Msg::Monitors(monitors) => {
+                self.options[Self::index(self.page)].monitors = monitors;
+                self.refresh_layouts();
+            }
+            Msg::Swap => {
+                let options = &mut self.options[Self::index(self.page)];
+                options.swap = !options.swap;
+                self.refresh_layouts();
+            }
+            Msg::From(from) => {
+                self.options[Self::index(self.page)].from = from;
+                self.refresh_layouts();
+            }
+            Msg::To(to) => {
+                self.options[Self::index(self.page)].to = to;
+                self.refresh_layouts();
+            }
+            Msg::Undo => self.replay(true, cx),
+            Msg::Redo => self.replay(false, cx),
+            Msg::Inspector => self.inspector = !self.inspector,
+            Msg::Unlink(from, to) => {
+                if let Some(index) = self.submit_pairs(vec![(from, to, false)], cx) {
+                    self.history.record(index);
+                }
+            }
             Msg::Backend(Event::Connection(connection)) => {
                 if matches!(connection, Connection::Down(_)) {
                     self.graph = Graph::default();
@@ -566,20 +819,20 @@ impl Program for Musubi {
 
     fn view(&self, _window: WindowKey) -> Element<Msg> {
         let mut side = column![
-            container(
-                row![
-                    container(aizome_kit::icon(Icon::Music).size(24.)).padding(8.).fill(Tone::Sunk),
-                    column![text("Musubi").size(20.).semibold(), text("結び · Patchbay").size(12.).role(Role::Text2),]
-                        .spacing(4.),
-                ]
-                .spacing(10.),
-            )
-            .padding([9., 4., 12., 4.])
-            .width(Fill),
+            row![
+                container(aizome_kit::icon(Icon::Music).size(18.).role(Role::Accent))
+                    .padding(5.)
+                    .fill(Tone::Chrome)
+                    .border(Edge::Line),
+                column![text("Musubi").size(15.).weight(700.), text("結び · Patchbay").size(11.).role(Role::Text3)]
+                    .spacing(1.),
+            ]
+            .spacing(10.)
+            .padding([14., 12., 12., 12.]),
+            divider().edge(Edge::Line),
             caption("PATCHBAY"),
         ]
-        .spacing(8.)
-        .padding([14., 8., 0., 8.]);
+        .spacing(8.);
         for (page, icon, title) in Page::ALL {
             side = side.push(sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title));
         }
@@ -609,14 +862,44 @@ impl Program for Musubi {
             self.unavailable()
         };
         let title = format!("{} {ports} ports · {links} links", self.page.title());
+        let options = &self.options[Self::index(self.page)];
+        let controls = toolbar(vec![
+            text(title).semibold().into(),
+            segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
+                .on_select(|index| Msg::Pairs(index == 0))
+                .id("pairs-channels")
+                .into(),
+            checkbox("Monitors", options.monitors)
+                .on_toggle(Msg::Monitors)
+                .enabled(self.page == Page::Audio)
+                .id("monitors")
+                .into(),
+            button("Swap").compact().on_press(Msg::Swap).id("swap").into(),
+            button("Undo")
+                .compact()
+                .on_press(Msg::Undo)
+                .enabled(self.history.undo_label(&self.transactions).is_some())
+                .id("undo")
+                .into(),
+            spacer().into(),
+            search_field(&options.from).placeholder("From").on_change(Msg::From).width(125.).id("from-filter").into(),
+            search_field(&options.to).placeholder("To").on_change(Msg::To).width(125.).id("to-filter").into(),
+        ]);
         let status = self.status_sentence().unwrap_or_else(|| match &self.connection {
-            Some(Connection::Up(_)) => "PipeWire: connected".to_owned(),
             Some(Connection::Down(error)) => error.clone(),
-            _ => "PipeWire: not connected".to_owned(),
+            _ => String::new(),
         });
-        let main =
-            column![toolbar(vec![text(title).semibold().into()]), content, status_bar(vec![status_text(status)]),]
-                .height(Fill);
+        let right = if !options.from.is_empty() {
+            format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
+        } else if !options.to.is_empty() {
+            format!("To “{}” hides {} ports", options.to, self.layout(self.page).map_or(0, |l| l.hidden_to))
+        } else {
+            format!("{ports} ports")
+        };
+        let body: Element<Msg> =
+            if self.inspector { row![content, self.inspector_view()].height(Fill).into() } else { content };
+        let main = column![controls, body, status_bar(vec![status_text(status), spacer().into(), status_text(right)]),]
+            .height(Fill);
         sidebar_layout(side, main).into()
     }
 
@@ -629,6 +912,28 @@ impl Program for Musubi {
                     .checked(self.page == *page),
             );
         }
-        MenuBar::standard(&self.info()).with_menu(view)
+        let edit = Menu::new("Edit")
+            .item(
+                MenuItem::new(
+                    format!("Undo {}", self.history.undo_label(&self.transactions).unwrap_or("Connect")),
+                    Msg::Undo,
+                )
+                .role(MenuRole::Undo)
+                .shortcut(Shortcut::cmd('Z'))
+                .enabled(self.history.undo_label(&self.transactions).is_some()),
+            )
+            .item(
+                MenuItem::new(
+                    format!("Redo {}", self.history.redo_label(&self.transactions).unwrap_or("Connect")),
+                    Msg::Redo,
+                )
+                .role(MenuRole::Redo)
+                .shortcut(Shortcut::cmd('Z').shift())
+                .enabled(self.history.redo_label(&self.transactions).is_some()),
+            );
+        view = view.item(
+            MenuItem::new("Inspector", Msg::Inspector).shortcut(Shortcut::cmd('I').alt()).checked(self.inspector),
+        );
+        MenuBar::standard(&self.info()).replace("Edit", edit).with_menu(view)
     }
 }

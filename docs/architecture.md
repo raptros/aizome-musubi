@@ -56,6 +56,8 @@ The phase-1 matrix display derives one immutable `Layout` per page after each gr
 
 Click or Space submits a single-cell transaction; a line drag (or Shift-Space, arrows, Space) previews an inclusive Bresenham line and submits once on release/application, in the first cell's mode. Collapsed cells expand rather than submit; incompatible pairs are skipped with a reason. Pair-to-pair maps corresponding channels; pair-row-to-mono maps both channels to the one input. `app::Transaction` contains `LinkIntent { from: StableId, to: StableId, connect, request, result, observed }` per attempted link; `result` is the command acknowledgement and `observed` records that the graph reflected its effect. S4c undo must invert **only** successful observed intents, resolving identities against the current graph and skipping missing/ambiguous ports.
 
+S4c records gesture transactions in `undo::History` as indices into the app's observed intent ledger. Undo resolves both stable port identities in the current graph, skips missing/ambiguous identities with a status message, and requests inverse actions only for intents acknowledged and observed. Redo inverts the observed undo transaction, not a stale runtime link ID. Inspector rows derive outgoing/incoming links and facts directly from the graph; each unlink row submits an explicit physical pair to the same transaction path, even when that pair is hidden by matrix filters. The selected port is retained by stable identity across graph changes and inspected only when resolution remains unique. Toolbar options live per page and rebuild layouts; status separates hover/notice at left from filter hidden counts or page port count at right.
+
 
 ## Matrix regions and scrolling
 

@@ -98,6 +98,68 @@ fn pairs_complete_partials_and_pair_to_mono() {
 }
 
 #[test]
+fn undo_redo_pair_and_missing_port() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    h.send(Msg::Pairs(true));
+    let w = h.window();
+    let (_, point) = cell(&h, 130, 124);
+    h.click(w, point);
+    let count = fake.borrow().commands.len();
+    assert_eq!(count, 2);
+    h.command(w, 'z');
+    assert_eq!(fake.borrow().commands.len(), count + 2);
+    assert!(!h.program().graph.links_by_pair.contains_key(&(130, 124)));
+    h.send(Msg::Redo);
+    assert!(h.program().graph.links_by_pair.contains_key(&(130, 124)));
+    fake.borrow_mut().remove(125);
+    let event = fake.borrow_mut().next_event().unwrap();
+    h.send(Msg::Backend(event));
+    let count = fake.borrow().commands.len();
+    h.send(Msg::Undo);
+    assert_eq!(fake.borrow().commands.len(), count + 1);
+    assert!(h.program().status_sentence().unwrap().contains("missing port"));
+}
+
+#[test]
+fn inspector_unlink_is_undoable() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let (_, point) = cell(&h, 100, 120);
+    h.click(w, point);
+    h.send(Msg::Inspector);
+    assert!(h.find_id(w, "inspector").is_some());
+    assert!(h.find_id(w, "unlink:100:120").is_some());
+    assert!(h.click_text(w, "Unlink"));
+    assert!(matches!(fake.borrow().commands.last(), Some(Command::Disconnect { .. })));
+    h.send(Msg::Undo);
+    assert!(matches!(fake.borrow().commands.last(), Some(Command::Connect { .. })));
+}
+
+#[test]
+fn toolbar_options_change_live_layout_and_hidden_count() {
+    let (mut h, _) = interactive(include_str!("fixtures/studio.json"));
+    let base = h.program().layout(Page::Audio).unwrap().rows.labels.len();
+    h.send(Msg::Pairs(true));
+    let pairs = h.program().layout(Page::Audio).unwrap().rows.labels.len();
+    assert!(pairs < base);
+    h.send(Msg::Swap);
+    assert!(h.program().layout(Page::Audio).unwrap().swapped);
+    h.send(Msg::From("USB".into()));
+    let layout = h.program().layout(Page::Audio).unwrap();
+    assert!(layout.hidden_from > 0);
+    assert!(layout.cols.labels.len() < base);
+    assert!(h.find(h.window(), &format!("From “USB” hides {} ports", layout.hidden_from)).is_some());
+    let mut monitor = h.program().graph.ports[&100].clone();
+    monitor.id = 99999;
+    monitor.props.insert("port.monitor".into(), "true".into());
+    h.send(Msg::Backend(Event::Delta(GraphDelta { epoch: 1, upserts: vec![Upsert::Port(monitor)], removals: vec![] })));
+    let before = h.program().layout(Page::Audio).unwrap().cols.labels.len();
+    h.send(Msg::Monitors(true));
+    assert!(h.program().options[0].monitors);
+    assert_eq!(h.program().layout(Page::Audio).unwrap().cols.labels.len(), before + 1);
+}
+
+#[test]
 fn diagonal_drag_cancel_and_keyboard_line() {
     let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
     let w = h.window();
@@ -239,7 +301,7 @@ fn fake_backend_updates_counts_and_unavailable_state() {
     while let Some(event) = fake.next_event() {
         h.send(Msg::Backend(event));
     }
-    assert!(h.find(w, "ports ·").is_some() || h.find(w, "PipeWire: connected").is_some());
+    assert!(h.program().layout(Page::Audio).is_some());
     h.send(Msg::Backend(Event::Connection(Connection::Down("private daemon stopped".into()))));
     assert!(h.find(w, "PipeWire unavailable.").is_some());
     h.send(Msg::Backend(Event::Connection(Connection::Up("restarted".into()))));
@@ -274,6 +336,30 @@ fn graph_pages_have_night_and_day_goldens() {
                 assert!(h.find_id(w, "matrix").is_some(), "missing matrix on {name}");
             }
             assert_golden(&mut h, w, format!("tests/snapshots/{name}-{mode}.png"), 1.);
+        }
+    }
+}
+
+#[test]
+fn toolbar_inspector_goldens() {
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        for variant in ["swapped", "filtered", "inspector"] {
+            let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+            let mut app = Musubi::with_fake(fake);
+            app.options[0].pairs = true;
+            let mut h = Harness::with(app, Appearance { theme, reduced_motion: true, ..Appearance::default() }, true);
+            match variant {
+                "swapped" => h.send(Msg::Swap),
+                "filtered" => h.send(Msg::From("USB".into())),
+                "inspector" => {
+                    let (_, point) = cell(&h, 100, 120);
+                    h.click(h.window(), point);
+                    h.send(Msg::Inspector);
+                }
+                _ => unreachable!(),
+            }
+            let window = h.window();
+            assert_golden(&mut h, window, format!("tests/snapshots/audio-studio-{variant}-{mode}.png"), 1.);
         }
     }
 }

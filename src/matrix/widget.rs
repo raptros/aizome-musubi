@@ -19,6 +19,7 @@ pub enum MatrixMsg {
     Line(Vec<Cell>, bool),
     Hover(Option<Cell>),
     Focus(Cell),
+    Select(Cell, bool),
     Context(Cell, bool),
 }
 
@@ -171,6 +172,31 @@ fn kind_color(t: &Theme, kind: Kind) -> Color {
     })
 }
 
+fn group_icon(kind: Kind, name: &str) -> aizome_kit::Icon {
+    let has =
+        |needle: &str| name.as_bytes().windows(needle.len()).any(|part| part.eq_ignore_ascii_case(needle.as_bytes()));
+    use aizome_kit::Icon;
+    if has("usb") || has("scarlett") {
+        Icon::Usb
+    } else if has("headphone") {
+        Icon::Headphones
+    } else if has("speaker") || has("monitor") {
+        Icon::Speaker
+    } else if has("mic") {
+        Icon::Mic
+    } else if has("midi") || has("keyboard") {
+        Icon::Keyboard
+    } else if has("video") || has("camera") {
+        Icon::Video
+    } else {
+        match kind {
+            Kind::Hardware | Kind::Virtual => Icon::Plug,
+            Kind::Application => Icon::AppWindow,
+            Kind::Effect => Icon::SlidersHorizontal,
+        }
+    }
+}
+
 fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f64) {
     if state == CellState::NotAllowed {
         return;
@@ -205,7 +231,12 @@ fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f
         outline(cx, square, edge, 1.);
     }
     match state {
-        CellState::Half => cx.canvas.fill_rect(Rect::new(x + 2., y + 2., x + size / 2., y + size / 2.), t.selection()),
+        CellState::Half => {
+            for step in 2..(size as usize - 2) {
+                let yy = y + step as f64;
+                cx.canvas.fill_rect(Rect::new(x + 2., yy, x + size - step as f64, yy + 1.), edge);
+            }
+        }
         CellState::Asked => cx.canvas.fill_rect(
             Rect::new(x + (size - 6.) / 2., y + (size - 6.) / 2., x + (size + 6.) / 2., y + (size + 6.) / 2.),
             edge,
@@ -214,10 +245,9 @@ fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f
             cx.canvas.fill_rect(Rect::new(x + 2., y + 2., x + size - 2., y + 4.), t.bevel_hi())
         }
         CellState::Count(n) if n > 0 => {
-            let bar = Rect::new(x + 2., y + size - 4., x + size - 2., y + size - 2.);
-            cx.canvas.fill_rect(bar, t.role(Role::Accent));
-            let spec = TextSpec::new(FontSpec::mono(if size < 15. { 8. } else { 11. }), t.text());
-            cx.draw_text_in(&n.to_string(), &spec, square, Align::Center);
+            cx.canvas.fill_rect(Rect::new(x + 2., y + size - 3., x + size - 2., y + size - 1.), t.role(Role::Accent));
+            let spec = TextSpec::new(FontSpec::mono(if size < 15. { 9. } else { 11. }), t.text());
+            cx.draw_text_in(&n.to_string(), &spec, Rect::new(x, y - 2., x + size, y + size - 2.), Align::Center);
         }
         _ => (),
     }
@@ -330,12 +360,17 @@ impl Widget for PatchMatrix {
             let text = cx.layout_text(&group.name, &group_name, Some(86.));
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
-            cx.draw_text_in("◆", &label, Rect::new(x + width / 2. - 6., 98., x + width / 2. + 8., 116.), Align::Start);
+            group_icon(group.kind, &group.name).draw(
+                &mut cx.canvas,
+                Point::new(x + width / 2. - 7., 98.),
+                14.,
+                t.text2(),
+            );
         }
         for col in visible_cols.clone() {
             let x = body.x0 + self.layout.cols.offsets[col] - offset.x;
             cx.canvas.save();
-            cx.canvas.translate(Vec2::new(x + 20., 170.));
+            cx.canvas.translate(Vec2::new(x + 20., 174.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
             let spec = if hover.is_some_and(|h| h.col == col) { &strong } else { &label };
             let text = cx.layout_text(&self.layout.cols.labels[col], spec, None);
@@ -354,7 +389,7 @@ impl Widget for PatchMatrix {
             }
             cx.canvas.fill_rect(Rect::new(3., y, rows.x1 - 2., y + height), t.raised());
             cx.canvas.fill_rect(Rect::new(3., y, 6., y + height), kind_color(&t, group.kind));
-            cx.draw_text_in("◆", &label, Rect::new(9., y, 25., y + 20.), Align::Start);
+            group_icon(group.kind, &group.name).draw(&mut cx.canvas, Point::new(9., y + 3.), 14., t.text2());
             cx.draw_text_in(&group.name, &group_name, Rect::new(25., y, rows.x1 - 59., y + 20.), Align::Start);
             if group.end > group.first + 1 {
                 cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., rows.x1 - 59., y + 38.), Align::Start);
@@ -461,6 +496,18 @@ impl Widget for PatchMatrix {
                     cx.capture_pointer();
                     self.focus_cell(cx, c);
                     cx.state::<State>().pressed = Some(c);
+                } else {
+                    let st = cx.state::<State>();
+                    let (_, columns, rows, _) = Self::view(st.size);
+                    if rows.contains(*pos) {
+                        if let Some(row) = self.layout.rows.at(pos.y - rows.y0 + st.offset.y) {
+                            self.notify(cx, MatrixMsg::Select(Cell { row, col: 0 }, false));
+                        }
+                    } else if columns.contains(*pos) {
+                        if let Some(col) = self.layout.cols.at(pos.x - columns.x0 + st.offset.x) {
+                            self.notify(cx, MatrixMsg::Select(Cell { row: 0, col }, true));
+                        }
+                    }
                 }
                 Status::Handled
             }
@@ -606,6 +653,10 @@ impl Widget for PatchMatrix {
                         } else {
                             self.notify(cx, MatrixMsg::Toggle(current));
                         }
+                        return Status::Handled;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        self.notify(cx, MatrixMsg::Focus(current));
                         return Status::Handled;
                     }
                     _ => return Status::Ignored,

@@ -42,11 +42,31 @@ fn harness_clicks_private_interface_to_speakers() {
     assert!(
         h.settle(Duration::from_secs(15), |app| {
             match (port(app, "musubi_test_interface_out", "AUX0"), port(app, "musubi_test_speakers", "FL")) {
-                (Some(from), Some(to)) => app.layout(Page::Audio).is_some_and(|l| l.cell_for_pair((from, to)).is_some()),
+                (Some(from), Some(to)) => {
+                    app.layout(Page::Audio).is_some_and(|l| l.cell_for_pair((from, to)).is_some())
+                }
                 _ => false,
             }
         }),
-        "private graph did not show the route"
+        "private graph did not show the route: epoch {}, nodes {}, ports {}, layout {:?}; sources {:?}; targets {:?}",
+        h.program().graph.epoch,
+        h.program().graph.nodes.len(),
+        h.program().graph.ports.len(),
+        h.program().layout(Page::Audio).map(|l| (l.row_lines.len(), l.col_lines.len())),
+        h.program()
+            .graph
+            .nodes
+            .values()
+            .filter(|n| n.props.get("node.name").is_some_and(|name| name.contains("interface_out")))
+            .map(|n| (&n.id, &n.props))
+            .collect::<Vec<_>>(),
+        h.program()
+            .graph
+            .nodes
+            .values()
+            .filter(|n| n.props.get("node.name").is_some_and(|name| name.contains("speakers")))
+            .map(|n| (&n.id, &n.props))
+            .collect::<Vec<_>>(),
     );
     let from = port(h.program(), "musubi_test_interface_out", "AUX0").unwrap();
     let to = port(h.program(), "musubi_test_speakers", "FL").unwrap();

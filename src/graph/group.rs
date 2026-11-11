@@ -45,6 +45,21 @@ pub fn node_label(graph: &Graph, node: GlobalId) -> String {
 }
 
 pub fn port_label(port: &PortRecord) -> String {
+    let bridge_port = port.props.get("api.alsa.seq.client.name").is_some()
+        || port.props.get("port.group").is_some_and(|group| group.starts_with("client_"))
+        || (port.props.get("format.dsp").is_some_and(|format| format.contains("raw midi"))
+            && port
+                .props
+                .get("port.name")
+                .is_some_and(|name| name.starts_with("capture_") || name.starts_with("playback_")));
+    if bridge_port {
+        if let Some(label) = prop(&port.props, "port.alias").and_then(|alias| alias.rsplit(':').next()) {
+            if !label.starts_with("capture_") && !label.starts_with("playback_") {
+                return label.to_owned();
+            }
+        }
+        return "MIDI 1".to_owned();
+    }
     first(&port.props, &["audio.channel"])
         .or_else(|| {
             prop(&port.props, "port.alias").and_then(|alias| alias.rsplit(':').next()).filter(|tail| !tail.is_empty())

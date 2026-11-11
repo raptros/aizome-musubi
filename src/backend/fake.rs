@@ -35,6 +35,11 @@ impl FakeBackend {
         self.next_failure = Some(reason.into());
     }
 
+    /// Simulate a registry disappearance and deliver its delta to the Harness.
+    pub fn remove(&mut self, id: GlobalId) {
+        self.publish(GraphDelta { epoch: self.graph.epoch, upserts: vec![], removals: vec![id] });
+    }
+
     fn publish(&mut self, delta: GraphDelta) {
         self.graph.apply(delta.clone());
         self.events.push_back(Event::Delta(delta));
