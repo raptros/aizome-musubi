@@ -1,4 +1,4 @@
-use crate::{instance, matrix::{Layout, MatrixMsg, PatchMatrix}};
+use crate::{backend::{Connection, Event, pipewire::PipeWireBackend}, graph::{Graph, classify::PortKind}, instance, matrix::{Layout, MatrixMsg, PatchMatrix}};
 use std::rc::Rc;
 use aizome_kit::{column, row, prelude::*};
 
@@ -34,12 +34,17 @@ pub enum Msg {
     Page(Page),
     Activated,
     Matrix(MatrixMsg),
+    Backend(Event),
 }
 
 #[derive(Default)]
 pub struct Musubi {
     pub page: Page,
     pub instance: Option<instance::Instance>,
+    pub live: bool,
+    backend: Option<PipeWireBackend>,
+    pub graph: Graph,
+    connection: Option<Connection>,
     matrix_spike: Option<Rc<Layout>>,
     window: WindowKey,
 }
@@ -49,11 +54,27 @@ impl Musubi {
     pub fn for_matrix_test(layout: Rc<Layout>) -> Self {
         Self { matrix_spike: Some(layout), ..Self::default() }
     }
+    fn kind(&self) -> PortKind {
+        match self.page {
+            Page::Audio => PortKind::Audio, Page::Midi => PortKind::Midi,
+            Page::Midi2 => PortKind::Ump, Page::Video => PortKind::Video,
+        }
+    }
+    fn counts(&self) -> (usize, usize) {
+        let kind = self.kind();
+        let ports = self.graph.ports_of_kind(kind).count();
+        let links = self.graph.links.values().filter(|link|
+            self.graph.kind(link.output) == Some(kind) && self.graph.kind(link.input) == Some(kind)).count();
+        (ports, links)
+    }
     fn unavailable(&self) -> Element<Msg> {
         container(
             column![
                 text(self.page.title()).size(28.).semibold(),
-                text("Not connected to PipeWire yet.").size(20.).role(Role::Text2),
+                text(match &self.connection {
+                    Some(Connection::Down(_)) => "PipeWire unavailable.",
+                    _ => "Not connected to PipeWire yet.",
+                }).size(20.).role(Role::Text2),
                 text("This page cannot display ports or change connections in this build.")
                     .role(Role::Text2)
                     .wrap(),
@@ -86,13 +107,28 @@ impl Program for Musubi {
                 instance::serve(listener, move || sender.send(Msg::Activated));
             }
         }
+        if self.live {
+            let sender = cx.stream();
+            match PipeWireBackend::start(move |event| { sender.send(Msg::Backend(event)); }) {
+                Ok(backend) => self.backend = Some(backend),
+                Err(reason) => self.connection = Some(Connection::Down(reason)),
+            }
+        }
     }
 
     fn update(&mut self, msg: Msg, cx: &mut Cx<Msg>) {
         match msg {
             Msg::Page(page) => self.page = page,
             Msg::Activated => cx.activate(self.window),
-            Msg::Matrix(_) => {}
+            Msg::Matrix(_) => {},
+            Msg::Backend(Event::Connection(connection)) => {
+                if matches!(connection, Connection::Down(_)) {
+                    self.graph = Graph::default();
+                }
+                self.connection = Some(connection);
+            }
+            Msg::Backend(Event::Delta(delta)) => self.graph.apply(delta),
+            Msg::Backend(Event::CommandResult { .. }) => {}
         }
     }
 
@@ -125,19 +161,24 @@ impl Program for Musubi {
                     .id(title),
             );
         }
-        let content: Element<Msg> = if self.page == Page::Audio {
-            if let Some(layout) = &self.matrix_spike {
-                PatchMatrix::new(layout.clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
-            } else {
-                self.unavailable()
-            }
+        let content: Element<Msg> = if self.page == Page::Audio && self.matrix_spike.is_some() {
+            PatchMatrix::new(self.matrix_spike.as_ref().unwrap().clone(), Msg::Matrix).id("matrix").width(Fill).height(Fill)
+        } else if matches!(self.connection, Some(Connection::Up(_))) {
+            let (ports, links) = self.counts();
+            container(column![
+                text(self.page.title()).size(28.).semibold(),
+                text(format!("{ports} ports · {links} links")).size(20.),
+            ].spacing(12.)).padding(36.).width(Fill).height(Fill).into()
         } else {
             self.unavailable()
         };
         let main = column![
             toolbar(vec![text(self.page.title()).semibold().into()]),
             content,
-            status_bar(vec![status_text("PipeWire: not connected")]),
+            status_bar(vec![status_text(match &self.connection {
+                Some(Connection::Up(_)) => "PipeWire: connected",
+                _ => "PipeWire: not connected",
+            })]),
         ]
         .height(Fill);
         sidebar_layout(side, main).into()

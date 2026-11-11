@@ -1,5 +1,6 @@
 //! Backend boundary: commands refer to IDs in one observed connection epoch.
 pub mod fake;
+pub mod pipewire;
 
 use crate::graph::{GlobalId, GraphDelta};
 

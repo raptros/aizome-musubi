@@ -8,7 +8,7 @@ fn main() {
             return;
         }
         (Some("--help" | "-h"), None) => {
-            println!("Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version]\n\nThe patchbay pages are not connected to PipeWire yet.");
+            println!("Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version]");
             return;
         }
         (None, None) => {}
@@ -18,6 +18,7 @@ fn main() {
         }
     }
     let mut app = Musubi::default();
+    app.live = true;
     match instance::claim() {
         Ok(Claim::Handed) => return,
         Ok(Claim::First(instance)) => app.instance = Some(instance),
