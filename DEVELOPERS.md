@@ -96,3 +96,12 @@ JSON, inspector JSON and guest journal to the Nix result; copy the images
 to `runs/` for visual review. A VM check does not certify hardware MIDI,
 camera or physical audio devices. A `vivid` kernel module alone does not
 prove that a PipeWire video port was bridged or patched.
+
+A failing run keeps no result, so the driver prints its evidence (window,
+inspected elements, recent inputs, links, ports) to the build log before it
+fails. Under portable Nix the result lives inside its namespace; copy it out
+with `tools/nix-env nix shell --inputs-from ./repos/sekka nixpkgs#bashInteractive
+-c cp -rL <out-link>/. <dir>/`. Passing run 2026-11-11: both subtests passed
+(stream → sink link made by a click and undone by Super+Z; a `snd-virmidi`
+output linked to an input by a click), screenshots in the workspace run
+directory `runs/2026-11-11/patchbay/phase1/s5b/evidence/`.
