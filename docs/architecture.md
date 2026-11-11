@@ -1,0 +1,68 @@
+# Musubi architecture
+
+Living document: every change must fit here or change this first. Product behaviour is in `design.md`; decisions in `decisions.md`.
+
+## Repository and dependencies
+
+One Cargo package, `aizome-musubi` (binary `aizome-musubi`, app id `org.aizome.Musubi`), shaped like Tsutsumi (`research/external-apps.md` §5, decision A4):
+
+| Path | What |
+|---|---|
+| `src/` | the app (modules below) |
+| `tests/` | Harness tests (fake backend), goldens in `tests/snapshots/`, live tests against a private PipeWire |
+| `data/` | `org.aizome.Musubi.desktop`, `org.aizome.Musubi.svg` (+ its generator) |
+| `nix/package.nix`, `flake.nix` | package, dev shell, checks, NixOS module `programs.musubi.enable`, VM check |
+| `docs/` | this, `design.md`, `decisions.md`, `open-questions.md`, `research/`, `design/` (mockups, reviews) |
+
+Dependencies: `aizome-kit` by path from a sibling Sekka checkout (`../sekka/desktop/aizome/crates/aizome-kit`), pinned in `flake.nix` to Sekka `aebca32e…`; `pipewire` 0.10.1 (`v1_2_0`), as Sekka's own lock has it. Later phases add `aizome-sys` (Pulse service) the same way.
+
+## Layers
+
+```mermaid
+flowchart LR
+  subgraph PW[PipeWire thread — owns every proxy]
+    REG[registry + bound Node/Port/Link/Device/Client/Metadata] --> MODEL_PW[graph store]
+    CMD[command queue pw::channel] --> ACT[link-factory create / registry destroy / metadata / params]
+  end
+  MODEL_PW -- GraphDelta, coalesced per frame --> STREAM[Cx::stream]
+  STREAM --> APP[Program::update]
+  APP --> GRAPH[graph::Graph — plain data]
+  GRAPH --> DERIVE[matrix::Layout per page]
+  DERIVE --> VIEW[view: PatchMatrix / List / Inspector]
+  VIEW -- Msg --> APP
+  APP -- Command --> CMD
+```
+
+| Module | Owns | Never |
+|---|---|---|
+| `backend::pipewire` | the PipeWire MainLoop/Context/Core/Registry on one thread; proxies, listeners; command execution; epoch; reconnect | sends proxies across threads; blocks on the UI |
+| `backend::fake` | a scriptable graph for tests (same `Backend` trait) | — |
+| `graph` | plain-data store: clients, devices, nodes, ports, links, metadata; sparse `links_by_pair`; pending (out-of-order) children; apply `GraphDelta` | knows about pages or pixels |
+| `graph::classify` | port kind (format.dsp → EnumFormat → media.class), channel position, pairing predicate | — |
+| `graph::identity` | live id (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, seq client); ambiguity detection | persists runtime ids |
+| `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, offsets, cell state lookup | allocates the cross-product |
+| `matrix::widget` (`PatchMatrix`) | four regions, scroll offsets (widget state), hit testing, drawing, damage (`invalidate_rect` for hover/focus/line preview), semantics | owns graph data (gets an `Rc<Layout>`) |
+| `routes` (List view) | kit `table` over the page's links; Add Route sheet | — |
+| `undo` | transactions of link intents by stable identity; inverse on observed results only | replays runtime ids from another epoch |
+| `app` | `Program`: model, `Msg`, `update`, `view`, menus, settings persistence | does I/O in `view` |
+
+Later phases add: `mixer` (strips, `Fader`, `LevelMeter`; Pulse bridge), `meters` (peak streams on the PipeWire thread), `devices`, `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
+
+## Threads and messages
+- UI thread: kit event loop, `Program`.
+- PipeWire thread: everything PipeWire. Commands in: `Connect{out, in, request}`, `Disconnect{link, request}`, `Shutdown` (+ later phases). Events out: `GraphDelta{epoch, upserts, removals}`, `CommandResult{request, Ok|Err(reason)}`, `Connection{Up(version)|Down(reason)}`. Deltas are batched on the PipeWire thread and flushed at most every 16 ms, so a burst (profile switch, app start) is one UI message.
+
+## Identity
+- Live actions: `(epoch, GlobalId)`. An epoch ends at disconnect; every pending command fails and the store is cleared.
+- Persisted (Swap per page, folded groups, undo across reconnects, setups): stable identity; two live objects with the same stable identity are *ambiguous* and are never acted on by persisted state.
+
+## Files
+- Settings `$XDG_CONFIG_HOME/aizome/musubi.toml` (view options per page).
+- State `$XDG_STATE_HOME/aizome/musubi/` (folded groups, window).
+- Data `$XDG_DATA_HOME/aizome/musubi/` (setups, effect chains; later phases).
+- One instance: `$XDG_RUNTIME_DIR/aizome-app.musubi.sock`.
+
+## Testing seams
+- `Backend` trait → `fake` for Harness tests and goldens (deterministic graphs: studio, laptop, MIDI rig, empty, disconnected).
+- Live tests start a private `pipewire` (+ `wireplumber` with ALSA/BlueZ/V4L2 monitors off) in a private runtime dir with null sinks/sources and MIDI/video test nodes; never the user's session.
+- VM check: NixOS VM with `snd-virmidi` (MIDI bridge) and `vivid` (video), driving the packaged app with real input; screenshots for `sekka-visual`.

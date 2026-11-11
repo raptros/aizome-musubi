@@ -1,0 +1,20 @@
+# Musubi decision log
+
+Every product/design/architecture decision, who made it, when, and the options that lost. Pending choices live in `open-questions.md` and are batched for the user. Research: `research/`; reviews: `design/`.
+
+| # | Date (UTC) | Decision | By | Options considered | Evidence |
+|---|---|---|---|---|---|
+| D1 | 2026-11-11 | Name **Musubi 結び**, generic name **Patchbay**; app id `org.aizome.Musubi`, binary `aizome-musubi` | user | Hibiki 響 "Sound Studio"; Haisen 配線 "Patchbay" | form answer 2026-11-11 |
+| D2 | 2026-11-11 | Deliver in phases: 1 patch matrix → 2 mixer, meters, devices → 3 EQ effects, clock & load → 4 setups. Pause for user review after phase 1. Each phase complete, no placeholder pages | user (phasing from review-1 #8) | phase 1 only; all phases without pause | `design/review-1.md` #8 |
+| D2b | 2026-11-11 | Phase 1 matrix pages: Audio, MIDI 1.0, MIDI 2.0 (UMP), Video. No control/unknown inventory page | user | + read-only control/unknown inventory | R1 §5 |
+| D3 | 2026-11-11 | No native ALSA-sequencer (aconnect) page; ALSA MIDI devices appear through PipeWire's MIDI bridge on the MIDI page | user | separate later page | R1 §2, §5 |
+| D4 | 2026-11-11 | Matrix default axes: sources (outputs) as rows, destinations (inputs) as columns; Swap per page | user | Arturia layout (sources across the top) | mock `audio-night.png` |
+| D5 | 2026-11-11 | Setups: opt-in per setup; a small user service keeps them while Musubi is closed; Exclusive offered with a warning | user | enforced only while running; no Exclusive | R1 §3, §5; review-1 #4 |
+| D6 | 2026-11-11 | Effects v1: stereo EQ on a virtual output; one chain per user service; if live band edits are impossible, a short dropout of that chain only, on release | user | + input/voice EQ | R2 §7; review-1 #6 |
+| D7 | 2026-11-11 | Musubi lives in its **own repository** (`aizome-musubi`), modelled on the owner's other out-of-tree Aizome apps (uta, tsutsumi, sekka-edu) | user | inside `bitemyapp/sekka` (`desktop/aizome/apps/musubi`) | form answer; R3 |
+| D8 | 2026-11-11 | Working process: catalogue decisions and options as we go, keep screenshots/recordings, branch per option where useful, batch decisions for the user; keep `docs/architecture.md` current and every change fitting it | user | — | form notes |
+| A1 | 2026-11-11 | Volume/mute/balance/route/profile/default/move of Pulse-visible objects go through `aizome-sys::audio` semantics (pipewire-pulse); native `Props` only for proven native-only writable nodes; one writer per control | coordinator | native-only mixer (pwvucontrol-style WirePlumber mixer-api) | R2 §1–3; review-1 #5 |
+| A2 | 2026-11-11 | One PipeWire thread owns all proxies/listeners/meter streams; commands via `pw::channel`, deltas to UI via `Cx::stream()` coalesced per frame; epoch reset on reconnect | coordinator | per-feature threads/connections (as `aizome-sys::meter`) | R1 §6; R2 §5, §8 |
+| A3 | 2026-11-11 | Live link actions use global ids + epoch only; anything persisted (setups, folded groups, swap state) uses composite stable identity with explicit ambiguity handling | coordinator | names only; serials | review-1 #4; R1 §1 |
+| A4 | 2026-11-11 | Repository shaped like **Tsutsumi** (one Cargo package, `nix/package.nix`, `data/org.aizome.Musubi.{desktop,svg}`, Harness tests + Day/Night goldens in `tests/snapshots/`, NixOS module `programs.musubi.enable`) with **sekka-edu's** kit provenance: `aizome-kit = { path = "../sekka/desktop/aizome/crates/aizome-kit" }` against a sibling Sekka checkout, flake input `sekka` pinned to `aebca32e5ef6245a5ec68d2c3c8953ca957c3375` with a selective `aizomeFor` copy; Rust 2024, MSRV 1.95, MIT OR Apache-2.0, rustfmt 120 columns | coordinator | Uta's former-Aizome/Sidestep pins (obsolete); a Cargo workspace (one app needs none); git deps on Sekka | `research/external-apps.md` §1, §5 |
+| A5 | 2026-11-11 | PipeWire through `pipewire = { version = "0.10.1", features = ["v1_2_0"] }`, the version Sekka's workspace already locks | coordinator | newer pipewire-rs; C FFI by hand | `research/pipewire-graph.md` §6; `research/mixer-effects.md` §1 |
