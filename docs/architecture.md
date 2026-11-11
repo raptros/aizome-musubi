@@ -68,5 +68,6 @@ The corner stays fixed; column labels follow x only, row labels follow y only, a
 
 ## Testing seams
 - `Backend` trait → `fake` for Harness tests and goldens (deterministic graphs: studio, laptop, MIDI rig, empty, disconnected).
-- Live tests start a private `pipewire` (+ `wireplumber` with ALSA/BlueZ/V4L2 monitors off) in a private runtime dir with null sinks/sources and MIDI/video test nodes; never the user's session.
+- `scripts/private-pipewire` runs a private daemon without WirePlumber or host-device monitors. Static null adapters expose Test Speakers (`Audio/Sink`, stereo FL/FR), Test Interface Output (`Audio/Sink`, AUX0–AUX3), Test Interface Input (`Audio/Source`, AUX0–AUX3), and Test Mic (`Audio/Source`, MONO). Null-adapter DSP ports are explicitly configured; source outputs use their monitor ports (`32 bit float mono audio`). Clients provide stereo playback (`Stream/Output/Audio`), mono capture (`Stream/Input/Audio`), and MIDI capture (`Stream/Input/Midi`, `8 bit raw midi`). Unlinked audio clients have no ports without a session manager. MIDI output and video-source nodes are not yet present in the fixture.
+- Live evidence is `tests/fixtures/private.json`, with link-create/remove and isolation transcript in `runs/2026-11-11/patchbay/phase1/s1c/`. This proves only the private PipeWire instance, not hardware.
 - VM check: NixOS VM with `snd-virmidi` (MIDI bridge) and `vivid` (video), driving the packaged app with real input; screenshots for `sekka-visual`.

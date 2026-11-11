@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() { echo 'usage: scripts/private-pipewire [--keep] -- command [args...]' >&2; exit 2; }
+keep=0
+if [[ ${1:-} == --keep ]]; then keep=1; shift; fi
+[[ ${1:-} == -- && $# -ge 2 ]] || usage
+shift
+for tool in pipewire pw-dump pw-link pw-cli pw-cat jq; do
+    command -v "$tool" >/dev/null || { echo "missing $tool; enter the pinned Nix shell (see DEVELOPERS.md)" >&2; exit 127; }
+done
+
+root=$(mktemp -d /tmp/musubi-pw.XXXXXXXX)
+mkdir -p "$root"/{runtime,config/pipewire/pipewire.conf.d,state,data,home}
+export XDG_RUNTIME_DIR="$root/runtime" PIPEWIRE_RUNTIME_DIR="$root/runtime"
+export XDG_CONFIG_HOME="$root/config" XDG_STATE_HOME="$root/state" XDG_DATA_HOME="$root/data" HOME="$root/home"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$root/no-bus"
+unset PIPEWIRE_REMOTE
+cat > "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/90-musubi-test.conf" <<'CONF'
+context.objects = [
+    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_speakers node.description = "Test Speakers" media.class = Audio/Sink audio.position = [ FL FR ] node.always-process = true } }
+    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_out node.description = "Test Interface Output" media.class = Audio/Sink audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
+    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_in node.description = "Test Interface Input" media.class = Audio/Source audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
+    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_mic node.description = "Test Mic" media.class = Audio/Source audio.position = [ MONO ] node.always-process = true } }
+]
+CONF
+children=()
+cleanup() {
+    status=$?
+    trap - EXIT INT TERM
+    for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || :; done
+    for pid in "${children[@]}"; do wait "$pid" 2>/dev/null || :; done
+    if (( keep )); then echo "Private PipeWire root: $root" >&2; else rm -rf -- "$root"; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+pipewire >"$root/pipewire.log" 2>&1 &
+children+=("$!")
+for (( attempt=0; attempt<100; attempt++ )); do
+    [[ -S "$root/runtime/pipewire-0" ]] && break
+    kill -0 "${children[0]}" 2>/dev/null || { cat "$root/pipewire.log" >&2; exit 1; }
+    sleep 0.1
+done
+[[ -S "$root/runtime/pipewire-0" ]] || { echo 'Private PipeWire socket did not appear' >&2; cat "$root/pipewire.log" >&2; exit 1; }
+# Without WirePlumber there is no policy manager to select adapter port
+# configuration; set each static node's DSP layout ourselves.
+while IFS=$'\t' read -r id class channels positions; do
+    # The null-audio-sink SPA supports input only; its monitor ports provide
+    # source outputs, including the four-channel interface and mono mic.
+    pw-cli set-param "$id" PortConfig \
+        "{ direction: Input, mode: dsp, monitor: true, format: { mediaType: audio, mediaSubtype: raw, format: F32P, rate: 48000, channels: $channels, position: [ $positions ] } }" \
+        >"$root/port-$id.log"
+done < <(pw-dump | jq -r '.[] | select(.type == "PipeWire:Interface:Node" and (.info.props."node.name" // "" | startswith("musubi_test_"))) | [.id, .info.props."media.class", .info.params.EnumFormat[0].channels, (.info.params.EnumFormat[0].position | join(" "))] | @tsv')
+pw-cat --playback --raw --rate 48000 --channels 2 --format s16 \
+    --target musubi_test_speakers /dev/zero >"$root/playback.log" 2>&1 &
+children+=("$!")
+pw-cat --record --raw --rate 48000 --channels 1 --format s16 \
+    --target musubi_test_mic /dev/null >"$root/record.log" 2>&1 &
+children+=("$!")
+pw-cat --record --midi --force-midi midi --target 0 "$root/midi-capture.mid" \
+    >"$root/midi-capture.log" 2>&1 &
+children+=("$!")
+sleep 0.3
+"$@"
