@@ -1,0 +1,30 @@
+[package]
+name = "aizome-musubi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Musubi 結び, the PipeWire patchbay for Aizome"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "aizome_musubi"
+
+[[bin]]
+name = "aizome-musubi"
+path = "src/main.rs"
+
+[dependencies]
+aizome-kit = { path = "../sekka/desktop/aizome/crates/aizome-kit" }
+pipewire = { version = "0.10.1", features = ["v1_2_0"] }
+libc = "0.2"
+
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+[profile.dev.package.tiny-skia]
+overflow-checks = false
+[profile.release]
+lto = "thin"
+codegen-units = 4
