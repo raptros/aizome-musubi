@@ -19,6 +19,8 @@ in rustPlatform.buildRustPackage {
   # Headless Harness goldens use only pinned fonts; no running PipeWire is accessed.
   preCheck = ''export RUST_TEST_THREADS=1'';
   postInstall = ''
+    install -Dm644 data/org.aizome.Musubi.desktop $out/share/applications/org.aizome.Musubi.desktop
+    install -Dm644 data/org.aizome.Musubi.svg $out/share/icons/hicolor/scalable/apps/org.aizome.Musubi.svg
     wrapProgram $out/bin/aizome-musubi \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ fontconfig wayland pipewire ]} \
       --set-default AIZOME_FONT_DIR ${fonts}

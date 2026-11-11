@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Musubi
+GenericName=Patchbay
+Comment=Connect PipeWire audio, MIDI and video ports
+Keywords=patchbay;pipewire;jack;midi;routing;connections;qpwgraph;helvum;audio;
+Exec=aizome-musubi
+Icon=org.aizome.Musubi
+StartupWMClass=org.aizome.Musubi
+Categories=AudioVideo;Audio;Midi;
+DBusActivatable=false
+Terminal=false
