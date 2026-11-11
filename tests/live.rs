@@ -45,21 +45,22 @@ fn links_and_recovers_private_daemon() {
             Ok(Event::Delta(delta)) => graph.apply(delta),
             _ => {}
         }
+        // Without a session manager, stream nodes (pw-cat) never get their ports configured,
+        // so the sources here are the 4-channel test sink's monitor outputs.
         if up && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers"))
-            && graph.nodes.values().any(|n| n.props.get("media.class").is_some_and(|n| n == "Stream/Output/Audio"))
+            && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_interface_out"))
             && graph.ports.len() >= 16 { break; }
     }
     assert!(up, "daemon never came up");
     let epoch = graph.epoch;
     let speakers = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_speakers")).unwrap().id;
-    let stream = graph.nodes.values().find(|n| n.props.get("media.class").is_some_and(|n| n == "Stream/Output/Audio")).unwrap().id;
+    let source = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|n| n == "musubi_test_interface_out")).unwrap().id;
     let ports = |node, direction| {
-        let mut ids: Vec<_> = graph.ports.values().filter(|p| p.node_id == Some(node) && p.direction == direction)
-            .filter(|p| !p.props.get("port.name").is_some_and(|s| s.contains("monitor"))).map(|p| p.id).collect();
+        let mut ids: Vec<_> = graph.ports.values().filter(|p| p.node_id == Some(node) && p.direction == direction).map(|p| p.id).collect();
         ids.sort_by_key(|id| graph.ports[id].props.get("audio.channel").cloned());
         ids
     };
-    let outputs = ports(stream, Direction::Output);
+    let outputs: Vec<_> = ports(source, Direction::Output).into_iter().take(2).collect();
     let inputs = ports(speakers, Direction::Input);
     assert_eq!(outputs.len(), 2); assert_eq!(inputs.len(), 2);
     let old = Handle { epoch, id: outputs[0] };
