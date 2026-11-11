@@ -396,6 +396,13 @@ impl Musubi {
     fn replay(&mut self, undo: bool, cx: &mut Cx<Msg>) {
         let index = if undo { self.history.undo() } else { self.history.redo() };
         let Some(index) = index else { return };
+        if self.transactions[index].intents.iter().any(|intent| {
+            intent.result.is_none() || (matches!(intent.result, Some(Ok(()))) && !intent.observed)
+        }) {
+            self.history.defer(index, undo);
+            self.notice = Some(format!("{} waiting for PipeWire.", if undo { "Undo" } else { "Redo" }));
+            return;
+        }
         let mut pairs = Vec::new();
         let mut skipped = Vec::new();
         for intent in &self.transactions[index].intents {

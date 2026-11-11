@@ -20,6 +20,10 @@ impl History {
     pub fn redo(&mut self) -> Option<usize> {
         self.redo.pop()
     }
+    pub fn defer(&mut self, index: usize, undo: bool) {
+        if undo { self.undo.push(index); } else { self.redo.push(index); }
+    }
+
 
     pub fn after_undo(&mut self, replay: Option<usize>) {
         if let Some(index) = replay {

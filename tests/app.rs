@@ -142,6 +142,25 @@ fn focus_and_press_remain_valid_after_filter_shrinks_matrix() {
 }
 
 #[test]
+fn undo_keeps_pending_connect_until_observation_settles() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    fake.borrow_mut().defer_next_connect();
+    let (_, point) = cell(&h, 100, 104);
+    h.click(h.window(), point);
+    let id = fake.borrow().graph.links_by_pair[&(100, 104)][0];
+    h.send(Msg::Undo);
+    assert_eq!(fake.borrow().commands.len(), 1);
+    assert!(h.program().status_sentence().unwrap().contains("waiting"));
+    fake.borrow_mut().transition_link(id, LinkState::Active);
+    while let Some(event) = fake.borrow_mut().next_event() {
+        h.send(Msg::Backend(event));
+    }
+    h.send(Msg::Undo);
+    assert!(matches!(fake.borrow().commands.last(), Some(Command::Disconnect { .. })));
+    assert!(!h.program().graph.links_by_pair.contains_key(&(100, 104)));
+}
+
+#[test]
 fn pairs_complete_partials_and_pair_to_mono() {
     let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
     h.program_mut().options[0].pairs = true;
