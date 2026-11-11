@@ -52,7 +52,7 @@ pub fn line_cells(start: Cell, end: Cell) -> Vec<Cell> {
     cells
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct State {
     offset: Vec2,
     size: Size,
@@ -61,6 +61,7 @@ struct State {
     keyboard_focus: bool,
     pressed: Option<Cell>,
     line: Option<(Cell, Cell)>,
+    layout: Option<Rc<Layout>>,
 }
 
 pub struct PatchMatrix {
@@ -101,7 +102,7 @@ impl PatchMatrix {
     }
 
     fn damage_cell(&self, cx: &mut EventCx, cell: Cell) {
-        let st = *cx.state::<State>();
+        let st = cx.state::<State>().clone();
         let (_, col, row, body) = Self::view(st.size);
         let x = body.x0 + self.layout.cols.offsets[cell.col] - st.offset.x;
         let y = body.y0 + self.layout.rows.offsets[cell.row] - st.offset.y;
@@ -121,7 +122,7 @@ impl PatchMatrix {
 
     fn focus_cell(&self, cx: &mut EventCx, next: Cell) {
         let size = cx.size();
-        let old = *cx.state::<State>();
+        let old = cx.state::<State>().clone();
         if old.focused == Some(next) {
             return;
         }
@@ -273,6 +274,27 @@ impl Widget for PatchMatrix {
             if bc.max.height.is_finite() { bc.max.height } else { 600. },
         ));
         let st = cx.state::<State>();
+        if st.layout.as_ref().is_none_or(|previous| !Rc::ptr_eq(previous, &self.layout)) {
+            let previous = st.layout.replace(self.layout.clone());
+            if let Some(previous) = previous {
+                let remap = |cell: Cell| {
+                    let row = previous.row_lines.get(cell.row).and_then(|line| line.ports.first())
+                        .and_then(|id| self.layout.row_lines.iter().position(|line| line.ports.contains(id)))
+                        .or_else(|| (cell.row < self.layout.rows.labels.len()).then_some(cell.row))
+                        .or_else(|| self.layout.rows.labels.len().checked_sub(1))?;
+                    let col = previous.col_lines.get(cell.col).and_then(|line| line.ports.first())
+                        .and_then(|id| self.layout.col_lines.iter().position(|line| line.ports.contains(id)))
+                        .or_else(|| (cell.col < self.layout.cols.labels.len()).then_some(cell.col))
+                        .or_else(|| self.layout.cols.labels.len().checked_sub(1))?;
+                    Some(Cell { row, col })
+                };
+                st.focused = st.focused.and_then(remap);
+                st.hovered = st.hovered.and_then(remap);
+                st.pressed = st.pressed.and_then(remap);
+                st.line = st.line.and_then(|(start, end)| Some((remap(start)?, remap(end)?)));
+                self.focused.set(st.focused);
+            }
+        }
         st.size = size;
         st.offset.x = st.offset.x.clamp(0., (self.layout.cols.extent - (size.width - ROW_HEADER).max(0.)).max(0.));
         st.offset.y = st.offset.y.clamp(0., (self.layout.rows.extent - (size.height - COLUMN_HEADER).max(0.)).max(0.));

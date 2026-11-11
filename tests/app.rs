@@ -124,6 +124,24 @@ fn observed_link_states_gate_connect_results_and_show_failure_reason() {
 }
 
 #[test]
+fn focus_and_press_remain_valid_after_filter_shrinks_matrix() {
+    let (mut h, _) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let (_, first) = cell(&h, 100, 104);
+    h.click(w, first);
+    for _ in 0..40 {
+        h.key(w, Key::Named(NamedKey::ArrowDown), Modifiers::NONE);
+    }
+    h.send(Msg::From("USB".into()));
+    h.key(w, Key::Named(NamedKey::ArrowDown), Modifiers::NONE);
+    h.key(w, Key::Character(" ".into()), Modifiers::NONE);
+    let focused = h.semantics(w).into_iter().find(|(s, _)| {
+        s.role == aizome_kit::widget::SemanticRole::Table && s.label.as_deref() == Some("Audio connections")
+    }).expect("matrix semantics").0;
+    assert!(focused.value.is_some());
+}
+
+#[test]
 fn pairs_complete_partials_and_pair_to_mono() {
     let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
     h.program_mut().options[0].pairs = true;
