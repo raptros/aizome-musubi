@@ -295,7 +295,7 @@ impl Widget for PatchMatrix {
             cx.canvas.clip_rect(Rect::new(x + 3., 8., x + width - 3., 116.));
             cx.canvas.translate(Vec2::new(x + width / 2. - 4., 99.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-            let text = cx.layout_text(&group.name, &group_name, None);
+            let text = cx.layout_text(&group.name, &group_name, Some(86.));
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
             cx.draw_text_in("◆", &label, Rect::new(x + width / 2. - 6., 98., x + width / 2. + 8., 116.), Align::Start);
