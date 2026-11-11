@@ -1,4 +1,9 @@
 //! Run with MUSUBI_LIVE=1 inside scripts/private-pipewire; never use the host daemon.
+use aizome_kit::{Point, testing::Harness};
+use aizome_musubi::{
+    app::{Musubi, Page},
+    matrix::layout::{COLUMN_HEADER, CellState, ROW_HEADER},
+};
 use aizome_musubi::{
     backend::{Backend, Command, Connection, Event, Handle, pipewire::PipeWireBackend},
     graph::{Direction, Graph, classify::PortKind},
@@ -7,6 +12,66 @@ use std::{
     process::Command as ProcessCommand,
     time::{Duration, Instant},
 };
+
+#[test]
+fn harness_clicks_private_interface_to_speakers() {
+    if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") {
+        return;
+    }
+    let mut app = Musubi::default();
+    app.live = true;
+    // The test sink's outputs are monitor ports; show them, one line per channel.
+    app.options[0].monitors = true;
+    app.options[0].pairs = false;
+    let mut h = Harness::new(app);
+    let w = h.window();
+    let port = |app: &Musubi, node: &str, channel: &str| {
+        app.graph
+            .ports
+            .values()
+            .find(|p| {
+                p.props.get("audio.channel").is_some_and(|v| v == channel)
+                    && p.node_id
+                        .and_then(|id| app.graph.nodes.get(&id))
+                        .and_then(|n| n.props.get("node.name"))
+                        .is_some_and(|name| name == node)
+            })
+            .map(|p| p.id)
+    };
+    // Wait until the displayed layout (not only the graph) holds the route.
+    assert!(
+        h.settle(Duration::from_secs(15), |app| {
+            match (port(app, "musubi_test_interface_out", "AUX0"), port(app, "musubi_test_speakers", "FL")) {
+                (Some(from), Some(to)) => app.layout(Page::Audio).is_some_and(|l| l.cell_for_pair((from, to)).is_some()),
+                _ => false,
+            }
+        }),
+        "private graph did not show the route"
+    );
+    let from = port(h.program(), "musubi_test_interface_out", "AUX0").unwrap();
+    let to = port(h.program(), "musubi_test_speakers", "FL").unwrap();
+    let layout = h.program().layout(Page::Audio).unwrap();
+    let cell = layout.cell_for_pair((from, to)).unwrap();
+    assert_eq!(layout.state(cell), CellState::Empty);
+    let rect = h.find_id(w, "matrix").unwrap();
+    let point = Point::new(
+        rect.x0 + ROW_HEADER + layout.cols.offsets[cell.col] + 12.,
+        rect.y0 + COLUMN_HEADER + layout.rows.offsets[cell.row] + 12.,
+    );
+    h.click(w, point);
+    assert!(
+        h.settle(Duration::from_secs(8), |app| app.graph.links_by_pair.contains_key(&(from, to))),
+        "click did not produce an observed PipeWire link"
+    );
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(cell), CellState::Connected);
+    // A second click removes it again (and leaves the shared private daemon as it was).
+    h.click(w, point);
+    assert!(
+        h.settle(Duration::from_secs(8), |app| !app.graph.links_by_pair.contains_key(&(from, to))),
+        "second click did not remove the PipeWire link"
+    );
+    assert_eq!(h.program().layout(Page::Audio).unwrap().state(cell), CellState::Empty);
+}
 
 #[test]
 fn enumerates_private_audio_midi_video() {

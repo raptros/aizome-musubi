@@ -12,6 +12,7 @@ pub struct FakeBackend {
     events: VecDeque<Event>,
     next_id: GlobalId,
     next_failure: Option<String>,
+    pub commands: Vec<Command>,
 }
 
 impl FakeBackend {
@@ -25,6 +26,7 @@ impl FakeBackend {
             events: VecDeque::from([Event::Connection(Connection::Up("fake PipeWire".into())), Event::Delta(delta)]),
             next_id,
             next_failure: None,
+            commands: Vec::new(),
         })
     }
 
@@ -41,6 +43,7 @@ impl FakeBackend {
 
 impl Backend for FakeBackend {
     fn command(&mut self, command: Command) {
+        self.commands.push(command.clone());
         let (request, result) = match command {
             Command::Connect { out, input, confirmed, request } => {
                 let result = if out.epoch != self.graph.epoch || input.epoch != self.graph.epoch {

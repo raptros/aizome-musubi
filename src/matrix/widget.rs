@@ -16,9 +16,38 @@ use super::layout::{COLUMN_HEADER, Cell, CellState, Kind, Layout, PITCH, ROW_HEA
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MatrixMsg {
     Toggle(Cell),
+    Line(Vec<Cell>, bool),
     Hover(Option<Cell>),
     Focus(Cell),
+    Context(Cell, bool),
 }
+
+/// Inclusive raster line, independent of pointer sampling frequency.
+pub fn line_cells(start: Cell, end: Cell) -> Vec<Cell> {
+    let (mut x, mut y) = (start.col as isize, start.row as isize);
+    let (x1, y1) = (end.col as isize, end.row as isize);
+    let (dx, dy) = ((x1 - x).abs(), (y1 - y).abs());
+    let (sx, sy) = (if x < x1 { 1 } else { -1 }, if y < y1 { 1 } else { -1 });
+    let mut error = dx - dy;
+    let mut cells = Vec::with_capacity(dx.max(dy) as usize + 1);
+    loop {
+        cells.push(Cell { row: y as usize, col: x as usize });
+        if x == x1 && y == y1 {
+            break;
+        }
+        let twice = 2 * error;
+        if twice > -dy {
+            error -= dy;
+            x += sx;
+        }
+        if twice < dx {
+            error += dx;
+            y += sy;
+        }
+    }
+    cells
+}
+
 #[derive(Default, Clone, Copy)]
 struct State {
     offset: Vec2,
@@ -26,6 +55,8 @@ struct State {
     hovered: Option<Cell>,
     focused: Option<Cell>,
     keyboard_focus: bool,
+    pressed: Option<Cell>,
+    line: Option<(Cell, Cell)>,
 }
 
 pub struct PatchMatrix {
@@ -212,9 +243,10 @@ impl Widget for PatchMatrix {
     fn paint(&self, cx: &mut PaintCx) {
         let size = cx.size();
         let (corner, cols, rows, body) = Self::view(size);
-        let (offset, hover, focus, keyboard) = cx
-            .state::<State>()
-            .map_or((Vec2::ZERO, None, None, false), |s| (s.offset, s.hovered, s.focused, s.keyboard_focus));
+        let (offset, hover, focus, keyboard, preview) =
+            cx.state::<State>().map_or((Vec2::ZERO, None, None, false, None), |s| {
+                (s.offset, s.hovered, s.focused, s.keyboard_focus, s.line)
+            });
         let t = cx.theme().clone();
         cx.canvas.fill_rect(cx.bounds(), t.surface());
         cx.canvas.fill_rect(corner, t.chrome());
@@ -348,6 +380,7 @@ impl Widget for PatchMatrix {
             cx.canvas.fill_rect(Rect::new(body.x0, y, body.x1, y + PITCH), tint);
             cx.canvas.fill_rect(Rect::new(x, body.y0, x + PITCH, body.y1), tint);
         }
+        let preview_cells = preview.map(|(start, end)| line_cells(start, end));
         for row in visible_rows {
             let y = body.y0 + self.layout.rows.offsets[row] - offset.y;
             for col in visible_cols.clone() {
@@ -357,6 +390,9 @@ impl Widget for PatchMatrix {
                 swatch(cx, &t, state, x + 3., y + 3., 18.);
                 if keyboard && focus == Some(cell) {
                     outline(cx, Rect::new(x + 1., y + 1., x + 23., y + 23.), t.focus(), 2.);
+                }
+                if preview_cells.as_ref().is_some_and(|cells| cells.contains(&cell)) {
+                    outline(cx, Rect::new(x + 1., y + 1., x + 23., y + 23.), t.role(Role::Accent), 2.);
                 }
             }
         }
@@ -389,6 +425,15 @@ impl Widget for PatchMatrix {
     fn event(&mut self, cx: &mut EventCx, event: &Event) -> Status {
         match event {
             Event::PointerMove { pos, .. } => {
+                let pressed = cx.state::<State>().pressed;
+                if let Some(start) = pressed {
+                    if let Some(end) = self.cell(*pos, cx.state::<State>()) {
+                        if start != end {
+                            cx.state::<State>().line = Some((start, end));
+                            cx.invalidate_rect(Self::view(cx.size()).3);
+                        }
+                    }
+                }
                 let next = self.cell(*pos, cx.state::<State>());
                 let old = cx.state::<State>().hovered;
                 if next != old {
@@ -413,8 +458,59 @@ impl Widget for PatchMatrix {
             Event::PointerDown { pos, button: PointerButton::Left, .. } => {
                 if let Some(c) = self.cell(*pos, cx.state::<State>()) {
                     cx.request_focus();
+                    cx.capture_pointer();
                     self.focus_cell(cx, c);
-                    self.notify(cx, MatrixMsg::Toggle(c));
+                    cx.state::<State>().pressed = Some(c);
+                }
+                Status::Handled
+            }
+            Event::PointerUp { pos, button: PointerButton::Left, .. } => {
+                let start = cx.state::<State>().pressed.take();
+                cx.release_pointer();
+                if let Some(start) = start {
+                    let end = self.cell(*pos, cx.state::<State>()).unwrap_or(start);
+                    cx.state::<State>().line = None;
+                    cx.invalidate_rect(Self::view(cx.size()).3);
+                    if start == end {
+                        self.notify(cx, MatrixMsg::Toggle(start));
+                    } else {
+                        self.notify(
+                            cx,
+                            MatrixMsg::Line(line_cells(start, end), self.layout.state(start) != CellState::Connected),
+                        );
+                    }
+                }
+                Status::Handled
+            }
+            Event::PointerDown { pos, button: PointerButton::Right, .. } => {
+                let st = cx.state::<State>();
+                let (_, columns, rows, _) = Self::view(st.size);
+                let cell = self
+                    .cell(*pos, st)
+                    .map(|cell| (cell, false))
+                    .or_else(|| {
+                        rows.contains(*pos)
+                            .then(|| {
+                                self.layout
+                                    .rows
+                                    .at(pos.y - rows.y0 + st.offset.y)
+                                    .map(|row| (Cell { row, col: 0 }, false))
+                            })
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        columns
+                            .contains(*pos)
+                            .then(|| {
+                                self.layout
+                                    .cols
+                                    .at(pos.x - columns.x0 + st.offset.x)
+                                    .map(|col| (Cell { row: 0, col }, true))
+                            })
+                            .flatten()
+                    });
+                if let Some((cell, column)) = cell {
+                    self.notify(cx, MatrixMsg::Context(cell, column));
                 }
                 Status::Handled
             }
@@ -486,13 +582,39 @@ impl Widget for PatchMatrix {
                     Key::Named(NamedKey::End) => next.col = col_count - 1,
                     Key::Named(NamedKey::PageUp) => next.row = next.row.saturating_sub(page),
                     Key::Named(NamedKey::PageDown) => next.row = (next.row + page).min(row_count - 1),
+                    Key::Named(NamedKey::Escape)
+                        if cx.state::<State>().line.is_some() || cx.state::<State>().pressed.is_some() =>
+                    {
+                        cx.state::<State>().line = None;
+                        cx.state::<State>().pressed = None;
+                        cx.invalidate_rect(Self::view(cx.size()).3);
+                        return Status::Handled;
+                    }
                     Key::Character(s) if s == " " => {
-                        self.notify(cx, MatrixMsg::Toggle(current));
+                        if let Some((start, end)) = cx.state::<State>().line.take() {
+                            cx.invalidate_rect(Self::view(cx.size()).3);
+                            self.notify(
+                                cx,
+                                MatrixMsg::Line(
+                                    line_cells(start, end),
+                                    self.layout.state(start) != CellState::Connected,
+                                ),
+                            );
+                        } else if k.modifiers.shift() {
+                            cx.state::<State>().line = Some((current, current));
+                            cx.invalidate_rect(Self::view(cx.size()).3);
+                        } else {
+                            self.notify(cx, MatrixMsg::Toggle(current));
+                        }
                         return Status::Handled;
                     }
                     _ => return Status::Ignored,
                 }
                 self.focus_cell(cx, next);
+                if let Some((start, _)) = cx.state::<State>().line {
+                    cx.state::<State>().line = Some((start, next));
+                    cx.invalidate_rect(Self::view(cx.size()).3);
+                }
                 Status::Handled
             }
             _ => Status::Ignored,

@@ -187,6 +187,15 @@ impl Layout {
         }
     }
 
+    /// Locate a visible cell without constructing the grid's cross product.
+    pub fn cell_for_pair(&self, pair: (GlobalId, GlobalId)) -> Option<Cell> {
+        let (from, to) = if self.swapped { (pair.1, pair.0) } else { pair };
+        Some(Cell {
+            row: self.row_lines.iter().position(|line| line.ports.contains(&from))?,
+            col: self.col_lines.iter().position(|line| line.ports.contains(&to))?,
+        })
+    }
+
     pub fn from_graph(graph: &Graph, page: Page, options: &ViewOptions) -> Self {
         let kinds: &[PortKind] = match page {
             Page::Audio => &[PortKind::Audio],

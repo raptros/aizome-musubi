@@ -335,7 +335,10 @@ fn connect(
             for request in &requests {
                 complete(&error_actions, &error_results, *request, Err(format!("PipeWire error {code}: {message}")));
             }
-            if requests.is_empty() && id == pw::core::PW_ID_CORE {
+            // The server also reports per-object protocol errors on the core
+            // ("unknown resource N", -ENOENT, for a proxy whose global just went
+            // away). Only a broken connection (-EPIPE) takes the session down.
+            if requests.is_empty() && id == pw::core::PW_ID_CORE && code == -libc::EPIPE {
                 *down.borrow_mut() = Some(format!("PipeWire error {code}: {message}"));
             }
         })
