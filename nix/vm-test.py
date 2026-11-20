@@ -102,7 +102,8 @@ def cell():
     x, y, width, height = body["rect"]
     assert width > 24 and height > 24, (width, height)
     g = window()["geometry"]
-    return g["x"] + x + 12, g["y"] + y + 12
+    # Keep clear of the 12pt header-resize hit strip at each body edge.
+    return g["x"] + x + 16, g["y"] + y + 16
 
 
 def ports():
