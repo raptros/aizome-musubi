@@ -23,6 +23,7 @@ pub enum Command {
 pub enum Event {
     Delta(GraphDelta),
     CommandResult { request: RequestId, result: Result<(), String> },
+    ClockDefaults { rate: u32, quantum: u32 },
     Connection(Connection),
 }
 

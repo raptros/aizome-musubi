@@ -25,7 +25,11 @@ impl FakeBackend {
         graph.apply(delta.clone());
         Ok(Self {
             graph,
-            events: VecDeque::from([Event::Connection(Connection::Up("fake PipeWire".into())), Event::Delta(delta)]),
+            events: VecDeque::from([
+                Event::Connection(Connection::Up("1.6.9".into())),
+                Event::ClockDefaults { rate: 48_000, quantum: 1024 },
+                Event::Delta(delta),
+            ]),
             next_id,
             next_failure: None,
             defer_next: false,
@@ -144,6 +148,7 @@ mod tests {
     fn connects_disconnects_and_reports_failure_without_mutation() {
         let mut fake = FakeBackend::from_dump(include_str!("../../tests/fixtures/studio.json"), 4).unwrap();
         assert!(matches!(fake.next_event(), Some(Event::Connection(Connection::Up(_)))));
+        assert!(matches!(fake.next_event(), Some(Event::ClockDefaults { rate: 48_000, quantum: 1024 })));
         assert!(matches!(fake.next_event(), Some(Event::Delta(_))));
         let out = Handle { epoch: 4, id: 100 };
         let input = Handle { epoch: 4, id: 104 };
@@ -171,6 +176,7 @@ mod tests {
     #[test]
     fn rejects_invalid_handles_and_requires_midi_confirmation() {
         let mut fake = FakeBackend::from_dump(include_str!("../../tests/fixtures/midi.json"), 9).unwrap();
+        fake.next_event();
         fake.next_event();
         fake.next_event();
         let port = |id| Handle { epoch: 9, id };

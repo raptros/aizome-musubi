@@ -302,6 +302,7 @@ fn connect(
     pending: &Pending,
     ready: &Rc<RefCell<Option<String>>>,
     failure: &Rc<RefCell<Option<String>>>,
+    clock_defaults: &Rc<RefCell<Option<(u32, u32)>>>,
     actions: &Actions,
     results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
 ) -> Result<Session, String> {
@@ -343,6 +344,7 @@ fn connect(
         .register();
     let version = Rc::new(RefCell::new(String::from("PipeWire")));
     let info_version = version.clone();
+    let info_clock = clock_defaults.clone();
     let done_version = version;
     let up = ready.clone();
     let down = failure.clone();
@@ -350,7 +352,17 @@ fn connect(
     let error_results = results.clone();
     let core_listener = core
         .add_listener_local()
-        .info(move |info| *info_version.borrow_mut() = info.version().to_owned())
+        .info(move |info| {
+            *info_version.borrow_mut() = info.version().to_owned();
+            if let Some(props) = info.props() {
+                if let (Some(rate), Some(quantum)) = (
+                    props.get("default.clock.rate").and_then(|v| v.parse::<u32>().ok()).filter(|&v| v > 0),
+                    props.get("default.clock.quantum").and_then(|v| v.parse::<u32>().ok()).filter(|&v| v > 0),
+                ) {
+                    *info_clock.borrow_mut() = Some((rate, quantum));
+                }
+            }
+        })
         .done(move |id, _| {
             if id == pw::core::PW_ID_CORE {
                 *up.borrow_mut() = Some(done_version.borrow().clone());
@@ -548,6 +560,7 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
     let graph = Rc::new(RefCell::new(Graph::default()));
     let last_probe = Rc::new(RefCell::new(Instant::now()));
     let ready = Rc::new(RefCell::new(None));
+    let clock_defaults: Rc<RefCell<Option<(u32, u32)>>> = Default::default();
     let failure = Rc::new(RefCell::new(None));
     let session: Rc<RefCell<Option<Session>>> = Default::default();
     let next_try = Rc::new(RefCell::new(Instant::now()));
@@ -555,6 +568,7 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
     let pending_tick = pending.clone();
     let ready_tick = ready.clone();
     let failure_tick = failure.clone();
+    let clock_tick = clock_defaults.clone();
     let session_tick = session.clone();
     let next_tick = next_try.clone();
     let backoff_tick = backoff.clone();
@@ -577,13 +591,22 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
             batch.epoch += 1;
             graph_tick.borrow_mut().apply(GraphDelta { epoch: batch.epoch, ..GraphDelta::default() });
             tick_sink(Event::Connection(Connection::Down(reason)));
+            *clock_tick.borrow_mut() = None;
             *ready_tick.borrow_mut() = None;
             *next_tick.borrow_mut() = Instant::now() + *backoff_tick.borrow();
             let doubled = (*backoff_tick.borrow() * 2).min(Duration::from_secs(5));
             *backoff_tick.borrow_mut() = doubled;
         }
         if session_tick.borrow().is_none() && Instant::now() >= *next_tick.borrow() {
-            match connect(&tick_loop, &pending_tick, &ready_tick, &failure_tick, &actions_tick, &results_tick) {
+            match connect(
+                &tick_loop,
+                &pending_tick,
+                &ready_tick,
+                &failure_tick,
+                &clock_tick,
+                &actions_tick,
+                &results_tick,
+            ) {
                 Ok(connected) => {
                     *session_tick.borrow_mut() = Some(connected);
                 }
@@ -595,6 +618,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
         if let Some(version) = ready_tick.borrow_mut().take() {
             *backoff_tick.borrow_mut() = Duration::from_millis(500);
             tick_sink(Event::Connection(Connection::Up(version)));
+            if let Some((rate, quantum)) = clock_tick.borrow_mut().take() {
+                tick_sink(Event::ClockDefaults { rate, quantum });
+            }
         }
         if let Some(delta) = pending_tick.borrow_mut().drain() {
             graph_tick.borrow_mut().apply(delta.clone());

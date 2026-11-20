@@ -49,6 +49,15 @@ impl Page {
             Page::Video => "Video",
         }
     }
+    fn accepts(self, kind: PortKind) -> bool {
+        matches!(
+            (self, kind),
+            (Page::Audio, PortKind::Audio)
+                | (Page::Midi, PortKind::Midi)
+                | (Page::Midi2, PortKind::Ump)
+                | (Page::Video, PortKind::Video)
+        )
+    }
 }
 
 /// One gesture's intended operations, retained with stable identities for undo.
@@ -137,6 +146,7 @@ pub struct Musubi {
     fake: Option<Rc<RefCell<FakeBackend>>>,
     pub graph: Graph,
     connection: Option<Connection>,
+    clock_defaults: Option<(u32, u32)>,
     matrix_spike: Option<Rc<Layout>>,
     pub options: [ViewOptions; 4],
     route_selection: Vec<(GlobalId, GlobalId)>,
@@ -1055,12 +1065,16 @@ impl Program for Musubi {
                     self.history.record(index);
                 }
             }
+            Msg::Backend(Event::ClockDefaults { rate, quantum }) => {
+                self.clock_defaults = Some((rate, quantum));
+            }
             Msg::Backend(Event::Connection(connection)) => {
                 if matches!(connection, Connection::Down(_)) {
                     self.graph = Graph::default();
                     self.pending.clear();
                     self.errors.clear();
                     self.removed.clear();
+                    self.clock_defaults = None;
                     self.refresh_layouts();
                 }
                 self.connection = Some(connection);
@@ -1184,20 +1198,52 @@ impl Program for Musubi {
         .spacing(8.)
         .width(Fill);
         for (page, icon, title) in Page::ALL {
-            side = side.push(sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title));
+            let count = self
+                .graph
+                .links
+                .values()
+                .filter(|link| {
+                    self.graph.kind(link.output).is_some_and(|kind| page.accepts(kind))
+                        && self.graph.kind(link.input).is_some_and(|kind| page.accepts(kind))
+                })
+                .count();
+            side = side.push(
+                row![
+                    sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title).width(Fill),
+                    text(count.to_string()).mono().size(11.).role(Role::Text3),
+                ]
+                .spacing(4.)
+                .padding([0., 10.])
+                .width(Fill),
+            );
         }
         let version = match &self.connection {
             Some(Connection::Up(version)) => format!("PipeWire {version}"),
             _ => "PipeWire".to_owned(),
         };
         let status = if matches!(self.connection, Some(Connection::Up(_))) { "●" } else { "○" };
+        let clock = self.clock_defaults.map(|(rate, quantum)| {
+            format!(
+                "Defaults · {} kHz · {quantum} · {:.1} ms",
+                rate as f64 / 1000.,
+                quantum as f64 * 1000. / rate as f64
+            )
+        });
         side = side.push(spacer()).push(
             container(
-                row![
-                    text(status).role(if status == "●" { Role::Success } else { Role::Danger }),
-                    text(version).size(12.)
+                column![
+                    row![
+                        text(status).role(if status == "●" { Role::Success } else { Role::Danger }),
+                        text(version).size(12.)
+                    ]
+                    .spacing(7.),
+                    if let Some(clock) = clock {
+                        Element::<Msg>::from(text(clock).size(10.).role(Role::Text3))
+                    } else {
+                        Element::<Msg>::from(spacer().height(0.))
+                    },
                 ]
-                .spacing(7.),
+                .spacing(3.),
             )
             .padding(12.)
             .edges(Edge::Line, Sides::TOP)
