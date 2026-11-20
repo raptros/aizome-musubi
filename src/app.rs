@@ -683,6 +683,8 @@ impl Musubi {
             ]
             .spacing(12.),
         )
+        .align_x(Align::Center)
+        .align_y(Align::Center)
         .padding(36.)
         .width(Fill)
         .height(Fill)
@@ -1306,10 +1308,13 @@ impl Program for Musubi {
         let title =
             format!("{} {ports} ports · {links} {}", self.page.title(), if links == 1 { "link" } else { "links" });
         let options = &self.options[Self::index(self.page)];
+        let available = matches!(self.connection, Some(Connection::Up(_))) || self.matrix_spike.is_some();
+        let has_ports = available && ports > 0;
         let mut controls: Vec<Element<Msg>> = vec![
             text(title).semibold().into(),
             segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
                 .on_select(|index| Msg::List(index == 1))
+                .enabled(has_ports)
                 .id("matrix-list")
                 .into(),
         ];
@@ -1317,19 +1322,34 @@ impl Program for Musubi {
             controls.push(
                 segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
                     .on_select(|index| Msg::Pairs(index == 0))
+                    .enabled(has_ports)
                     .id("pairs-channels")
                     .into(),
             );
-            controls.push(checkbox("Monitors", options.monitors).on_toggle(Msg::Monitors).id("monitors").into());
+            controls.push(
+                checkbox("Monitors", options.monitors)
+                    .on_toggle(Msg::Monitors)
+                    .enabled(has_ports)
+                    .id("monitors")
+                    .into(),
+            );
         }
         if self.page == Page::Midi2 {
             controls.push(
-                checkbox("Show MIDI 1.0", options.show_midi_1).on_toggle(Msg::ShowMidi1).id("show-midi-1").into(),
+                checkbox("Show MIDI 1.0", options.show_midi_1)
+                    .on_toggle(Msg::ShowMidi1)
+                    .enabled(has_ports)
+                    .id("show-midi-1")
+                    .into(),
             );
         }
         controls.extend([
-            button("Swap").compact().on_press(Msg::Swap).id("swap").into(),
-            checkbox("Full Names", options.full_names).on_toggle(|_| Msg::FullNames).id("full-names").into(),
+            button("Swap").toolbar().on_press(Msg::Swap).enabled(has_ports).id("swap").into(),
+            checkbox("Full Names", options.full_names)
+                .on_toggle(|_| Msg::FullNames)
+                .enabled(has_ports)
+                .id("full-names")
+                .into(),
             button("Undo")
                 .compact()
                 .on_press(Msg::Undo)
@@ -1337,8 +1357,20 @@ impl Program for Musubi {
                 .id("undo")
                 .into(),
             spacer().into(),
-            search_field(&options.from).placeholder("From").on_change(Msg::From).width(125.).id("from-filter").into(),
-            search_field(&options.to).placeholder("To").on_change(Msg::To).width(125.).id("to-filter").into(),
+            search_field(&options.from)
+                .placeholder("From")
+                .on_change(Msg::From)
+                .enabled(has_ports)
+                .width(125.)
+                .id("from-filter")
+                .into(),
+            search_field(&options.to)
+                .placeholder("To")
+                .on_change(Msg::To)
+                .enabled(has_ports)
+                .width(125.)
+                .id("to-filter")
+                .into(),
         ]);
         let controls = toolbar(controls);
         let status = if let Some(Connection::Down(error)) = &self.connection {
