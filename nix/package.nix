@@ -24,10 +24,6 @@ in rustPlatform.buildRustPackage {
   preConfigure = ''
     export CARGO_HOME=$(mktemp -d)
   '';
-  # The tests share process-wide state (the persistence test sets XDG variables),
-  # so they run on one thread. cargoCheckHook sets RUST_TEST_THREADS itself after
-  # preCheck; this is the switch it honours.
-  dontUseCargoParallelTests = true;
   postInstall = ''
     install -Dm644 data/org.aizome.Musubi.desktop $out/share/applications/org.aizome.Musubi.desktop
     install -Dm644 data/org.aizome.Musubi.svg $out/share/icons/hicolor/scalable/apps/org.aizome.Musubi.svg

@@ -15,7 +15,7 @@ When advancing the kit, coordinate three things in one change:
 1. Select the new `inputs.sekka.url` revision in `flake.nix` and use an
    adjacent Sekka checkout at exactly that revision.
 2. In Sekka's Aizome dev shell, run `cargo update --workspace` in Musubi,
-   then `cargo test --locked -- --test-threads=1`; inspect and commit
+   then `cargo test --locked`; inspect and commit
    Musubi's `Cargo.lock`. Cargo does not inherit Sekka's workspace patches
    across the package boundary. If the kit requires another local crate,
    add its path to `aizomeFor` in `flake.nix`.
@@ -32,7 +32,7 @@ artifacts belong under `runs/`, never in source control.
 From `repos/sekka` in the contribution workspace:
 
 ```sh
-../../tools/heavy musubi-test -- ../../tools/nix-env nix develop .#aizome --no-update-lock-file -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/opt/aidan-stuff/Projects/sekka-stuff/runs/2026-11-02/209/r1/fonts cargo test --locked -- --test-threads=1'
+../../tools/heavy musubi-test -- ../../tools/nix-env nix develop .#aizome --no-update-lock-file -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/opt/aidan-stuff/Projects/sekka-stuff/runs/2026-11-02/209/r1/fonts cargo test --locked'
 ```
 
 Use the actual pinned Aizome fonts directory from the workspace rather than
@@ -79,7 +79,7 @@ From the contribution workspace root, commit source first (Nix flakes build
 the committed tree), then run:
 
 ```sh
-tools/heavy musubi-vm -- tools/nix-env nix build ./repos/aizome-musubi#checks.x86_64-linux.vm -L --max-jobs 1 --cores 4 --out-link runs/2026-11-11/patchbay/phase1/s5b/vm
+tools/heavy musubi-vm -- tools/nix-env nix build ./repos/aizome-musubi#checks.x86_64-linux.vm -L --max-jobs 1 --cores 4 --out-link runs/2026-11-11/patchbay/phase1/s7/vm
 ```
 
 `nix/vm-test.nix` imports the pinned Sekka Aizome NixOS module and this
@@ -103,7 +103,6 @@ A failing run keeps no result, so the driver prints its evidence (window,
 inspected elements, recent inputs, links, ports) to the build log before it
 fails. Under portable Nix the result lives inside its namespace; copy it out
 with `tools/nix-env nix shell --inputs-from ./repos/sekka nixpkgs#bashInteractive
--c cp -rL <out-link>/. <dir>/`. Passing run 2026-11-11: both subtests passed
-(stream → sink link made by a click and undone by Super+Z; a `snd-virmidi`
-output linked to an input by a click), screenshots in the workspace run
-directory `runs/2026-11-11/patchbay/phase1/s5b/evidence/`.
+-c cp -rL <out-link>/. <dir>/`. The S7 evidence directory is
+`runs/2026-11-11/patchbay/phase1/s7/evidence/` (five scenario screenshots
+plus a final screenshot, inputs, observations, inspect JSON, and guest journal).

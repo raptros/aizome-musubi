@@ -57,6 +57,15 @@ fn matrix_semantics_follow_focus_and_return_opens_row_inspector() {
     let focused = table(&h);
     assert!(focused.value.as_deref().is_some_and(|v| v.contains(" → ") && v.contains(", not connected")));
     assert!(focused.actions.contains(&SemanticAction::Click));
+    let cell_semantics =
+        h.semantics(w).into_iter().find(|(s, _)| s.role == SemanticRole::Cell).expect("focused matrix Cell").0;
+    assert!(cell_semantics.label.as_deref().is_some_and(|label| label.contains(" → ")));
+    assert_eq!(cell_semantics.checked, Some(false));
+    assert!(cell_semantics.actions.contains(&SemanticAction::Click));
+    let commands_before = fake.borrow().commands.len();
+    h.key(w, Key::Character(" ".into()), Modifiers::NONE);
+    assert_eq!(fake.borrow().commands.len(), commands_before + 1);
+    assert!(h.semantics(w).iter().any(|(s, _)| s.role == SemanticRole::Cell && s.checked == Some(true)));
     h.key(w, Key::Named(NamedKey::ArrowLeft), Modifiers::NONE);
     fake.borrow_mut().fail_next("permission denied");
     h.click(w, point);
@@ -678,15 +687,14 @@ fn keyboard_add_route_and_midi_confirmation() {
 
 #[test]
 fn persistence_options_and_fold_relaunch() {
-    let temp = std::env::temp_dir().join(format!("musubi-s4d-{}", std::process::id()));
-    std::fs::create_dir_all(&temp).unwrap();
-    unsafe {
-        std::env::set_var("MUSUBI_TEST_CONFIG", "1");
-        std::env::set_var("XDG_CONFIG_HOME", temp.join("config"));
-        std::env::set_var("XDG_STATE_HOME", temp.join("state"));
-    }
+    let temp =
+        std::env::temp_dir().join(format!("musubi-s7c-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let paths = aizome_musubi::persistence::Paths {
+        config: temp.join("config/aizome/musubi.toml"),
+        state: temp.join("state/aizome/musubi/state.toml"),
+    };
     let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
-    let mut h = Harness::new(Musubi::with_fake(fake));
+    let mut h = Harness::new(Musubi::with_fake_paths(fake, paths.clone()));
     h.send(Msg::Pairs(true));
     h.send(Msg::Swap);
     h.send(Msg::List(true));
@@ -697,18 +705,13 @@ fn persistence_options_and_fold_relaunch() {
     h.send(Msg::ContextAction(aizome_musubi::app::ContextAction::Fold(key)));
     h.advance(std::time::Duration::from_millis(400));
     let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 2).unwrap()));
-    let h2 = Harness::new(Musubi::with_fake(fake));
+    let h2 = Harness::new(Musubi::with_fake_paths(fake, paths));
     assert!(h2.program().options[0].pairs && h2.program().options[0].swap && h2.program().options[0].list);
     assert_eq!(h2.program().options[0].row_header, 232.);
     assert_eq!(h2.program().options[0].column_header, 204.);
     assert!(h2.program().options[0].full_names);
     assert!(!h2.program().options[0].folded.is_empty());
     drop((h, h2));
-    unsafe {
-        std::env::remove_var("MUSUBI_TEST_CONFIG");
-        std::env::remove_var("XDG_CONFIG_HOME");
-        std::env::remove_var("XDG_STATE_HOME");
-    }
     std::fs::remove_dir_all(temp).unwrap();
 }
 

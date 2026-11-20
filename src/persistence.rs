@@ -7,16 +7,24 @@ use crate::{
 use serde_json::{Value, json};
 use std::{collections::HashSet, fs, path::PathBuf};
 
-fn home(env: &str, fallback: &str) -> Option<PathBuf> {
-    std::env::var_os(env)
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+#[derive(Clone, Debug)]
+pub struct Paths {
+    pub config: PathBuf,
+    pub state: PathBuf,
 }
-fn settings_path() -> Option<PathBuf> {
-    Some(home("XDG_CONFIG_HOME", ".config")?.join("aizome/musubi.toml"))
-}
-fn state_path() -> Option<PathBuf> {
-    Some(home("XDG_STATE_HOME", ".local/state")?.join("aizome/musubi/state.toml"))
+
+impl Paths {
+    pub fn from_environment() -> Option<Self> {
+        fn home(env: &str, fallback: &str) -> Option<PathBuf> {
+            std::env::var_os(env)
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(fallback)))
+        }
+        Some(Self {
+            config: home("XDG_CONFIG_HOME", ".config")?.join("aizome/musubi.toml"),
+            state: home("XDG_STATE_HOME", ".local/state")?.join("aizome/musubi/state.toml"),
+        })
+    }
 }
 fn save(path: Option<PathBuf>, body: String) -> std::io::Result<()> {
     let Some(path) = path else { return Ok(()) };
@@ -26,9 +34,9 @@ fn save(path: Option<PathBuf>, body: String) -> std::io::Result<()> {
     fs::rename(temporary, path)
 }
 
-pub fn load_options() -> [ViewOptions; 4] {
+pub fn load_options(paths: Option<&Paths>) -> [ViewOptions; 4] {
     let mut options = std::array::from_fn(|_| ViewOptions::default());
-    let Some(body) = settings_path().and_then(|p| fs::read_to_string(p).ok()) else { return options };
+    let Some(body) = paths.and_then(|p| fs::read_to_string(&p.config).ok()) else { return options };
     let mut page = None;
     for line in body.lines() {
         if let Some(section) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
@@ -65,7 +73,7 @@ pub fn load_options() -> [ViewOptions; 4] {
     options
 }
 
-pub fn save_options(options: &[ViewOptions; 4]) -> std::io::Result<()> {
+pub fn save_options(paths: Option<&Paths>, options: &[ViewOptions; 4]) -> std::io::Result<()> {
     let mut body = String::new();
     for (name, option) in ["audio", "midi", "midi2", "video"].into_iter().zip(options) {
         body.push_str(&format!(
@@ -74,10 +82,20 @@ pub fn save_options(options: &[ViewOptions; 4]) -> std::io::Result<()> {
             option.full_names, option.row_header, option.column_header
         ));
     }
-    save(settings_path(), body)
+    save(paths.map(|p| p.config.clone()), body)
 }
 
 pub(crate) fn stable_group(graph: &Graph, key: &GroupKey) -> Option<String> {
+    if let GroupKey::Device(id) = key {
+        let device = graph.devices.get(id)?;
+        let name = device.props.get("device.name").filter(|name| !name.is_empty())?;
+        let serial_or_bus = device
+            .props
+            .get("device.serial")
+            .filter(|value| !value.is_empty())
+            .or_else(|| device.props.get("device.bus-path").filter(|value| !value.is_empty()));
+        return Some(json!([name, serial_or_bus, null, null, null]).to_string());
+    }
     let port = graph.ports.values().find(|port| graph.group_key(port).as_ref() == Some(key))?;
     let node = port.node_id?;
     let seq = if matches!(key, GroupKey::MidiClient { .. }) {
@@ -93,9 +111,9 @@ pub(crate) fn stable_group(graph: &Graph, key: &GroupKey) -> Option<String> {
     Some(json!([device_name, device_serial_or_bus, client_name, node_name, sequencer_client_name]).to_string())
 }
 
-pub fn load_folds() -> [HashSet<String>; 4] {
+pub fn load_folds(paths: Option<&Paths>) -> [HashSet<String>; 4] {
     let mut folds = std::array::from_fn(|_| HashSet::new());
-    let Some(body) = state_path().and_then(|p| fs::read_to_string(p).ok()) else { return folds };
+    let Some(body) = paths.and_then(|p| fs::read_to_string(&p.state).ok()) else { return folds };
     let mut page = None;
     for line in body.lines() {
         if let Some(section) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
@@ -117,7 +135,12 @@ pub fn restore_folds(graph: &Graph, options: &mut [ViewOptions; 4], stored: &[Ha
     }
 }
 
-pub fn save_folds(graph: &Graph, options: &[ViewOptions; 4], stored: &[HashSet<String>; 4]) -> std::io::Result<()> {
+pub fn save_folds(
+    paths: Option<&Paths>,
+    graph: &Graph,
+    options: &[ViewOptions; 4],
+    stored: &[HashSet<String>; 4],
+) -> std::io::Result<()> {
     let mut body = String::new();
     for (i, name) in ["audio", "midi", "midi2", "video"].into_iter().enumerate() {
         let mut keys = stored[i].clone();
@@ -129,7 +152,7 @@ pub fn save_folds(graph: &Graph, options: &[ViewOptions; 4], stored: &[HashSet<S
             serde_json::to_string(&keys).expect("stable group strings")
         ));
     }
-    save(state_path(), body)
+    save(paths.map(|p| p.state.clone()), body)
 }
 
 pub fn page_index(page: Page) -> usize {
@@ -138,5 +161,30 @@ pub fn page_index(page: Page) -> usize {
         Page::Midi => 1,
         Page::Midi2 => 2,
         Page::Video => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{dump, group::GroupKey};
+
+    #[test]
+    fn multi_node_device_fold_survives_profile_node_replacement() {
+        let mut graph = Graph::default();
+        graph.apply(dump::parse(include_str!("../tests/fixtures/studio.json"), 1).unwrap());
+        let key = GroupKey::Device(1);
+        let identity = stable_group(&graph, &key).unwrap();
+        assert!(identity.contains("alsa_card.usb.studio"));
+        let mut replacement = Graph::default();
+        replacement.apply(dump::parse(include_str!("../tests/fixtures/studio.json"), 2).unwrap());
+        replacement.nodes.get_mut(&10).unwrap().props.insert("node.name".into(), "replacement.playback".into());
+        replacement.nodes.get_mut(&12).unwrap().props.insert("node.name".into(), "replacement.capture".into());
+        assert_eq!(stable_group(&replacement, &key), Some(identity.clone()));
+        let mut stored: [HashSet<String>; 4] = std::array::from_fn(|_| HashSet::new());
+        stored[0].insert(identity);
+        let mut options = std::array::from_fn(|_| ViewOptions::default());
+        restore_folds(&replacement, &mut options, &stored);
+        assert!(options[0].folded.contains(&key));
     }
 }

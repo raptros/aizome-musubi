@@ -159,6 +159,7 @@ pub struct Musubi {
     persisted_folds: [HashSet<String>; 4],
     persist_generation: u64,
     persist_enabled: bool,
+    paths: Option<persistence::Paths>,
     layouts: [Option<Rc<Layout>>; 4],
     hovered: Option<Cell>,
     matrix_focus: Rc<SharedCell<Option<Cell>>>,
@@ -254,6 +255,10 @@ impl Musubi {
     /// The Harness and fake backend use the same command path as the live app.
     pub fn with_fake(fake: Rc<RefCell<FakeBackend>>) -> Self {
         Self { fake: Some(fake), ..Self::default() }
+    }
+    /// Keep Harness persistence isolated from the process-wide XDG environment.
+    pub fn with_fake_paths(fake: Rc<RefCell<FakeBackend>>, paths: persistence::Paths) -> Self {
+        Self { fake: Some(fake), paths: Some(paths), ..Self::default() }
     }
     fn send_command(&mut self, command: Command) {
         if let Some(fake) = &self.fake {
@@ -810,10 +815,13 @@ impl Program for Musubi {
     }
 
     fn launched(&mut self, cx: &mut Cx<Msg>) {
-        self.persist_enabled = self.live || (self.fake.is_some() && std::env::var_os("MUSUBI_TEST_CONFIG").is_some());
+        self.persist_enabled = self.live || self.paths.is_some();
+        if self.live {
+            self.paths = persistence::Paths::from_environment();
+        }
         if self.persist_enabled {
-            self.options = persistence::load_options();
-            self.persisted_folds = persistence::load_folds();
+            self.options = persistence::load_options(self.paths.as_ref());
+            self.persisted_folds = persistence::load_folds(self.paths.as_ref());
         }
         self.window = cx.open_window(WindowSpec::new("Musubi — Patchbay").size(1280., 800.).min_size(900., 560.));
         if let Some(instance) = &self.instance {
@@ -973,9 +981,9 @@ impl Program for Musubi {
                 }
             }
             Msg::Persist(generation) if generation == self.persist_generation => {
-                if let Err(error) = persistence::save_options(&self.options)
-                    .and_then(|_| persistence::save_folds(&self.graph, &self.options, &self.persisted_folds))
-                {
+                if let Err(error) = persistence::save_options(self.paths.as_ref(), &self.options).and_then(|_| {
+                    persistence::save_folds(self.paths.as_ref(), &self.graph, &self.options, &self.persisted_folds)
+                }) {
                     self.notice = Some(format!("Could not save view settings: {error}"));
                 }
             }

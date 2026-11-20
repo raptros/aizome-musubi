@@ -76,13 +76,66 @@ pub struct PatchMatrix {
     size: Size,
 }
 
+struct FocusedCell {
+    layout: Rc<Layout>,
+    focused: Rc<SharedCell<Option<Cell>>>,
+    on_event: aizome_kit::element::MsgMap<MatrixMsg>,
+}
+
+impl Widget for FocusedCell {
+    fn name(&self) -> &'static str {
+        "matrix-focused-cell"
+    }
+    fn layout(&mut self, _cx: &mut LayoutCx, _bc: Constraints) -> Size {
+        Size::new(24., 24.)
+    }
+    fn focusable(&self) -> Focusable {
+        Focusable::Tab
+    }
+    fn event(&mut self, cx: &mut EventCx, event: &Event) -> Status {
+        if let Event::Key(k) = event {
+            if k.pressed && !k.modifiers.shift() && matches!(&k.key, Key::Character(s) if s == " ") {
+                if let Some(cell) = self.focused.get() {
+                    if self.layout.rows.labels.get(cell.row).is_some()
+                        && self.layout.cols.labels.get(cell.col).is_some()
+                    {
+                        let mapper = self.on_event.clone();
+                        cx.emit(&MsgFn::from_fn(move || mapper.make(MatrixMsg::Toggle(cell))));
+                        return Status::Handled;
+                    }
+                }
+            }
+        }
+        Status::Ignored
+    }
+    fn semantics(&self) -> Option<Semantics> {
+        let cell = self.focused.get()?;
+        let row = self.layout.rows.labels.get(cell.row)?;
+        let col = self.layout.cols.labels.get(cell.col)?;
+        let state = self.layout.state(cell);
+        Some(Semantics {
+            role: SemanticRole::Cell,
+            label: Some(format!("{row} → {col}")),
+            value: Some(format!("{state:?}")),
+            checked: Some(matches!(state, CellState::Connected)),
+            actions: vec![SemanticAction::Click],
+            ..Default::default()
+        })
+    }
+}
+
 impl PatchMatrix {
     pub fn new<Msg: Send + 'static>(
         layout: Rc<Layout>,
         focused: Rc<SharedCell<Option<Cell>>>,
         f: impl Fn(MatrixMsg) -> Msg + 'static,
     ) -> Element<Msg> {
-        Element::new(Self { layout, focused, size: Size::ZERO, on_event: aizome_kit::element::MsgMap::new(f) }, vec![])
+        let on_event = aizome_kit::element::MsgMap::new(f);
+        let child = Element::new(
+            FocusedCell { layout: layout.clone(), focused: focused.clone(), on_event: on_event.clone() },
+            vec![],
+        );
+        Element::new(Self { layout, focused, size: Size::ZERO, on_event }, vec![child])
     }
 
     fn view(&self, size: Size) -> (Rect, Rect, Rect, Rect) {
@@ -369,6 +422,18 @@ impl Widget for PatchMatrix {
         let (_, _, _, body) = self.view(size);
         st.offset.x = st.offset.x.clamp(0., (self.layout.cols.extent - body.width()).max(0.));
         st.offset.y = st.offset.y.clamp(0., (self.layout.rows.extent - body.height()).max(0.));
+        let offset = st.offset;
+        let focused = st.focused;
+        cx.layout_child(0, Constraints::tight(Size::new(24., 24.)));
+        let at = focused
+            .map(|cell| {
+                Point::new(
+                    body.x0 + self.layout.cols.offsets.get(cell.col).copied().unwrap_or(0.) - offset.x,
+                    body.y0 + self.layout.rows.offsets.get(cell.row).copied().unwrap_or(0.) - offset.y,
+                )
+            })
+            .unwrap_or(Point::ZERO);
+        cx.place_child(0, at);
         size
     }
 
