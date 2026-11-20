@@ -15,6 +15,31 @@ pub const ROW_HEADER: f64 = 188.0;
 pub const COLUMN_HEADER: f64 = 180.0;
 pub const MIN_ROW_HEADER: f64 = 100.;
 pub const MIN_COLUMN_HEADER: f64 = 136.;
+type AxisGroup = (String, String, Kind, Option<GroupKey>, bool, bool, Vec<(String, Option<String>)>);
+
+/// Sibling groups that share a name (two identical keyboards, two sequencer
+/// clients with one name) get a suffix that tells them apart: the ALSA
+/// sequencer client number where there is one, else their order.
+fn disambiguate(groups: &mut [AxisGroup]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for group in groups.iter() {
+        *counts.entry(group.0.clone()).or_default() += 1;
+    }
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for group in groups.iter_mut() {
+        if counts[&group.0] < 2 {
+            continue;
+        }
+        let ordinal = seen.entry(group.0.clone()).or_default();
+        *ordinal += 1;
+        let suffix = match &group.3 {
+            Some(GroupKey::MidiClient { client, .. }) => format!(" #{client}"),
+            _ => format!(" ({ordinal})"),
+        };
+        group.0.push_str(&suffix);
+    }
+}
+
 /// Keep distinguishing ends of names when siblings share a prefix or suffix.
 pub fn elide(name: &str, siblings: &[String], max_chars: usize) -> String {
     let chars: Vec<char> = name.chars().collect();
@@ -515,6 +540,7 @@ impl Layout {
                 labels,
             ));
         }
+        disambiguate(&mut groups);
         (Axis::from_groups(groups), lines, hidden)
     }
 

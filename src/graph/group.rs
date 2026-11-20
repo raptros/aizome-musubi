@@ -63,6 +63,9 @@ pub fn port_label(port: &PortRecord) -> String {
     if bridge_port {
         if let Some(label) = prop(&port.props, "port.alias").and_then(|alias| alias.rsplit(':').next()) {
             if !label.starts_with("capture_") && !label.starts_with("playback_") {
+                // The axis already says which way a port faces.
+                let label =
+                    label.strip_suffix(" (playback)").or_else(|| label.strip_suffix(" (capture)")).unwrap_or(label);
                 return label.to_owned();
             }
         }

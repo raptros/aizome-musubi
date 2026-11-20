@@ -563,21 +563,21 @@ fn graph_pages_have_night_and_day_goldens() {
 
 #[test]
 fn vm_midi_bridge_long_ports_keep_group_names_visible() {
+    // As in the VM: the bridge's input ports carry aliases like
+    // "Virtual Raw MIDI 0-0:VirMIDI 0-0 (playback)".
     let mut objects: Vec<serde_json::Value> = serde_json::from_str(include_str!("fixtures/midi.json")).unwrap();
-    let template = objects.iter().find(|object| object["id"] == 30).unwrap().clone();
-    for index in 0..4 {
-        let mut port = template.clone();
-        port["id"] = (100 + index).into();
-        let props = &mut port["info"]["props"];
-        props["object.id"] = (100 + index).into();
-        props["object.serial"] = (10100 + index).into();
-        props["port.id"] = (100 + index).into();
-        props["port.name"] = format!("playback_{index}").into();
-        props["port.group"] = format!("client_{index}").into();
-        props["api.alsa.seq.client.name"] = format!("Virtual Raw MIDI 0-{index}").into();
-        props["port.alias"] = format!("Virtual Raw MIDI 0-{index}:VirMIDI 0-{index} (playback)").into();
-        objects.push(port);
+    for object in objects.iter_mut().filter(|o| [51, 53, 55, 57].contains(&o["id"].as_i64().unwrap_or(0))) {
+        let props = &mut object["info"]["props"];
+        let alias = props["port.alias"].as_str().unwrap().to_owned();
+        props["port.alias"] = format!("{alias} (playback)").into();
     }
+    // A second client with the same name, as two identical devices would be.
+    let mut twin = objects.iter().find(|o| o["id"] == 51).unwrap().clone();
+    twin["id"] = 151.into();
+    twin["info"]["props"]["object.id"] = 151.into();
+    twin["info"]["props"]["object.serial"] = 10151.into();
+    twin["info"]["props"]["port.group"] = "client_60".into();
+    objects.push(twin);
     let json = serde_json::to_string(&objects).unwrap();
     for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
         let fake = Rc::new(RefCell::new(FakeBackend::from_dump(&json, 1).unwrap()));
@@ -588,7 +588,11 @@ fn vm_midi_bridge_long_ports_keep_group_names_visible() {
         );
         h.send(Msg::Page(Page::Midi));
         let layout = h.program().layout(Page::Midi).unwrap();
-        assert!(layout.cols.groups.iter().any(|g| g.name == "Virtual Raw MIDI 0-0"));
+        let names: Vec<_> = layout.cols.groups.iter().map(|g| g.name.clone()).collect();
+        assert!(names.contains(&"Virtual Raw MIDI 0-0 #50".to_owned()), "{names:?}");
+        assert!(names.contains(&"Virtual Raw MIDI 0-0 #60".to_owned()), "{names:?}");
+        assert!(names.contains(&"Virtual Raw MIDI 0-1".to_owned()), "{names:?}");
+        assert!(layout.cols.labels.iter().any(|l| l == "VirMIDI 0-1"), "{:?}", layout.cols.labels);
         let w = h.window();
         assert_golden(&mut h, w, format!("tests/snapshots/midi-vm-bridge-{mode}.png"), 1.);
     }
