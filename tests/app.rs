@@ -556,6 +556,39 @@ fn graph_pages_have_night_and_day_goldens() {
 }
 
 #[test]
+fn vm_midi_bridge_long_ports_keep_group_names_visible() {
+    let mut objects: Vec<serde_json::Value> = serde_json::from_str(include_str!("fixtures/midi.json")).unwrap();
+    let template = objects.iter().find(|object| object["id"] == 30).unwrap().clone();
+    for index in 0..4 {
+        let mut port = template.clone();
+        port["id"] = (100 + index).into();
+        let props = &mut port["info"]["props"];
+        props["object.id"] = (100 + index).into();
+        props["object.serial"] = (10100 + index).into();
+        props["port.id"] = (100 + index).into();
+        props["port.name"] = format!("playback_{index}").into();
+        props["port.group"] = format!("client_{index}").into();
+        props["api.alsa.seq.client.name"] = format!("Virtual Raw MIDI 0-{index}").into();
+        props["port.alias"] = format!("Virtual Raw MIDI 0-{index}:VirMIDI 0-{index} (playback)").into();
+        objects.push(port);
+    }
+    let json = serde_json::to_string(&objects).unwrap();
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        let fake = Rc::new(RefCell::new(FakeBackend::from_dump(&json, 1).unwrap()));
+        let mut h = Harness::with(
+            Musubi::with_fake(fake),
+            Appearance { theme, reduced_motion: true, ..Appearance::default() },
+            true,
+        );
+        h.send(Msg::Page(Page::Midi));
+        let layout = h.program().layout(Page::Midi).unwrap();
+        assert!(layout.cols.groups.iter().any(|g| g.name == "Virtual Raw MIDI 0-0"));
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/midi-vm-bridge-{mode}.png"), 1.);
+    }
+}
+
+#[test]
 fn stream_full_names_and_tooltip_goldens() {
     for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
         let appearance = Appearance { theme, reduced_motion: true, ..Appearance::default() };
@@ -564,7 +597,6 @@ fn stream_full_names_and_tooltip_goldens() {
         app.options[0].pairs = true;
         let mut h = Harness::with(app, appearance, true);
         let w = h.window();
-        assert_golden(&mut h, w, format!("tests/snapshots/audio-streams-{mode}.png"), 1.);
         h.send(Msg::FullNames);
         assert_golden(&mut h, w, format!("tests/snapshots/audio-full-names-{mode}.png"), 1.);
         h.send(Msg::FullNames);

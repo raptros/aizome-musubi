@@ -14,9 +14,8 @@ pub const GAP: f64 = 8.0;
 pub const ROW_HEADER: f64 = 188.0;
 pub const COLUMN_HEADER: f64 = 180.0;
 pub const MIN_ROW_HEADER: f64 = 100.;
-pub const MIN_COLUMN_HEADER: f64 = 80.;
-/// Prefer the distinguishing suffix of sibling names when a shared prefix
-/// ends at a word or punctuation boundary; otherwise truncate at the end.
+pub const MIN_COLUMN_HEADER: f64 = 136.;
+/// Keep distinguishing ends of names when siblings share a prefix or suffix.
 pub fn elide(name: &str, siblings: &[String], max_chars: usize) -> String {
     let chars: Vec<char> = name.chars().collect();
     if chars.len() <= max_chars {
@@ -29,6 +28,12 @@ pub fn elide(name: &str, siblings: &[String], max_chars: usize) -> String {
         .iter()
         .filter(|other| other.as_str() != name)
         .map(|other| chars.iter().zip(other.chars()).take_while(|(a, b)| **a == *b).count())
+        .max()
+        .unwrap_or(0);
+    let suffix = siblings
+        .iter()
+        .filter(|other| other.as_str() != name)
+        .map(|other| chars.iter().rev().zip(other.chars().rev()).take_while(|(a, b)| **a == *b).count())
         .max()
         .unwrap_or(0);
     let boundary = (1..=shared.min(chars.len().saturating_sub(3)))
@@ -47,10 +52,22 @@ pub fn elide(name: &str, siblings: &[String], max_chars: usize) -> String {
         })
         .find(|&n| chars.len() - n + 1 <= max_chars);
     if let Some(n) = boundary {
-        let suffix = &chars[n..];
-        if suffix.len() >= 3 && suffix.len() < chars.len() && suffix.len() + 1 <= max_chars {
-            return format!("…{}", suffix.iter().collect::<String>());
+        let tail = &chars[n..];
+        if tail.len() >= 3 && tail.len() < chars.len() && tail.len() + 1 <= max_chars {
+            return format!("…{}", tail.iter().collect::<String>());
         }
+    }
+    if suffix >= 2 && chars.len() > suffix + 2 {
+        let prefix = &chars[..chars.len() - suffix];
+        if prefix.len() + 1 <= max_chars {
+            return format!("{}…", prefix.iter().collect::<String>());
+        }
+    }
+    if shared > 0 && chars.len() - shared + 1 <= max_chars {
+        return format!("…{}", chars[shared..].iter().collect::<String>());
+    }
+    if siblings.iter().filter(|other| other.as_str() == name).count() == 1 && siblings.len() == 1 {
+        return format!("…{}", chars[chars.len() - max_chars + 1..].iter().collect::<String>());
     }
     format!("{}…", chars[..max_chars - 1].iter().collect::<String>())
 }
@@ -67,6 +84,10 @@ mod elision_tests {
         assert_eq!(elide(&midi[0], &midi, 10), "…MIDI 0-0");
         assert_eq!(elide("Long unique label", &siblings, 8), "Long un…");
         assert_eq!(elide("abc", &siblings, 2), "a…");
+        let suffix: Vec<String> = vec!["Foo · x".into(), "Bar · x".into()];
+        assert_eq!(elide(&suffix[0], &suffix, 5), "Foo…");
+        assert_eq!(elide(&suffix[1], &suffix, 5), "Bar…");
+        assert_eq!(elide("musubi-vm-patch", &["musubi-vm-patch".into()], 12), "…bi-vm-patch");
     }
 }
 
@@ -161,8 +182,11 @@ impl Axis {
             }
             for (port, subtitle) in ports {
                 if let Some(subtitle) = subtitle {
+                    if at > start + 20. {
+                        at += 8.;
+                    }
                     subtitles.push((at, subtitle));
-                    at += 16.;
+                    at += 20.;
                 }
                 offsets.push(at);
                 labels.push(port);
@@ -344,6 +368,7 @@ impl Layout {
         } else {
             (from_groups, from_lines, to_groups, to_lines)
         };
+        let row_name_chars = rows.groups.iter().map(|g| g.name.chars().count()).max().unwrap_or(0);
         let mut layout = Self {
             rows,
             cols,
@@ -362,7 +387,11 @@ impl Layout {
             revision: graph.epoch,
             swapped: options.swap,
             page,
-            row_header: if options.row_header == 0. { ROW_HEADER } else { options.row_header.max(MIN_ROW_HEADER) },
+            row_header: if options.row_header == 0. {
+                (105. + row_name_chars as f64 * 7.5).clamp(ROW_HEADER, 280.)
+            } else {
+                options.row_header.max(MIN_ROW_HEADER)
+            },
             column_header: if options.column_header == 0. {
                 COLUMN_HEADER
             } else {

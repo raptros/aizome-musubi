@@ -1305,10 +1305,29 @@ impl Program for Musubi {
                 .height(Fill)
                 .into()
             } else {
-                PatchMatrix::new(layout.clone(), self.matrix_focus.clone(), Msg::Matrix)
-                    .id("matrix")
-                    .width(Fill)
-                    .height(Fill)
+                PatchMatrix::new(
+                    layout.clone(),
+                    self.matrix_focus.clone(),
+                    self.selected.as_ref().and_then(|stable| match self.graph.resolve(stable) {
+                        crate::graph::identity::Resolution::Unique(id) => layout
+                            .row_lines
+                            .iter()
+                            .position(|line| line.ports.contains(&id))
+                            .map(|index| (false, index))
+                            .or_else(|| {
+                                layout
+                                    .col_lines
+                                    .iter()
+                                    .position(|line| line.ports.contains(&id))
+                                    .map(|index| (true, index))
+                            }),
+                        _ => None,
+                    }),
+                    Msg::Matrix,
+                )
+                .id("matrix")
+                .width(Fill)
+                .height(Fill)
             }
         } else {
             self.unavailable()

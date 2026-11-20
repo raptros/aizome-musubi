@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::Cell as SharedCell;
 use std::rc::Rc;
 
@@ -13,7 +12,7 @@ use aizome_kit::widget::{
 };
 use aizome_kit::{Align, Color, Element, FontSpec, Point, Rect, Role, Size, Vec2};
 
-use super::layout::{Cell, CellState, Kind, Layout, PITCH, elide};
+use super::layout::{Cell, CellState, Kind, Layout, MIN_COLUMN_HEADER, PITCH, elide};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MatrixMsg {
@@ -73,6 +72,7 @@ pub struct PatchMatrix {
     layout: Rc<Layout>,
     on_event: aizome_kit::element::MsgMap<MatrixMsg>,
     focused: Rc<SharedCell<Option<Cell>>>,
+    inspected: Option<(bool, usize)>,
     size: Size,
 }
 
@@ -128,6 +128,7 @@ impl PatchMatrix {
     pub fn new<Msg: Send + 'static>(
         layout: Rc<Layout>,
         focused: Rc<SharedCell<Option<Cell>>>,
+        inspected: Option<(bool, usize)>,
         f: impl Fn(MatrixMsg) -> Msg + 'static,
     ) -> Element<Msg> {
         let on_event = aizome_kit::element::MsgMap::new(f);
@@ -135,7 +136,7 @@ impl PatchMatrix {
             FocusedCell { layout: layout.clone(), focused: focused.clone(), on_event: on_event.clone() },
             vec![],
         );
-        Element::new(Self { layout, focused, size: Size::ZERO, on_event }, vec![child])
+        Element::new(Self { layout, focused, inspected, size: Size::ZERO, on_event }, vec![child])
     }
 
     fn view(&self, size: Size) -> (Rect, Rect, Rect, Rect) {
@@ -178,9 +179,9 @@ impl PatchMatrix {
                 .map(|(_, text)| text.as_str())
                 .collect::<Vec<_>>();
             return Some(if subtitles.is_empty() {
-                format!("{} · {}", title.name, title.detail)
+                format!("{} — {}", title.name, title.detail)
             } else {
-                format!("{} · {}", title.name, subtitles.join(" · "))
+                format!("{} — {}", title.name, subtitles.join(", "))
             });
         }
         let index = axis.at(along)?;
@@ -192,7 +193,7 @@ impl PatchMatrix {
             .map(|(_, text)| text.as_str())
             .unwrap_or(&title.detail);
         Some(format!(
-            "{} · {} · {} · {}",
+            "{} — {} · {} · {}",
             title.name,
             subtitle,
             axis.labels[index],
@@ -515,9 +516,10 @@ impl Widget for PatchMatrix {
         cx.canvas.save();
         cx.canvas.clip_rect(cols);
         let visible_cols = self.layout.cols.visible(offset.x, offset.x + body.width());
-        let group_end =
-            (cols.y1 - self.layout.cols.labels.iter().map(|s| s.chars().count()).max().unwrap_or(0) as f64 * 7. - 8.)
-                .max(44.);
+        let longest_port = self.layout.cols.labels.iter().map(|name| name.chars().count()).max().unwrap_or(0);
+        let port_tier = (longest_port.min(8) as f64 * 7. + 8.).min(64.);
+        let group_end = (cols.y1 - port_tier).max(76.);
+        let col_siblings: Vec<_> = self.layout.cols.groups.iter().map(|g| g.name.clone()).collect();
         for group in &self.layout.cols.groups {
             let x = body.x0 + group.start - offset.x;
             let width = group.finish - group.start;
@@ -531,14 +533,11 @@ impl Widget for PatchMatrix {
             cx.canvas.clip_rect(Rect::new(x + 3., 8., x + width - 3., group_end - 1.));
             cx.canvas.translate(Vec2::new(x + width / 2. - 4., group_end - 38.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-            let name = if group.midi_1 {
-                Cow::Owned(format!("{} · 1.0", group.name))
-            } else {
-                Cow::Borrowed(group.name.as_str())
-            };
-            let siblings: Vec<_> = self.layout.cols.groups.iter().map(|g| g.name.clone()).collect();
-            let text =
-                cx.layout_text(&elide(&name, &siblings, ((group_end - 48.) / 7.5).max(3.) as usize), &group_name, None);
+            let text = cx.layout_text(
+                &elide(&group.name, &col_siblings, ((group_end - 48.) / 7.5).max(3.) as usize),
+                &group_name,
+                None,
+            );
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
             group_icon(group.kind, &group.name).draw(
@@ -547,6 +546,12 @@ impl Widget for PatchMatrix {
                 14.,
                 t.text2(),
             );
+            if group.midi_1 {
+                let badge = Rect::new(x + width / 2. - 10., group_end - 36., x + width / 2. + 11., group_end - 23.);
+                cx.canvas.fill_rect(badge, t.chrome());
+                outline(cx, badge, t.line(), 1.);
+                cx.draw_text_in("1.0", &TextSpec::new(FontSpec::mono(8.), t.text2()), badge, Align::Center);
+            }
             if width >= 48.
                 && !group.detail.is_empty()
                 && !self.layout.cols.subtitles.iter().any(|(at, _)| *at >= group.start && *at < group.finish)
@@ -564,18 +569,25 @@ impl Widget for PatchMatrix {
             cx.canvas.save();
             cx.canvas.translate(Vec2::new(x + 20., cols.y1 - 6.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-            let spec = if hover.is_some_and(|h| h.col == col) { &strong } else { &label };
+            let spec = if hover.is_some_and(|h| h.col == col) || self.inspected == Some((true, col)) {
+                &strong
+            } else {
+                &label
+            };
             let text = cx.layout_text(
                 &elide(
                     &self.layout.cols.labels[col],
                     &self.layout.cols.labels,
-                    ((cols.y1 - group_end) / 7.).max(3.) as usize,
+                    ((cols.y1 - group_end - 8.) / 7.).max(3.) as usize,
                 ),
                 spec,
                 None,
             );
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
+            if self.inspected == Some((true, col)) {
+                cx.canvas.fill_rect(Rect::new(x + 2., group_end, x + 4., cols.y1), t.selection());
+            }
         }
         for (start, subtitle) in &self.layout.cols.subtitles {
             let x = body.x0 + start - offset.x;
@@ -592,6 +604,7 @@ impl Widget for PatchMatrix {
         cx.canvas.save();
         cx.canvas.clip_rect(rows);
         let visible_rows = self.layout.rows.visible(offset.y, offset.y + body.height());
+        let row_siblings: Vec<_> = self.layout.rows.groups.iter().map(|g| g.name.clone()).collect();
         for group in &self.layout.rows.groups {
             let y = body.y0 + group.start - offset.y;
             let height = group.finish - group.start;
@@ -601,10 +614,9 @@ impl Widget for PatchMatrix {
             cx.canvas.fill_rect(Rect::new(3., y, rows.x1 - 2., y + height), t.raised());
             cx.canvas.fill_rect(Rect::new(3., y, 6., y + height), kind_color(&t, group.kind));
             group_icon(group.kind, &group.name).draw(&mut cx.canvas, Point::new(9., y + 3.), 14., t.text2());
-            let name_end = if group.midi_1 { rows.x1 - 112. } else { rows.x1 - 72. };
-            let siblings: Vec<_> = self.layout.rows.groups.iter().map(|g| g.name.clone()).collect();
+            let name_end = rows.x1 - 72.;
             cx.draw_text_in(
-                &elide(&group.name, &siblings, ((name_end - 25.) / 7.5).max(3.) as usize),
+                &elide(&group.name, &row_siblings, ((name_end - 25.) / 7.5).max(3.) as usize),
                 &group_name,
                 Rect::new(25., y, name_end, y + 20.),
                 Align::Start,
@@ -629,13 +641,20 @@ impl Widget for PatchMatrix {
         }
         for row in visible_rows.clone() {
             let y = body.y0 + self.layout.rows.offsets[row] - offset.y;
-            let spec = if hover.is_some_and(|h| h.row == row) { &strong } else { &label };
+            let spec = if hover.is_some_and(|h| h.row == row) || self.inspected == Some((false, row)) {
+                &strong
+            } else {
+                &label
+            };
             cx.draw_text_in(
                 &elide(&self.layout.rows.labels[row], &self.layout.rows.labels, 8),
                 spec,
                 Rect::new(rows.x1 - 62., y, rows.x1 - 8., y + PITCH),
                 Align::Start,
             );
+            if self.inspected == Some((false, row)) {
+                cx.canvas.fill_rect(Rect::new(rows.x1 - 3., y, rows.x1 - 1., y + PITCH), t.selection());
+            }
         }
         cx.canvas.restore();
         cx.canvas.save();
@@ -667,13 +686,18 @@ impl Widget for PatchMatrix {
         cx.canvas.fill_rect(Rect::new(body.x0 - 1., 0., body.x0, size.height), t.line());
         cx.canvas.fill_rect(Rect::new(0., body.y0 - 1., size.width, body.y0), t.line());
         if let Some((tip, pos)) = cx.state::<State>().and_then(|s| s.tooltip.as_ref()) {
-            let width = (tip.chars().count() as f64 * 6.7 + 16.).clamp(180., (size.width - 8.).max(180.));
-            let x = (pos.x + 12.).min(size.width - width - 4.).max(4.);
-            let y = (pos.y + 16.).min(size.height - 42.).max(4.);
-            let rect = Rect::new(x, y, x + width, y + 36.);
+            let width = (tip.chars().count() as f64 * 5.8 + 14.).min(size.width - 8.);
+            let x = if pos.x < body.x0 {
+                (body.x0 + 8.).min(size.width - width - 4.)
+            } else {
+                (pos.x + 12.).min(size.width - width - 4.)
+            }
+            .max(4.);
+            let y = (pos.y + PITCH + 8.).min(size.height - 28.).max(4.);
+            let rect = Rect::new(x, y, x + width, y + 24.);
             cx.canvas.fill_rect(rect, t.raised());
             outline(cx, rect, t.line(), 1.);
-            cx.draw_text_in(tip, &TextSpec::new(FontSpec::ui(11.), t.text()), rect.inflate(-7., -5.), Align::Start);
+            cx.draw_text_in(tip, &TextSpec::new(FontSpec::ui(11.), t.text()), rect.inflate(-7., -3.), Align::Start);
         }
     }
 
@@ -704,7 +728,7 @@ impl Widget for PatchMatrix {
                 if let Some((row, origin, initial)) = cx.state::<State>().resizing {
                     let size = cx.size();
                     let value = (initial + (if row { pos.x } else { pos.y }) - origin).clamp(
-                        if row { 100. } else { 80. },
+                        if row { 100. } else { MIN_COLUMN_HEADER },
                         (if row { size.width } else { size.height } - 240.).max(0.),
                     );
                     self.notify(cx, MatrixMsg::HeaderSize(row, value));
