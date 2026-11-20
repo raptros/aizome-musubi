@@ -910,8 +910,8 @@ impl Program for Musubi {
             Msg::AddRoute => {
                 if self.route_sheet.is_none() {
                     self.route_sheet = Some(cx.show_sheet(self.window));
-                    self.route_from_filter.clear();
-                    self.route_to_filter.clear();
+                    self.route_from_filter = self.options[Self::index(self.page)].from.clone();
+                    self.route_to_filter = self.options[Self::index(self.page)].to.clone();
                     self.route_from = None;
                     self.route_to = None;
                     cx.focus("route-from-search");
