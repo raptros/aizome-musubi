@@ -245,6 +245,7 @@ fn long_status_keeps_both_endpoints_and_state() {
 #[derive(Clone)]
 struct ToolbarConfig {
     title: String,
+    short_title: String,
     page: Page,
     list: bool,
     pairs: bool,
@@ -267,9 +268,10 @@ impl Widget for ResponsiveToolbar {
 
     fn layout(&mut self, cx: &mut LayoutCx, bc: aizome_kit::Constraints) -> aizome_kit::Size {
         // Reserve both searches before deciding whether there is room for action labels.
-        let compact = bc.max.width < 990.;
+        let width = bc.max.width;
+        let compact = width < 990.;
         cx.clear_children();
-        let child = cx.add_child(toolbar_controls(&self.0, compact, bc.max.width < 850.).into_raw());
+        let child = cx.add_child(toolbar_controls(&self.0, compact, width < 760.).into_raw());
         cx.layout_child(child, bc);
         cx.place_child(child, aizome_kit::Point::ZERO);
         aizome_kit::Size::new(bc.max.width, cx.theme().metrics.toolbar)
@@ -279,8 +281,11 @@ impl Widget for ResponsiveToolbar {
 fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) -> Element<Msg> {
     let options = config;
     let mut controls: Vec<Element<Msg>> = Vec::new();
+    // Narrow windows keep the page and link count, dropping the port count;
+    // only very narrow ones drop the title.
     if !very_narrow {
-        controls.push(text(config.title.clone()).semibold().into());
+        let title = if compact { config.short_title.clone() } else { config.title.clone() };
+        controls.push(text(title).semibold().into());
     }
     controls.push(
         segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
@@ -1495,14 +1500,16 @@ impl Program for Musubi {
         } else {
             self.unavailable()
         };
-        let title =
-            format!("{} {ports} ports · {links} {}", self.page.title(), if links == 1 { "link" } else { "links" });
+        let links_text = format!("{links} {}", if links == 1 { "link" } else { "links" });
+        let title = format!("{} {ports} ports · {links_text}", self.page.title());
+        let short_title = format!("{} · {links_text}", self.page.title());
         let options = &self.options[Self::index(self.page)];
         let available = matches!(self.connection, Some(Connection::Up(_))) || self.matrix_spike.is_some();
         let has_ports = available && ports > 0;
         let controls: Element<Msg> = Element::new(
             ResponsiveToolbar(ToolbarConfig {
                 title,
+                short_title,
                 page: self.page,
                 list: options.list,
                 pairs: options.pairs,
