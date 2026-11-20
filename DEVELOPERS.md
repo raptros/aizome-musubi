@@ -29,13 +29,14 @@ artifacts belong under `runs/`, never in source control.
 
 ## Tests and evidence
 
-From `repos/sekka` in the contribution workspace:
+With `../sekka` beside this checkout, from `../sekka`:
 
 ```sh
-../../tools/heavy musubi-test -- ../../tools/nix-env nix develop .#aizome --no-update-lock-file -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/opt/aidan-stuff/Projects/sekka-stuff/runs/2026-11-02/209/r1/fonts cargo test --locked'
+nix build .#aizome-fonts --out-link /tmp/aizome-fonts
+nix develop .#aizome -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/tmp/aizome-fonts cargo test --locked'
 ```
 
-Use the actual pinned Aizome fonts directory from the workspace rather than
+(In the Sekka contribution workspace the same command runs under `tools/heavy … tools/nix-env`.) Use Sekka's pinned Aizome fonts rather than
 an arbitrary system font. `tests/app.rs` exercises the app in the kit's
 headless Harness with fixture graph data; `tests/matrix.rs` checks layout,
 input and exact redraws; graph/backend unit tests use `tests/fixtures/`.
