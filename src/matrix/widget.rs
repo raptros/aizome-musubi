@@ -387,6 +387,7 @@ impl Widget for PatchMatrix {
         cx.canvas.fill_rect(body, t.sunk());
         let caption = TextSpec::new(FontSpec::mono(11.), t.text2());
         let label = TextSpec::new(FontSpec::mono(11.), t.text3());
+        let detail = TextSpec::new(FontSpec::ui(11.), t.text3());
         let strong = TextSpec::new(FontSpec::mono(11.), t.text());
         let group_name = TextSpec::new(FontSpec { weight: 600., ..FontSpec::ui(12.5) }, t.text());
         cx.draw_text_in(
@@ -486,7 +487,7 @@ impl Widget for PatchMatrix {
                 cx.canvas.save();
                 cx.canvas.translate(Vec2::new(x + width / 2. + 9., group_end - 38.));
                 cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-                let text = cx.layout_text(&group.detail, &label, Some((group_end - 48.).max(0.)));
+                let text = cx.layout_text(&group.detail, &detail, Some((group_end - 48.).max(0.)));
                 cx.canvas.draw_text(&text, Point::ZERO);
                 cx.canvas.restore();
             }
@@ -515,7 +516,7 @@ impl Widget for PatchMatrix {
                 cx.canvas.save();
                 cx.canvas.translate(Vec2::new(x + 14., cols.y1 - 8.));
                 cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
-                let text = cx.layout_text(subtitle, &label, Some((cols.y1 - group_end).max(16.)));
+                let text = cx.layout_text(subtitle, &detail, Some((cols.y1 - group_end).max(16.)));
                 cx.canvas.draw_text(&text, Point::ZERO);
                 cx.canvas.restore();
             }
@@ -533,7 +534,7 @@ impl Widget for PatchMatrix {
             cx.canvas.fill_rect(Rect::new(3., y, rows.x1 - 2., y + height), t.raised());
             cx.canvas.fill_rect(Rect::new(3., y, 6., y + height), kind_color(&t, group.kind));
             group_icon(group.kind, &group.name).draw(&mut cx.canvas, Point::new(9., y + 3.), 14., t.text2());
-            let name_end = if group.midi_1 { rows.x1 - 95. } else { rows.x1 - 72. };
+            let name_end = if group.midi_1 { rows.x1 - 112. } else { rows.x1 - 72. };
             let siblings: Vec<_> = self.layout.rows.groups.iter().map(|g| g.name.clone()).collect();
             cx.draw_text_in(
                 &elide(&group.name, &siblings, ((name_end - 25.) / 7.5).max(3.) as usize),
@@ -542,7 +543,7 @@ impl Widget for PatchMatrix {
                 Align::Start,
             );
             if group.midi_1 {
-                let badge = Rect::new(99., y + 3., 121., y + 17.);
+                let badge = Rect::new(rows.x1 - 94., y + 3., rows.x1 - 72., y + 17.);
                 cx.canvas.fill_rect(badge, t.chrome());
                 outline(cx, badge, t.line(), 1.);
                 cx.draw_text_in("1.0", &TextSpec::new(FontSpec::mono(9.), t.text2()), badge, Align::Center);
@@ -550,13 +551,13 @@ impl Widget for PatchMatrix {
             if (group.end > group.first + 1 || group.kind == Kind::Application)
                 && !self.layout.rows.subtitles.iter().any(|(at, _)| *at >= group.start && *at < group.finish)
             {
-                cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., rows.x1 - 70., y + 38.), Align::Start);
+                cx.draw_text_in(&group.detail, &detail, Rect::new(25., y + 19., rows.x1 - 70., y + 38.), Align::Start);
             }
         }
         for (start, subtitle) in &self.layout.rows.subtitles {
             let y = body.y0 + start - offset.y;
             if y + 16. > rows.y0 && y < rows.y1 {
-                cx.draw_text_in(subtitle, &label, Rect::new(25., y, rows.x1 - 8., y + 16.), Align::Start);
+                cx.draw_text_in(subtitle, &detail, Rect::new(25., y, rows.x1 - 8., y + 16.), Align::Start);
             }
         }
         for row in visible_rows.clone() {

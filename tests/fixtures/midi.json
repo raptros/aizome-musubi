@@ -425,5 +425,37 @@
         ]
       }
     }
+  },
+  {
+    "id": 50, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 50, "object.serial": 10050, "node.id": 10, "port.direction": "out", "port.id": 50, "port.name": "capture_0", "port.alias": "Virtual Raw MIDI 0-0:VirMIDI 0-0", "port.group": "client_50", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-0"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 51, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 51, "object.serial": 10051, "node.id": 10, "port.direction": "in", "port.id": 51, "port.name": "playback_0", "port.alias": "Virtual Raw MIDI 0-0:VirMIDI 0-0", "port.group": "client_50", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-0"}, "direction": "input", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 52, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 52, "object.serial": 10052, "node.id": 10, "port.direction": "out", "port.id": 52, "port.name": "capture_1", "port.alias": "Virtual Raw MIDI 0-1:VirMIDI 0-1", "port.group": "client_51", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-1"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 53, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 53, "object.serial": 10053, "node.id": 10, "port.direction": "in", "port.id": 53, "port.name": "playback_1", "port.alias": "Virtual Raw MIDI 0-1:VirMIDI 0-1", "port.group": "client_51", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-1"}, "direction": "input", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 54, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 54, "object.serial": 10054, "node.id": 10, "port.direction": "out", "port.id": 54, "port.name": "capture_2", "port.alias": "Virtual Raw MIDI 0-2:VirMIDI 0-2", "port.group": "client_52", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-2"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 55, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 55, "object.serial": 10055, "node.id": 10, "port.direction": "in", "port.id": 55, "port.name": "playback_2", "port.alias": "Virtual Raw MIDI 0-2:VirMIDI 0-2", "port.group": "client_52", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-2"}, "direction": "input", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 56, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 56, "object.serial": 10056, "node.id": 10, "port.direction": "out", "port.id": 56, "port.name": "capture_3", "port.alias": "Virtual Raw MIDI 0-3:VirMIDI 0-3", "port.group": "client_53", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-3"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
+  },
+  {
+    "id": 57, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+    "info": {"change_mask": ["props"], "props": {"object.id": 57, "object.serial": 10057, "node.id": 10, "port.direction": "in", "port.id": 57, "port.name": "playback_3", "port.alias": "Virtual Raw MIDI 0-3:VirMIDI 0-3", "port.group": "client_53", "format.dsp": "8 bit raw midi", "api.alsa.seq.client.name": "Virtual Raw MIDI 0-3"}, "direction": "input", "params": {"EnumFormat": [{"mediaType": "application", "mediaSubtype": "control", "format": "Midi"}]}}
   }
 ]

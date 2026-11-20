@@ -732,7 +732,7 @@ impl Musubi {
                 if links.is_empty() {
                     continue;
                 }
-                body.push(caption(heading).into());
+                body.push(text(heading).mono().size(10.5).letter_spacing(1.2).caps().role(Role::Text3).into());
                 for link in links {
                     let other = if outgoing { link.input } else { link.output };
                     let name = routes::port_name(&self.graph, other);
@@ -750,7 +750,7 @@ impl Musubi {
                     );
                 }
             }
-            body.push(caption("FACTS").into());
+            body.push(text("FACTS").mono().size(10.5).letter_spacing(1.2).role(Role::Text3).into());
             let node = port.node_id.and_then(|id| self.graph.nodes.get(&id));
             let device = node.and_then(|node| node.device_id).and_then(|id| self.graph.devices.get(&id));
             let client = node.and_then(|node| node.client_id).and_then(|id| self.graph.clients.get(&id));
@@ -1318,6 +1318,7 @@ impl Program for Musubi {
                 .id("matrix-list")
                 .into(),
         ];
+        controls.push(spacer().width(10.).into());
         if self.page == Page::Audio {
             controls.push(
                 segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
