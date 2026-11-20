@@ -337,7 +337,11 @@ fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f
     };
     cx.canvas.fill_rect(
         square,
-        if matches!(state, CellState::Connected | CellState::Half) { t.selection() } else { t.sunk() },
+        match state {
+            CellState::Connected | CellState::Half => t.selection(),
+            CellState::Error => t.role(Role::Danger).with_alpha(0.20),
+            _ => t.sunk(),
+        },
     );
     if state == CellState::Asked {
         let width = if t.is_dark() { 1. } else { 1.5 };
@@ -362,9 +366,9 @@ fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f
             }
         }
         CellState::Error => {
-            outline(cx, square, edge, 2.);
-            let spec = TextSpec::new(FontSpec::mono(if size < 15. { 8. } else { 11. }), edge);
-            cx.draw_text_in("!", &spec, Rect::new(x + size - 8., y, x + size, y + 11.), Align::Center);
+            outline(cx, square.inflate(-2., -2.), edge, 2.);
+            let spec = TextSpec::new(FontSpec::mono(if size < 15. { 9. } else { 14. }), edge);
+            cx.draw_text_in("!", &spec, square.inflate(-3., -2.), Align::Center);
         }
         CellState::Asked => cx.canvas.fill_rect(
             Rect::new(x + (size - 6.) / 2., y + (size - 6.) / 2., x + (size + 6.) / 2., y + (size + 6.) / 2.),
@@ -454,7 +458,7 @@ impl Widget for PatchMatrix {
         cx.canvas.fill_rect(rows, t.chrome());
         cx.canvas.fill_rect(body, t.sunk());
         let caption = TextSpec::new(FontSpec::mono(11.), t.text2());
-        let label = TextSpec::new(FontSpec::mono(11.), t.text3());
+        let label = TextSpec::new(FontSpec::mono(11.), if t.is_dark() { t.text3() } else { t.text2() });
         let detail = TextSpec::new(FontSpec::ui(11.), t.text3());
         let strong = TextSpec::new(FontSpec::mono(11.), t.text());
         let group_name = TextSpec::new(FontSpec { weight: 600., ..FontSpec::ui(12.5) }, t.text());

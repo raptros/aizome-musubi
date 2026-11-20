@@ -4,7 +4,7 @@ use aizome_kit::{
     theme::ThemeChoice,
 };
 use aizome_kit::{
-    Point,
+    Point, Size,
     sidestep_ui::{Key, Modifiers, NamedKey, PointerButton},
 };
 use aizome_musubi::{
@@ -473,6 +473,9 @@ fn interaction_state_goldens() {
         h.click(w, p);
         h.move_to(w, p);
         assert_golden(&mut h, w, format!("tests/snapshots/audio-error-{mode}.png"), 1.);
+        let filter = h.find_id(w, "from-filter").unwrap();
+        h.click(w, Point::new(filter.x0 + 20., filter.y0 + filter.height() / 2.));
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-error-no-focus-{mode}.png"), 1.);
 
         let (mut h, fake) = make();
         let w = h.window();
@@ -481,6 +484,9 @@ fn interaction_state_goldens() {
         h.click(w, p);
         assert_eq!(h.program().layout(Page::Audio).unwrap().state(cell(&h, 100, 104).0), CellState::Asked);
         assert_golden(&mut h, w, format!("tests/snapshots/audio-asked-{mode}.png"), 1.);
+        let filter = h.find_id(w, "from-filter").unwrap();
+        h.click(w, Point::new(filter.x0 + 20., filter.y0 + filter.height() / 2.));
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-asked-no-focus-{mode}.png"), 1.);
 
         let (mut h, _) = make();
         let w = h.window();
@@ -642,6 +648,31 @@ fn empty_patchbay_in_night_and_day() {
         assert!(h.theme().has_ui_font(), "Run with AIZOME_FONT_DIR set to Sekka's fonts");
         let w = h.window();
         assert_golden(&mut h, w, format!("tests/snapshots/empty-{name}.png"), 1.);
+    }
+}
+
+#[test]
+fn narrow_toolbar_keeps_search_fields_readable() {
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+        let mut h = Harness::with(
+            Musubi::with_fake(fake),
+            Appearance { theme, reduced_motion: true, ..Appearance::default() },
+            true,
+        );
+        let w = h.window();
+        h.resize(w, Size::new(1040., 800.));
+        assert_golden(&mut h, w, format!("tests/snapshots/narrow-toolbar-{mode}.png"), 1.);
+        for id in ["from-filter", "to-filter"] {
+            assert!(h.find_id(w, id).unwrap().width() >= 140., "{id} shrank at 1040pt");
+        }
+        for id in ["monitors", "swap", "full-names", "undo"] {
+            assert!(h.find_id(w, id).is_some_and(|rect| rect.width() >= 20.), "{id} icon missing");
+        }
+        h.resize(w, Size::new(900., 800.));
+        for id in ["from-filter", "to-filter"] {
+            assert!(h.find_id(w, id).unwrap().width() >= 140., "{id} shrank at minimum width");
+        }
     }
 }
 

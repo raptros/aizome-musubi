@@ -184,7 +184,7 @@ pub fn sheet(
                         .id("route-from-search"),
                     container(
                         virtual_list(source.len(), 28., move |i| {
-                            container(text(sources[i].1.clone())).padding([0., 8.]).width(Fill)
+                            container(text(sources[i].1.clone())).padding([0., 8.]).align_y(Align::Center).width(Fill)
                         })
                         .selected(
                             source
@@ -218,7 +218,7 @@ pub fn sheet(
                         .id("route-to-search"),
                     container(
                         virtual_list(target.len(), 28., move |i| {
-                            container(text(targets[i].1.clone())).padding([0., 8.]).width(Fill)
+                            container(text(targets[i].1.clone())).padding([0., 8.]).align_y(Align::Center).width(Fill)
                         })
                         .selected(
                             target

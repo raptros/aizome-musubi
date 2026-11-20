@@ -15,7 +15,12 @@ use crate::{
     persistence, routes,
     undo::History,
 };
-use aizome_kit::{Rect, column, prelude::*, row};
+use aizome_kit::{
+    Rect, column,
+    prelude::*,
+    row,
+    widget::{LayoutCx, Widget},
+};
 use std::{
     array,
     cell::{Cell as SharedCell, RefCell},
@@ -177,29 +182,187 @@ pub struct Musubi {
 }
 
 fn fit_status(sentence: &str) -> String {
-    let (names, state) = sentence.rsplit_once(" · ").unwrap_or((sentence, ""));
-    let limit = 100usize.saturating_sub(state.chars().count() + if state.is_empty() { 0 } else { 3 }).max(3);
-    let chars: Vec<_> = names.chars().collect();
-    if chars.len() <= limit {
+    const LIMIT: usize = 100;
+    let Some((names, state)) = sentence.rsplit_once(" · ") else {
         return sentence.to_owned();
+    };
+    let Some((from, to)) = names.split_once(" → ") else {
+        return sentence.to_owned();
+    };
+    let strip_raw = |side: &str| {
+        side.split_once(" · ").map_or_else(
+            || side.to_owned(),
+            |(group, port)| format!("{group} · {}", port.split_once(" (").map_or(port, |(short, _)| short)),
+        )
+    };
+    let mut from = strip_raw(from);
+    let mut to = strip_raw(to);
+    let suffix = format!(" · {state}");
+    let size = |from: &str, to: &str| from.chars().count() + to.chars().count() + 3 + suffix.chars().count();
+    if size(&from, &to) <= LIMIT {
+        return format!("{from} → {to}{suffix}");
     }
-    let left = (limit - 1) / 2;
-    let names = format!(
-        "{}…{}",
-        chars[..left].iter().collect::<String>(),
-        chars[chars.len() - (limit - 1 - left)..].iter().collect::<String>()
-    );
-    if state.is_empty() { names } else { format!("{names} · {state}") }
+    // Keep both endpoints' group and port, shortening the longest individual name first.
+    let mut parts = [
+        from.split_once(" · ").map_or(from.clone(), |(group, _)| group.to_owned()),
+        from.split_once(" · ").map_or(String::new(), |(_, port)| port.to_owned()),
+        to.split_once(" · ").map_or(to.clone(), |(group, _)| group.to_owned()),
+        to.split_once(" · ").map_or(String::new(), |(_, port)| port.to_owned()),
+    ];
+    while size(&from, &to) > LIMIT {
+        let Some((index, longest)) = parts.iter().enumerate().max_by_key(|(_, part)| part.chars().count()) else {
+            break;
+        };
+        if longest.chars().count() <= 2 {
+            break;
+        }
+        let chars: Vec<_> = parts[index].chars().collect();
+        let keep = (chars.len() - 2) / 2;
+        parts[index] = format!(
+            "{}…{}",
+            chars[..keep].iter().collect::<String>(),
+            chars[chars.len() - keep..].iter().collect::<String>()
+        );
+        from = format!("{} · {}", parts[0], parts[1]);
+        to = format!("{} · {}", parts[2], parts[3]);
+    }
+    format!("{from} → {to}{suffix}")
 }
 
 #[cfg(test)]
 #[test]
-fn long_status_keeps_trailing_state() {
+fn long_status_keeps_both_endpoints_and_state() {
     let name = "Extraordinarily long audio stream title".repeat(8);
-    let result = fit_status(&format!("{name} → {name} · connected — click to disconnect"));
-    assert!(result.contains('…'));
+    let result = fit_status(&format!(
+        "{name} · FL (capture_AUX0) → {name} · FR (playback_FR) · connected — click to disconnect"
+    ));
+    assert!(result.contains(" · FL → ") && result.contains(" · FR · "));
+    assert!(!result.contains("capture_AUX0"));
     assert!(result.ends_with(" · connected — click to disconnect"));
     assert!(result.chars().count() <= 100);
+}
+
+#[derive(Clone)]
+struct ToolbarConfig {
+    title: String,
+    page: Page,
+    list: bool,
+    pairs: bool,
+    monitors: bool,
+    swap: bool,
+    full_names: bool,
+    show_midi_1: bool,
+    from: String,
+    to: String,
+    has_ports: bool,
+    can_undo: bool,
+}
+
+struct ResponsiveToolbar(ToolbarConfig);
+
+impl Widget for ResponsiveToolbar {
+    fn name(&self) -> &'static str {
+        "responsive-toolbar"
+    }
+
+    fn layout(&mut self, cx: &mut LayoutCx, bc: aizome_kit::Constraints) -> aizome_kit::Size {
+        // Reserve both searches before deciding whether there is room for action labels.
+        let compact = bc.max.width < 990.;
+        cx.clear_children();
+        let child = cx.add_child(toolbar_controls(&self.0, compact, bc.max.width < 850.).into_raw());
+        cx.layout_child(child, bc);
+        cx.place_child(child, aizome_kit::Point::ZERO);
+        aizome_kit::Size::new(bc.max.width, cx.theme().metrics.toolbar)
+    }
+}
+
+fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) -> Element<Msg> {
+    let options = config;
+    let mut controls: Vec<Element<Msg>> = Vec::new();
+    if !very_narrow {
+        controls.push(text(config.title.clone()).semibold().into());
+    }
+    controls.push(
+        segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
+            .on_select(|index| Msg::List(index == 1))
+            .enabled(config.has_ports)
+            .id("matrix-list")
+            .into(),
+    );
+    controls.push(spacer().width(10.).into());
+    if config.page == Page::Audio {
+        controls.push(
+            segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
+                .on_select(|index| Msg::Pairs(index == 0))
+                .enabled(config.has_ports)
+                .id("pairs-channels")
+                .into(),
+        );
+        controls.push(
+            if compact { icon_button(Icon::Headphones) } else { button("Monitors").icon(Icon::Headphones) }
+                .toolbar()
+                .selected(options.monitors)
+                .on_press(Msg::Monitors(!options.monitors))
+                .enabled(config.has_ports)
+                .tooltip("Show monitor ports")
+                .label("Monitors")
+                .id("monitors")
+                .into(),
+        );
+    }
+    if config.page == Page::Midi2 {
+        controls.push(
+            checkbox("Show MIDI 1.0", options.show_midi_1)
+                .on_toggle(Msg::ShowMidi1)
+                .enabled(config.has_ports)
+                .id("show-midi-1")
+                .into(),
+        );
+    }
+    controls.extend([
+        if compact { icon_button(Icon::ArrowLeftRight) } else { button("Swap").icon(Icon::ArrowLeftRight) }
+            .toolbar()
+            .selected(options.swap)
+            .on_press(Msg::Swap)
+            .enabled(config.has_ports)
+            .tooltip("Swap axes")
+            .label("Swap")
+            .id("swap")
+            .into(),
+        if compact { icon_button(Icon::Scan) } else { button("Full Names").icon(Icon::Scan) }
+            .toolbar()
+            .selected(options.full_names)
+            .on_press(Msg::FullNames)
+            .enabled(config.has_ports)
+            .tooltip("Show full names")
+            .label("Full Names")
+            .id("full-names")
+            .into(),
+        if compact { icon_button(Icon::Undo2) } else { button("Undo").icon(Icon::Undo2) }
+            .toolbar()
+            .on_press(Msg::Undo)
+            .enabled(config.can_undo)
+            .tooltip("Undo last route change")
+            .label("Undo")
+            .id("undo")
+            .into(),
+        spacer().into(),
+        search_field(&options.from)
+            .placeholder("From")
+            .on_change(Msg::From)
+            .enabled(config.has_ports)
+            .width(140.)
+            .id("from-filter")
+            .into(),
+        search_field(&options.to)
+            .placeholder("To")
+            .on_change(Msg::To)
+            .enabled(config.has_ports)
+            .width(140.)
+            .id("to-filter")
+            .into(),
+    ]);
+    toolbar(controls)
 }
 
 impl Musubi {
@@ -760,17 +923,17 @@ impl Musubi {
             let device = node.and_then(|node| node.device_id).and_then(|id| self.graph.devices.get(&id));
             let client = node.and_then(|node| node.client_id).and_then(|id| self.graph.clients.get(&id));
             let facts = [
-                ("Node name", node.and_then(|n| n.props.get("node.name"))),
-                ("Port name", port.props.get("port.name")),
+                ("Node", node.and_then(|n| n.props.get("node.name"))),
+                ("Port", port.props.get("port.name")),
                 ("Alias", port.props.get("port.alias")),
                 ("Channel", port.props.get("audio.channel")),
-                ("format.dsp", port.props.get("format.dsp")),
+                ("Format", port.props.get("format.dsp")),
                 (
                     "Device",
                     device.and_then(|d| d.props.get("device.description").or_else(|| d.props.get("device.name"))),
                 ),
                 ("Client", client.and_then(|c| c.props.get("application.name").or_else(|| c.props.get("client.name")))),
-                ("object.serial", port.props.get("object.serial")),
+                ("Serial", port.props.get("object.serial")),
             ];
             for (name, value) in facts {
                 body.push(text(name).size(11.).role(Role::Text3).into());
@@ -932,8 +1095,12 @@ impl Program for Musubi {
                     self.route_sheet = Some(cx.show_sheet(self.window));
                     self.route_from_filter = self.options[Self::index(self.page)].from.clone();
                     self.route_to_filter = self.options[Self::index(self.page)].to.clone();
-                    self.route_from = None;
-                    self.route_to = None;
+                    self.route_from = self.layout(self.page).and_then(|layout| {
+                        routes::endpoints(&self.graph, layout, true, &self.route_from_filter).first().map(|v| v.0)
+                    });
+                    self.route_to = self.layout(self.page).and_then(|layout| {
+                        routes::endpoints(&self.graph, layout, false, &self.route_to_filter).first().map(|v| v.0)
+                    });
                     cx.focus("route-from-search");
                 }
             }
@@ -1247,11 +1414,7 @@ impl Program for Musubi {
                         text(version).size(12.)
                     ]
                     .spacing(7.),
-                    if let Some(clock) = clock {
-                        Element::<Msg>::from(text(clock).size(10.).role(Role::Text3))
-                    } else {
-                        Element::<Msg>::from(spacer().height(0.))
-                    },
+                    text(clock.unwrap_or_else(|| "Defaults · unavailable".to_owned())).size(10.).role(Role::Text3),
                 ]
                 .spacing(3.),
             )
@@ -1337,70 +1500,24 @@ impl Program for Musubi {
         let options = &self.options[Self::index(self.page)];
         let available = matches!(self.connection, Some(Connection::Up(_))) || self.matrix_spike.is_some();
         let has_ports = available && ports > 0;
-        let mut controls: Vec<Element<Msg>> = vec![
-            text(title).semibold().into(),
-            segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
-                .on_select(|index| Msg::List(index == 1))
-                .enabled(has_ports)
-                .id("matrix-list")
-                .into(),
-        ];
-        controls.push(spacer().width(10.).into());
-        if self.page == Page::Audio {
-            controls.push(
-                segmented(["Pairs", "Channels"], if options.pairs { 0 } else { 1 })
-                    .on_select(|index| Msg::Pairs(index == 0))
-                    .enabled(has_ports)
-                    .id("pairs-channels")
-                    .into(),
-            );
-            controls.push(
-                checkbox("Monitors", options.monitors)
-                    .on_toggle(Msg::Monitors)
-                    .enabled(has_ports)
-                    .id("monitors")
-                    .into(),
-            );
-        }
-        if self.page == Page::Midi2 {
-            controls.push(
-                checkbox("Show MIDI 1.0", options.show_midi_1)
-                    .on_toggle(Msg::ShowMidi1)
-                    .enabled(has_ports)
-                    .id("show-midi-1")
-                    .into(),
-            );
-        }
-        controls.extend([
-            button("Swap").toolbar().on_press(Msg::Swap).enabled(has_ports).id("swap").into(),
-            checkbox("Full Names", options.full_names)
-                .on_toggle(|_| Msg::FullNames)
-                .enabled(has_ports)
-                .id("full-names")
-                .into(),
-            button("Undo")
-                .compact()
-                .on_press(Msg::Undo)
-                .enabled(self.history.undo_label(&self.transactions).is_some())
-                .id("undo")
-                .into(),
-            spacer().into(),
-            search_field(&options.from)
-                .placeholder("From")
-                .on_change(Msg::From)
-                .enabled(has_ports)
-                .width(125.)
-                .id("from-filter")
-                .into(),
-            search_field(&options.to)
-                .placeholder("To")
-                .on_change(Msg::To)
-                .enabled(has_ports)
-                .width(125.)
-                .id("to-filter")
-                .into(),
-        ]);
-        let controls = toolbar(controls);
+        let controls: Element<Msg> = Element::new(
+            ResponsiveToolbar(ToolbarConfig {
+                title,
+                page: self.page,
+                list: options.list,
+                pairs: options.pairs,
+                monitors: options.monitors,
+                swap: options.swap,
+                full_names: options.full_names,
+                show_midi_1: options.show_midi_1,
+                from: options.from.clone(),
+                to: options.to.clone(),
+                has_ports,
+                can_undo: self.history.undo_label(&self.transactions).is_some(),
+            }),
+            vec![],
+        )
+        .width(Fill);
         let status = if let Some(Connection::Down(error)) = &self.connection {
             error.clone()
         } else {
