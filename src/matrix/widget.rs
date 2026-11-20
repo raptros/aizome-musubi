@@ -5,7 +5,7 @@ use std::rc::Rc;
 use aizome_kit::element::MsgFn;
 use aizome_kit::hash::PaintHasher;
 use aizome_kit::layout::Constraints;
-use aizome_kit::sidestep_ui::{Key, NamedKey, PointerButton};
+use aizome_kit::sidestep_ui::{Cursor, Key, NamedKey, PointerButton};
 use aizome_kit::text::TextSpec;
 use aizome_kit::theme::Theme;
 use aizome_kit::widget::{
@@ -13,9 +13,9 @@ use aizome_kit::widget::{
 };
 use aizome_kit::{Align, Color, Element, FontSpec, Point, Rect, Role, Size, Vec2};
 
-use super::layout::{COLUMN_HEADER, Cell, CellState, Kind, Layout, PITCH, ROW_HEADER};
+use super::layout::{Cell, CellState, Kind, Layout, PITCH, elide};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MatrixMsg {
     Toggle(Cell),
     Line(Vec<Cell>, bool),
@@ -24,6 +24,8 @@ pub enum MatrixMsg {
     Select(Cell, bool),
     Context(Cell, bool),
     Inspect(Cell),
+    HeaderSize(bool, f64),
+    FitHeader(bool),
 }
 
 /// Inclusive raster line, independent of pointer sampling frequency.
@@ -61,6 +63,9 @@ struct State {
     keyboard_focus: bool,
     pressed: Option<Cell>,
     line: Option<(Cell, Cell)>,
+    resizing: Option<(bool, f64, f64)>,
+    hover_tip: Option<(String, Point)>,
+    tooltip: Option<(String, Point)>,
     layout: Option<Rc<Layout>>,
 }
 
@@ -68,6 +73,7 @@ pub struct PatchMatrix {
     layout: Rc<Layout>,
     on_event: aizome_kit::element::MsgMap<MatrixMsg>,
     focused: Rc<SharedCell<Option<Cell>>>,
+    size: Size,
 }
 
 impl PatchMatrix {
@@ -76,12 +82,12 @@ impl PatchMatrix {
         focused: Rc<SharedCell<Option<Cell>>>,
         f: impl Fn(MatrixMsg) -> Msg + 'static,
     ) -> Element<Msg> {
-        Element::new(Self { layout, focused, on_event: aizome_kit::element::MsgMap::new(f) }, vec![])
+        Element::new(Self { layout, focused, size: Size::ZERO, on_event: aizome_kit::element::MsgMap::new(f) }, vec![])
     }
 
-    fn view(size: Size) -> (Rect, Rect, Rect, Rect) {
-        let x = ROW_HEADER.min(size.width);
-        let y = COLUMN_HEADER.min(size.height);
+    fn view(&self, size: Size) -> (Rect, Rect, Rect, Rect) {
+        let x = self.layout.row_header.min((size.width - 240.).max(0.));
+        let y = self.layout.column_header.min((size.height - 240.).max(0.));
         (
             Rect::new(0., 0., x, y),
             Rect::new(x, 0., size.width, y),
@@ -89,9 +95,58 @@ impl PatchMatrix {
             Rect::new(x, y, size.width, size.height),
         )
     }
+    fn edge(&self, pos: Point, size: Size) -> Option<bool> {
+        let (_, _, _, body) = self.view(size);
+        if (pos.x - body.x0).abs() <= 12. && pos.y >= body.y0 {
+            Some(true)
+        } else if (pos.y - body.y0).abs() <= 12. && pos.x >= body.x0 {
+            Some(false)
+        } else {
+            None
+        }
+    }
+    fn header_tip(&self, pos: Point, st: &State) -> Option<String> {
+        let (_, cols, rows, body) = self.view(st.size);
+        let (axis, lines, along, group_area) = if rows.contains(pos) {
+            (&self.layout.rows, &self.layout.row_lines, pos.y - body.y0 + st.offset.y, pos.x < rows.x1 - 70.)
+        } else if cols.contains(pos) {
+            (&self.layout.cols, &self.layout.col_lines, pos.x - body.x0 + st.offset.x, pos.y < cols.y1 - 50.)
+        } else {
+            return None;
+        };
+        let title = axis.groups.iter().find(|group| along >= group.start && along < group.finish)?;
+        if group_area {
+            let subtitles = axis
+                .subtitles
+                .iter()
+                .filter(|(at, _)| *at >= title.start && *at < title.finish)
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>();
+            return Some(if subtitles.is_empty() {
+                format!("{} · {}", title.name, title.detail)
+            } else {
+                format!("{} · {}", title.name, subtitles.join(" · "))
+            });
+        }
+        let index = axis.at(along)?;
+        let subtitle = axis
+            .subtitles
+            .iter()
+            .rev()
+            .find(|(at, _)| *at >= title.start && *at <= axis.offsets[index])
+            .map(|(_, text)| text.as_str())
+            .unwrap_or(&title.detail);
+        Some(format!(
+            "{} · {} · {} · {}",
+            title.name,
+            subtitle,
+            axis.labels[index],
+            lines.get(index).map(|line| line.tooltip.as_str()).unwrap_or("")
+        ))
+    }
 
     fn cell(&self, pos: Point, st: &State) -> Option<Cell> {
-        let (_, _, _, body) = Self::view(st.size);
+        let (_, _, _, body) = self.view(st.size);
         if !body.contains(pos) {
             return None;
         }
@@ -103,7 +158,7 @@ impl PatchMatrix {
 
     fn damage_cell(&self, cx: &mut EventCx, cell: Cell) {
         let st = cx.state::<State>().clone();
-        let (_, col, row, body) = Self::view(st.size);
+        let (_, col, row, body) = self.view(st.size);
         let x = body.x0 + self.layout.cols.offsets[cell.col] - st.offset.x;
         let y = body.y0 + self.layout.rows.offsets[cell.row] - st.offset.y;
         // Include glyph antialiasing and the two adjacent cell boundaries;
@@ -129,7 +184,7 @@ impl PatchMatrix {
         if let Some(cell) = old.focused {
             self.damage_cell(cx, cell);
         }
-        let (_, col, row, body) = Self::view(size);
+        let (_, col, row, body) = self.view(size);
         let x = self.layout.cols.offsets[next.col];
         let y = self.layout.rows.offsets[next.row];
         let after = {
@@ -273,6 +328,7 @@ impl Widget for PatchMatrix {
             if bc.max.width.is_finite() { bc.max.width } else { 800. },
             if bc.max.height.is_finite() { bc.max.height } else { 600. },
         ));
+        self.size = size;
         let st = cx.state::<State>();
         if st.layout.as_ref().is_none_or(|previous| !Rc::ptr_eq(previous, &self.layout)) {
             let previous = st.layout.replace(self.layout.clone());
@@ -302,14 +358,15 @@ impl Widget for PatchMatrix {
             }
         }
         st.size = size;
-        st.offset.x = st.offset.x.clamp(0., (self.layout.cols.extent - (size.width - ROW_HEADER).max(0.)).max(0.));
-        st.offset.y = st.offset.y.clamp(0., (self.layout.rows.extent - (size.height - COLUMN_HEADER).max(0.)).max(0.));
+        let (_, _, _, body) = self.view(size);
+        st.offset.x = st.offset.x.clamp(0., (self.layout.cols.extent - body.width()).max(0.));
+        st.offset.y = st.offset.y.clamp(0., (self.layout.rows.extent - body.height()).max(0.));
         size
     }
 
     fn paint(&self, cx: &mut PaintCx) {
         let size = cx.size();
-        let (corner, cols, rows, body) = Self::view(size);
+        let (corner, cols, rows, body) = self.view(size);
         let (offset, hover, focus, keyboard, preview) =
             cx.state::<State>().map_or((Vec2::ZERO, None, None, false, None), |s| {
                 (s.offset, s.hovered, s.focused, s.keyboard_focus, s.line)
@@ -382,75 +439,125 @@ impl Widget for PatchMatrix {
         cx.canvas.save();
         cx.canvas.clip_rect(cols);
         let visible_cols = self.layout.cols.visible(offset.x, offset.x + body.width());
+        let group_end =
+            (cols.y1 - self.layout.cols.labels.iter().map(|s| s.chars().count()).max().unwrap_or(0) as f64 * 7. - 8.)
+                .max(44.);
         for group in &self.layout.cols.groups {
-            let x = body.x0 + self.layout.cols.offsets[group.first] - offset.x;
-            let width = self.layout.cols.offsets[group.end - 1] + PITCH - self.layout.cols.offsets[group.first];
+            let x = body.x0 + group.start - offset.x;
+            let width = group.finish - group.start;
             if x + width <= cols.x0 || x >= cols.x1 {
                 continue;
             }
-            cx.canvas.fill_rect(Rect::new(x + 2., 4., x + width - 2., 117.), t.raised());
+            // Group boxes meet the port-label band without a dead strip.
+            cx.canvas.fill_rect(Rect::new(x + 2., 4., x + width - 2., group_end), t.raised());
             cx.canvas.fill_rect(Rect::new(x + 2., 4., x + width - 2., 7.), kind_color(&t, group.kind));
             cx.canvas.save();
-            cx.canvas.clip_rect(Rect::new(x + 3., 8., x + width - 3., 116.));
-            cx.canvas.translate(Vec2::new(x + width / 2. - 4., 99.));
+            cx.canvas.clip_rect(Rect::new(x + 3., 8., x + width - 3., group_end - 1.));
+            cx.canvas.translate(Vec2::new(x + width / 2. - 4., group_end - 38.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
             let name = if group.midi_1 {
                 Cow::Owned(format!("{} · 1.0", group.name))
             } else {
                 Cow::Borrowed(group.name.as_str())
             };
-            let text = cx.layout_text(&name, &group_name, Some(86.));
+            let siblings: Vec<_> = self.layout.cols.groups.iter().map(|g| g.name.clone()).collect();
+            let text =
+                cx.layout_text(&elide(&name, &siblings, ((group_end - 48.) / 7.5).max(3.) as usize), &group_name, None);
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
             group_icon(group.kind, &group.name).draw(
                 &mut cx.canvas,
-                Point::new(x + width / 2. - 7., 98.),
+                Point::new(x + width / 2. - 7., group_end - 17.),
                 14.,
                 t.text2(),
             );
+            if width >= 48.
+                && !group.detail.is_empty()
+                && !self.layout.cols.subtitles.iter().any(|(at, _)| *at >= group.start && *at < group.finish)
+            {
+                cx.canvas.save();
+                cx.canvas.translate(Vec2::new(x + width / 2. + 9., group_end - 38.));
+                cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
+                let text = cx.layout_text(&group.detail, &label, Some((group_end - 48.).max(0.)));
+                cx.canvas.draw_text(&text, Point::ZERO);
+                cx.canvas.restore();
+            }
         }
         for col in visible_cols.clone() {
             let x = body.x0 + self.layout.cols.offsets[col] - offset.x;
             cx.canvas.save();
-            cx.canvas.translate(Vec2::new(x + 20., 174.));
+            cx.canvas.translate(Vec2::new(x + 20., cols.y1 - 6.));
             cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
             let spec = if hover.is_some_and(|h| h.col == col) { &strong } else { &label };
-            let text = cx.layout_text(&self.layout.cols.labels[col], spec, None);
+            let text = cx.layout_text(
+                &elide(
+                    &self.layout.cols.labels[col],
+                    &self.layout.cols.labels,
+                    ((cols.y1 - group_end) / 7.).max(3.) as usize,
+                ),
+                spec,
+                None,
+            );
             cx.canvas.draw_text(&text, Point::ZERO);
             cx.canvas.restore();
+        }
+        for (start, subtitle) in &self.layout.cols.subtitles {
+            let x = body.x0 + start - offset.x;
+            if x + 16. > cols.x0 && x < cols.x1 {
+                cx.canvas.save();
+                cx.canvas.translate(Vec2::new(x + 14., cols.y1 - 8.));
+                cx.canvas.rotate(-std::f64::consts::FRAC_PI_2);
+                let text = cx.layout_text(subtitle, &label, Some((cols.y1 - group_end).max(16.)));
+                cx.canvas.draw_text(&text, Point::ZERO);
+                cx.canvas.restore();
+            }
         }
         cx.canvas.restore();
         cx.canvas.save();
         cx.canvas.clip_rect(rows);
         let visible_rows = self.layout.rows.visible(offset.y, offset.y + body.height());
         for group in &self.layout.rows.groups {
-            let y = body.y0 + self.layout.rows.offsets[group.first] - offset.y;
-            let height = self.layout.rows.offsets[group.end - 1] + PITCH - self.layout.rows.offsets[group.first];
+            let y = body.y0 + group.start - offset.y;
+            let height = group.finish - group.start;
             if y + height <= rows.y0 || y >= rows.y1 {
                 continue;
             }
             cx.canvas.fill_rect(Rect::new(3., y, rows.x1 - 2., y + height), t.raised());
             cx.canvas.fill_rect(Rect::new(3., y, 6., y + height), kind_color(&t, group.kind));
             group_icon(group.kind, &group.name).draw(&mut cx.canvas, Point::new(9., y + 3.), 14., t.text2());
-            let name_end = if group.midi_1 { 97. } else { 120. };
-            cx.draw_text_in(&group.name, &group_name, Rect::new(25., y, name_end, y + 20.), Align::Start);
+            let name_end = if group.midi_1 { rows.x1 - 95. } else { rows.x1 - 72. };
+            let siblings: Vec<_> = self.layout.rows.groups.iter().map(|g| g.name.clone()).collect();
+            cx.draw_text_in(
+                &elide(&group.name, &siblings, ((name_end - 25.) / 7.5).max(3.) as usize),
+                &group_name,
+                Rect::new(25., y, name_end, y + 20.),
+                Align::Start,
+            );
             if group.midi_1 {
                 let badge = Rect::new(99., y + 3., 121., y + 17.);
                 cx.canvas.fill_rect(badge, t.chrome());
                 outline(cx, badge, t.line(), 1.);
                 cx.draw_text_in("1.0", &TextSpec::new(FontSpec::mono(9.), t.text2()), badge, Align::Center);
             }
-            if group.end > group.first + 1 {
-                cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., 120., y + 38.), Align::Start);
+            if (group.end > group.first + 1 || group.kind == Kind::Application)
+                && !self.layout.rows.subtitles.iter().any(|(at, _)| *at >= group.start && *at < group.finish)
+            {
+                cx.draw_text_in(&group.detail, &label, Rect::new(25., y + 19., rows.x1 - 70., y + 38.), Align::Start);
+            }
+        }
+        for (start, subtitle) in &self.layout.rows.subtitles {
+            let y = body.y0 + start - offset.y;
+            if y + 16. > rows.y0 && y < rows.y1 {
+                cx.draw_text_in(subtitle, &label, Rect::new(25., y, rows.x1 - 8., y + 16.), Align::Start);
             }
         }
         for row in visible_rows.clone() {
             let y = body.y0 + self.layout.rows.offsets[row] - offset.y;
             let spec = if hover.is_some_and(|h| h.row == row) { &strong } else { &label };
             cx.draw_text_in(
-                &self.layout.rows.labels[row],
+                &elide(&self.layout.rows.labels[row], &self.layout.rows.labels, 8),
                 spec,
-                Rect::new(124., y, rows.x1 - 8., y + PITCH),
+                Rect::new(rows.x1 - 62., y, rows.x1 - 8., y + PITCH),
                 Align::Start,
             );
         }
@@ -481,8 +588,17 @@ impl Widget for PatchMatrix {
             }
         }
         cx.canvas.restore();
-        cx.canvas.fill_rect(Rect::new(ROW_HEADER - 1., 0., ROW_HEADER, size.height), t.line());
-        cx.canvas.fill_rect(Rect::new(0., COLUMN_HEADER - 1., size.width, COLUMN_HEADER), t.line());
+        cx.canvas.fill_rect(Rect::new(body.x0 - 1., 0., body.x0, size.height), t.line());
+        cx.canvas.fill_rect(Rect::new(0., body.y0 - 1., size.width, body.y0), t.line());
+        if let Some((tip, pos)) = cx.state::<State>().and_then(|s| s.tooltip.as_ref()) {
+            let width = (tip.chars().count() as f64 * 6.7 + 16.).clamp(180., (size.width - 8.).max(180.));
+            let x = (pos.x + 12.).min(size.width - width - 4.).max(4.);
+            let y = (pos.y + 16.).min(size.height - 42.).max(4.);
+            let rect = Rect::new(x, y, x + width, y + 36.);
+            cx.canvas.fill_rect(rect, t.raised());
+            outline(cx, rect, t.line(), 1.);
+            cx.draw_text_in(tip, &TextSpec::new(FontSpec::ui(11.), t.text()), rect.inflate(-7., -5.), Align::Start);
+        }
     }
 
     fn hash(&self, h: &mut PaintHasher) {
@@ -509,12 +625,33 @@ impl Widget for PatchMatrix {
     fn event(&mut self, cx: &mut EventCx, event: &Event) -> Status {
         match event {
             Event::PointerMove { pos, .. } => {
+                if let Some((row, origin, initial)) = cx.state::<State>().resizing {
+                    let size = cx.size();
+                    let value = (initial + (if row { pos.x } else { pos.y }) - origin).clamp(
+                        if row { 100. } else { 80. },
+                        (if row { size.width } else { size.height } - 240.).max(0.),
+                    );
+                    self.notify(cx, MatrixMsg::HeaderSize(row, value));
+                    return Status::Handled;
+                }
+                cx.set_cursor(match self.edge(*pos, cx.size()) {
+                    Some(true) => Cursor::ColResize,
+                    Some(false) => Cursor::RowResize,
+                    None => Cursor::Default,
+                });
+                let next_tip = self.header_tip(*pos, cx.state::<State>());
+                if cx.state::<State>().hover_tip.as_ref().map(|(text, _)| text.as_str()) != next_tip.as_deref() {
+                    cx.state::<State>().tooltip = None;
+                    cx.state::<State>().hover_tip = next_tip.map(|text| (text, *pos));
+                    cx.set_timer(1, std::time::Duration::from_millis(650));
+                    cx.invalidate();
+                }
                 let pressed = cx.state::<State>().pressed;
                 if let Some(start) = pressed {
                     if let Some(end) = self.cell(*pos, cx.state::<State>()) {
                         if start != end {
                             cx.state::<State>().line = Some((start, end));
-                            cx.invalidate_rect(Self::view(cx.size()).3);
+                            cx.invalidate_rect(self.view(cx.size()).3);
                         }
                     }
                 }
@@ -533,13 +670,37 @@ impl Widget for PatchMatrix {
                 Status::Handled
             }
             Event::PointerLeave => {
+                cx.set_cursor(Cursor::Default);
+                cx.cancel_timer(1);
+                cx.state::<State>().hover_tip = None;
+                cx.state::<State>().tooltip = None;
+                cx.invalidate();
                 if let Some(old) = cx.state::<State>().hovered.take() {
                     self.damage_cell(cx, old);
                     self.notify(cx, MatrixMsg::Hover(None));
                 }
                 Status::Handled
             }
-            Event::PointerDown { pos, button: PointerButton::Left, .. } => {
+            Event::Timer(1) => {
+                let tip = cx.state::<State>().hover_tip.clone();
+                cx.state::<State>().tooltip = tip;
+                cx.invalidate();
+                Status::Handled
+            }
+            Event::PointerDown { pos, button: PointerButton::Left, clicks, .. } => {
+                if let Some(row) = self.edge(*pos, cx.size()) {
+                    if *clicks >= 2 {
+                        self.notify(cx, MatrixMsg::FitHeader(row));
+                    } else {
+                        cx.state::<State>().resizing = Some((
+                            row,
+                            if row { pos.x } else { pos.y },
+                            if row { self.layout.row_header } else { self.layout.column_header },
+                        ));
+                        cx.capture_pointer();
+                    }
+                    return Status::Handled;
+                }
                 if let Some(c) = self.cell(*pos, cx.state::<State>()) {
                     cx.request_focus();
                     cx.capture_pointer();
@@ -547,7 +708,7 @@ impl Widget for PatchMatrix {
                     cx.state::<State>().pressed = Some(c);
                 } else {
                     let st = cx.state::<State>();
-                    let (_, columns, rows, _) = Self::view(st.size);
+                    let (_, columns, rows, _) = self.view(st.size);
                     if rows.contains(*pos) {
                         if let Some(row) = self.layout.rows.at(pos.y - rows.y0 + st.offset.y) {
                             self.notify(cx, MatrixMsg::Select(Cell { row, col: 0 }, false));
@@ -561,12 +722,16 @@ impl Widget for PatchMatrix {
                 Status::Handled
             }
             Event::PointerUp { pos, button: PointerButton::Left, .. } => {
+                if cx.state::<State>().resizing.take().is_some() {
+                    cx.release_pointer();
+                    return Status::Handled;
+                }
                 let start = cx.state::<State>().pressed.take();
                 cx.release_pointer();
                 if let Some(start) = start {
                     let end = self.cell(*pos, cx.state::<State>()).unwrap_or(start);
                     cx.state::<State>().line = None;
-                    cx.invalidate_rect(Self::view(cx.size()).3);
+                    cx.invalidate_rect(self.view(cx.size()).3);
                     if start == end {
                         self.notify(cx, MatrixMsg::Toggle(start));
                     } else {
@@ -580,7 +745,7 @@ impl Widget for PatchMatrix {
             }
             Event::PointerDown { pos, button: PointerButton::Right, .. } => {
                 let st = cx.state::<State>();
-                let (_, columns, rows, _) = Self::view(st.size);
+                let (_, columns, rows, _) = self.view(st.size);
                 let cell = self
                     .cell(*pos, st)
                     .map(|cell| (cell, false))
@@ -611,7 +776,7 @@ impl Widget for PatchMatrix {
                 Status::Handled
             }
             Event::Scroll { delta, .. } => {
-                let (corner, col, row, body) = Self::view(cx.size());
+                let (corner, col, row, body) = self.view(cx.size());
                 let (before, after) = {
                     let st = cx.state::<State>();
                     let before = st.offset;
@@ -644,7 +809,7 @@ impl Widget for PatchMatrix {
                 let mut next = current;
                 let row_count = self.layout.rows.labels.len();
                 let col_count = self.layout.cols.labels.len();
-                let page = ((cx.size().height - COLUMN_HEADER) / PITCH).floor().max(1.) as usize;
+                let page = (self.view(cx.size()).3.height() / PITCH).floor().max(1.) as usize;
                 match &k.key {
                     Key::Named(NamedKey::ArrowLeft) => {
                         next.col = if k.modifiers.alt() {
@@ -683,12 +848,12 @@ impl Widget for PatchMatrix {
                     {
                         cx.state::<State>().line = None;
                         cx.state::<State>().pressed = None;
-                        cx.invalidate_rect(Self::view(cx.size()).3);
+                        cx.invalidate_rect(self.view(cx.size()).3);
                         return Status::Handled;
                     }
                     Key::Character(s) if s == " " => {
                         if let Some((start, end)) = cx.state::<State>().line.take() {
-                            cx.invalidate_rect(Self::view(cx.size()).3);
+                            cx.invalidate_rect(self.view(cx.size()).3);
                             self.notify(
                                 cx,
                                 MatrixMsg::Line(
@@ -698,7 +863,7 @@ impl Widget for PatchMatrix {
                             );
                         } else if k.modifiers.shift() {
                             cx.state::<State>().line = Some((current, current));
-                            cx.invalidate_rect(Self::view(cx.size()).3);
+                            cx.invalidate_rect(self.view(cx.size()).3);
                         } else {
                             self.notify(cx, MatrixMsg::Toggle(current));
                         }
@@ -713,7 +878,7 @@ impl Widget for PatchMatrix {
                 self.focus_cell(cx, next);
                 if let Some((start, _)) = cx.state::<State>().line {
                     cx.state::<State>().line = Some((start, next));
-                    cx.invalidate_rect(Self::view(cx.size()).3);
+                    cx.invalidate_rect(self.view(cx.size()).3);
                 }
                 Status::Handled
             }
@@ -758,6 +923,6 @@ impl Widget for PatchMatrix {
     }
 
     fn parts(&self) -> Vec<(String, Rect)> {
-        Vec::new()
+        vec![("body".into(), self.view(self.size).3)]
     }
 }

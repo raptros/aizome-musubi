@@ -13,6 +13,62 @@ pub const PITCH: f64 = 24.0;
 pub const GAP: f64 = 8.0;
 pub const ROW_HEADER: f64 = 188.0;
 pub const COLUMN_HEADER: f64 = 180.0;
+pub const MIN_ROW_HEADER: f64 = 100.;
+pub const MIN_COLUMN_HEADER: f64 = 80.;
+/// Prefer the distinguishing suffix of sibling names when a shared prefix
+/// ends at a word or punctuation boundary; otherwise truncate at the end.
+pub fn elide(name: &str, siblings: &[String], max_chars: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= max_chars {
+        return name.to_owned();
+    }
+    if max_chars <= 1 {
+        return "…".to_owned();
+    }
+    let shared = siblings
+        .iter()
+        .filter(|other| other.as_str() != name)
+        .map(|other| chars.iter().zip(other.chars()).take_while(|(a, b)| **a == *b).count())
+        .max()
+        .unwrap_or(0);
+    let boundary = (1..=shared.min(chars.len().saturating_sub(3)))
+        .filter_map(|n| {
+            if chars[n - 1].is_whitespace() {
+                Some(n)
+            } else if !chars[n - 1].is_alphanumeric() {
+                Some(n - 1)
+            } else if chars[n].is_whitespace() {
+                Some(n + 1)
+            } else if !chars[n].is_alphanumeric() {
+                Some(n)
+            } else {
+                None
+            }
+        })
+        .find(|&n| chars.len() - n + 1 <= max_chars);
+    if let Some(n) = boundary {
+        let suffix = &chars[n..];
+        if suffix.len() >= 3 && suffix.len() < chars.len() && suffix.len() + 1 <= max_chars {
+            return format!("…{}", suffix.iter().collect::<String>());
+        }
+    }
+    format!("{}…", chars[..max_chars - 1].iter().collect::<String>())
+}
+
+#[cfg(test)]
+mod elision_tests {
+    use super::elide;
+
+    #[test]
+    fn sibling_prefix_and_fallback() {
+        let siblings: Vec<String> = vec!["musubi-vm-default".into(), "musubi-vm-patch".into()];
+        assert_eq!(elide(&siblings[1], &siblings, 9), "…-patch");
+        let midi: Vec<String> = vec!["Virtual Raw MIDI 0-0".into(), "Virtual Raw MIDI 0-1".into()];
+        assert_eq!(elide(&midi[0], &midi, 10), "…MIDI 0-0");
+        assert_eq!(elide("Long unique label", &siblings, 8), "Long un…");
+        assert_eq!(elide("abc", &siblings, 2), "a…");
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Cell {
@@ -56,6 +112,8 @@ pub struct Group {
     pub detail: String,
     pub kind: Kind,
     pub first: usize,
+    pub start: f64,
+    pub finish: f64,
     pub end: usize,
     pub key: Option<GroupKey>,
     pub collapsed: bool,
@@ -68,6 +126,7 @@ pub struct Axis {
     pub labels: Vec<String>,
     pub offsets: Vec<f64>,
     pub extent: f64,
+    pub subtitles: Vec<(f64, String)>,
 }
 
 impl Axis {
@@ -75,13 +134,17 @@ impl Axis {
         Self::from_groups(
             groups
                 .into_iter()
-                .map(|(name, detail, kind, labels)| (name, detail, kind, None, false, false, labels))
+                .map(|(name, detail, kind, labels)| {
+                    (name, detail, kind, None, false, false, labels.into_iter().map(|label| (label, None)).collect())
+                })
                 .collect(),
         )
     }
 
-    fn from_groups(groups: Vec<(String, String, Kind, Option<GroupKey>, bool, bool, Vec<String>)>) -> Self {
-        let (mut entries, mut labels, mut offsets) = (Vec::new(), Vec::new(), Vec::new());
+    fn from_groups(
+        groups: Vec<(String, String, Kind, Option<GroupKey>, bool, bool, Vec<(String, Option<String>)>)>,
+    ) -> Self {
+        let (mut entries, mut labels, mut offsets, mut subtitles) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let mut at = 0.0;
         for (name, detail, kind, key, collapsed, midi_1, ports) in groups {
             if ports.is_empty() {
@@ -91,14 +154,37 @@ impl Axis {
                 at += GAP;
             }
             let first = labels.len();
-            for port in ports {
+            let start = at;
+            let multi_stream = ports.iter().filter(|(_, subtitle)| subtitle.is_some()).count() > 1;
+            if multi_stream {
+                at += 20.;
+            }
+            for (port, subtitle) in ports {
+                if let Some(subtitle) = subtitle {
+                    subtitles.push((at, subtitle));
+                    at += 16.;
+                }
                 offsets.push(at);
                 labels.push(port);
                 at += PITCH;
             }
-            entries.push(Group { name, detail, kind, first, end: labels.len(), key, collapsed, midi_1 });
+            if kind == Kind::Application && !detail.is_empty() && labels.len() == first + 1 {
+                at += 16.;
+            }
+            entries.push(Group {
+                name,
+                detail,
+                kind,
+                first,
+                end: labels.len(),
+                key,
+                collapsed,
+                midi_1,
+                start,
+                finish: at,
+            });
         }
-        Self { groups: entries, labels, offsets, extent: at }
+        Self { groups: entries, labels, offsets, extent: at, subtitles }
     }
 
     pub fn at(&self, p: f64) -> Option<usize> {
@@ -132,6 +218,7 @@ pub struct Line {
     pub kind: PortKind,
     pub video_family: Option<String>,
     pub collapsed: bool,
+    pub tooltip: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -141,6 +228,9 @@ pub struct ViewOptions {
     pub monitors: bool,
     pub show_midi_1: bool,
     pub list: bool,
+    pub row_header: f64,
+    pub column_header: f64,
+    pub full_names: bool,
     pub from: String,
     pub to: String,
     pub folded: HashSet<GroupKey>,
@@ -161,9 +251,31 @@ pub struct Layout {
     pub revision: u64,
     pub page: Page,
     pub swapped: bool,
+    pub row_header: f64,
+    pub column_header: f64,
 }
 
 impl Layout {
+    pub fn fitted_headers(&self) -> (f64, f64) {
+        let row = self.rows.groups.iter().map(|g| g.name.chars().count()).max().unwrap_or(0);
+        let row_detail = self.rows.groups.iter().map(|g| g.detail.chars().count()).max().unwrap_or(0);
+        let row_label = self.rows.labels.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+        let row_subtitle = self.rows.subtitles.iter().map(|(_, s)| s.chars().count()).max().unwrap_or(0);
+        let col = self.cols.groups.iter().map(|g| g.name.chars().count()).max().unwrap_or(0);
+        let col_detail = self.cols.groups.iter().map(|g| g.detail.chars().count()).max().unwrap_or(0);
+        let col_subtitle = self.cols.subtitles.iter().map(|(_, s)| s.chars().count()).max().unwrap_or(0);
+        let col_label = self.cols.labels.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+        (
+            (25. + row as f64 * 7.5 + row_label as f64 * 7. + 20.)
+                .max(97. + row as f64 * 7.5)
+                .max(95. + row_detail as f64 * 7.)
+                .max(33. + row_subtitle as f64 * 7.)
+                .max(MIN_ROW_HEADER),
+            (48. + col.max(col_detail).max(col_subtitle) as f64 * 7.5 + col_label as f64 * 7. + 26.)
+                .max(MIN_COLUMN_HEADER),
+        )
+    }
+
     pub fn state(&self, cell: Cell) -> CellState {
         if let Some(&state) = self.cells.get(&cell) {
             return state;
@@ -232,7 +344,7 @@ impl Layout {
         } else {
             (from_groups, from_lines, to_groups, to_lines)
         };
-        Self {
+        let mut layout = Self {
             rows,
             cols,
             row_lines,
@@ -250,7 +362,17 @@ impl Layout {
             revision: graph.epoch,
             swapped: options.swap,
             page,
+            row_header: if options.row_header == 0. { ROW_HEADER } else { options.row_header.max(MIN_ROW_HEADER) },
+            column_header: if options.column_header == 0. {
+                COLUMN_HEADER
+            } else {
+                options.column_header.max(MIN_COLUMN_HEADER)
+            },
+        };
+        if options.full_names {
+            (layout.row_header, layout.column_header) = layout.fitted_headers();
         }
+        layout
     }
 
     fn axis_from_graph(
@@ -308,12 +430,24 @@ impl Layout {
             if collapsed {
                 let first = graph::group::port_label(&graph.ports[&filtered[0]]);
                 let last = graph::group::port_label(&graph.ports[filtered.last().expect("nonempty")]);
-                labels.push(if filtered.len() == 1 { format!("{first} ▸") } else { format!("{first}–{last} ▸") });
-                lines.push(Self::line(graph, filtered, true));
+                labels
+                    .push((if filtered.len() == 1 { format!("{first} ▸") } else { format!("{first}–{last} ▸") }, None));
+                lines.push(Self::line(graph, filtered.clone(), true));
             } else {
                 let mut index = 0;
+                let first_node = graph.ports[&filtered[0]].node_id;
+                let multi_stream = matches!(group.key, GroupKey::Client(_))
+                    && filtered.iter().any(|id| graph.ports[id].node_id != first_node);
+                let mut previous_stream = None;
                 while index < filtered.len() {
                     let a = filtered[index];
+                    let node = graph.ports[&a].node_id;
+                    let subtitle = if multi_stream && node != previous_stream {
+                        node.map(|id| graph::group::stream_subtitle(graph, id))
+                    } else {
+                        None
+                    };
+                    previous_stream = node;
                     if options.pairs
                         && index + 1 < filtered.len()
                         && classify::is_stereo_pair(
@@ -323,11 +457,11 @@ impl Layout {
                             graph.kind(filtered[index + 1]).unwrap_or(PortKind::Other),
                         )
                     {
-                        labels.push("L·R".to_owned());
+                        labels.push(("L·R".to_owned(), subtitle));
                         lines.push(Self::line(graph, vec![a, filtered[index + 1]], false));
                         index += 2;
                     } else {
-                        labels.push(graph::group::port_label(&graph.ports[&a]));
+                        labels.push((graph::group::port_label(&graph.ports[&a]), subtitle));
                         lines.push(Self::line(graph, vec![a], false));
                         index += 1;
                     }
@@ -335,7 +469,16 @@ impl Layout {
             }
             groups.push((
                 group.label,
-                format!("{port_count} ports"),
+                if matches!(group.key, GroupKey::Client(_))
+                    && filtered.iter().all(|id| graph.ports[id].node_id == graph.ports[&filtered[0]].node_id)
+                {
+                    graph.ports[&filtered[0]]
+                        .node_id
+                        .map(|id| graph::group::stream_subtitle(graph, id))
+                        .unwrap_or_default()
+                } else {
+                    format!("{port_count} ports")
+                },
                 group.kind.into(),
                 Some(group.key),
                 collapsed,
@@ -349,6 +492,19 @@ impl Layout {
     fn line(graph: &Graph, ports: Vec<GlobalId>, collapsed: bool) -> Line {
         let first = &graph.ports[&ports[0]];
         Line {
+            tooltip: ports
+                .iter()
+                .map(|id| {
+                    let port = &graph.ports[id];
+                    let node = port.node_id.map(|id| graph::group::stream_subtitle(graph, id)).unwrap_or_default();
+                    format!(
+                        "{node} · {} · {}",
+                        port.props.get("port.name").map(String::as_str).unwrap_or(""),
+                        port.props.get("port.alias").map(String::as_str).unwrap_or("")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" / "),
             kind: graph.kind(first.id).unwrap_or(PortKind::Other),
             video_family: first
                 .props
@@ -418,6 +574,8 @@ impl Layout {
             revision: 1,
             swapped: false,
             page: Page::Audio,
+            row_header: ROW_HEADER,
+            column_header: COLUMN_HEADER,
         }
     }
 }

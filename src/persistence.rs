@@ -37,13 +37,28 @@ pub fn load_options() -> [ViewOptions; 4] {
         }
         let Some((key, value)) = line.split_once(" = ") else { continue };
         let Some(index) = page else { continue };
-        let value = value == "true";
+        let enabled = value == "true";
         match key {
-            "pairs" => options[index].pairs = value,
-            "swap" => options[index].swap = value,
-            "monitors" => options[index].monitors = value,
-            "show_midi_1" => options[index].show_midi_1 = value,
-            "list" => options[index].list = value,
+            "pairs" => options[index].pairs = enabled,
+            "swap" => options[index].swap = enabled,
+            "monitors" => options[index].monitors = enabled,
+            "show_midi_1" => options[index].show_midi_1 = enabled,
+            "list" => options[index].list = enabled,
+            "full_names" => options[index].full_names = enabled,
+            "row_header" => {
+                if let Ok(size) = value.parse::<f64>() {
+                    if size.is_finite() && size >= 100. {
+                        options[index].row_header = size;
+                    }
+                }
+            }
+            "column_header" => {
+                if let Ok(size) = value.parse::<f64>() {
+                    if size.is_finite() && size >= 80. {
+                        options[index].column_header = size;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -54,8 +69,9 @@ pub fn save_options(options: &[ViewOptions; 4]) -> std::io::Result<()> {
     let mut body = String::new();
     for (name, option) in ["audio", "midi", "midi2", "video"].into_iter().zip(options) {
         body.push_str(&format!(
-            "[{name}]\npairs = {}\nswap = {}\nmonitors = {}\nshow_midi_1 = {}\nlist = {}\n\n",
-            option.pairs, option.swap, option.monitors, option.show_midi_1, option.list
+            "[{name}]\npairs = {}\nswap = {}\nmonitors = {}\nshow_midi_1 = {}\nlist = {}\nfull_names = {}\nrow_header = {}\ncolumn_header = {}\n\n",
+            option.pairs, option.swap, option.monitors, option.show_midi_1, option.list,
+            option.full_names, option.row_header, option.column_header
         ));
     }
     save(settings_path(), body)

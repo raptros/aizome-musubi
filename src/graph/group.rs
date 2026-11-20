@@ -43,6 +43,14 @@ pub fn node_label(graph: &Graph, node: GlobalId) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| format!("Node {node}"))
 }
+pub fn stream_subtitle(graph: &Graph, node: GlobalId) -> String {
+    graph
+        .nodes
+        .get(&node)
+        .and_then(|n| first(&n.props, &["media.name", "node.description", "node.name"]))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Node {node}"))
+}
 
 pub fn port_label(port: &PortRecord) -> String {
     let bridge_port = port.props.get("api.alsa.seq.client.name").is_some()

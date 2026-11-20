@@ -14,7 +14,7 @@ use aizome_musubi::{
 use aizome_musubi::{
     backend::Command,
     graph::{GraphDelta, LinkRecord, LinkState, Properties, Upsert},
-    matrix::layout::{COLUMN_HEADER, Cell, CellState, ROW_HEADER},
+    matrix::layout::{Cell, CellState},
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -31,8 +31,8 @@ fn cell(h: &Harness<Musubi>, from: u32, to: u32) -> (Cell, Point) {
     (
         cell,
         Point::new(
-            rect.x0 + ROW_HEADER + layout.cols.offsets[cell.col] + 12.,
-            rect.y0 + COLUMN_HEADER + layout.rows.offsets[cell.row] + 12.,
+            rect.x0 + layout.row_header.min((rect.width() - 240.).max(0.)) + layout.cols.offsets[cell.col] + 12.,
+            rect.y0 + layout.column_header.min((rect.height() - 240.).max(0.)) + layout.rows.offsets[cell.row] + 12.,
         ),
     )
 }
@@ -372,6 +372,65 @@ fn incompatible_video_cell_reports_reason_without_command() {
     assert!(h.program().status_sentence().unwrap().contains("video format families differ"));
 }
 #[test]
+fn stream_subtitle_bands_and_header_controls() {
+    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let layout = h.program().layout(Page::Audio).unwrap();
+    let firefox = layout.rows.groups.iter().find(|g| g.name == "Firefox").unwrap();
+    let pw_cat = layout.rows.groups.iter().find(|g| g.name == "pw-cat").unwrap();
+    assert_eq!(layout.rows.subtitles.iter().filter(|(at, _)| *at >= firefox.start && *at < firefox.finish).count(), 2);
+    assert_eq!(layout.rows.subtitles.iter().filter(|(at, _)| *at >= pw_cat.start && *at < pw_cat.finish).count(), 2);
+    let rect = h.find_id(w, "matrix").unwrap();
+    let band = layout.rows.subtitles.iter().find(|(_, text)| text == "Firefox Music Player").unwrap().0;
+    let blank = Point::new(rect.x0 + layout.row_header + 12., rect.y0 + layout.column_header + band + 8.);
+    let edge = Point::new(rect.x0 + layout.row_header, rect.y0 + layout.column_header + 60.);
+    let old = layout.row_header;
+    let commands = fake.borrow().commands.len();
+    h.click(w, blank);
+    assert_eq!(fake.borrow().commands.len(), commands, "subtitle band must not hit a cell");
+    let (_, stream_cell) = cell(&h, 330, 104);
+    h.click(w, stream_cell);
+    assert!(fake.borrow().commands.len() > commands, "line after subtitle must hit its own cell");
+
+    h.drag(w, edge, Point::new(edge.x + 40., edge.y), 3);
+    assert!(h.program().layout(Page::Audio).unwrap().row_header > old);
+    let edge = Point::new(rect.x0 + h.program().layout(Page::Audio).unwrap().row_header, edge.y);
+    h.press(w, edge, PointerButton::Left, 2);
+    h.release(w, edge, PointerButton::Left);
+    let fitted = h.program().layout(Page::Audio).unwrap().fitted_headers().0;
+    assert_eq!(h.program().layout(Page::Audio).unwrap().row_header, fitted);
+    h.send(Msg::FullNames);
+    assert!(h.program().options[0].full_names);
+    h.send(Msg::Page(Page::Midi));
+    assert!(!h.program().options[1].full_names);
+    h.send(Msg::Page(Page::Audio));
+    assert!(h.program().options[0].full_names);
+    h.send(Msg::FullNames);
+    assert!(!h.program().options[0].full_names);
+}
+
+#[test]
+fn tooltip_delay_and_leave_clear_popup_and_page_clears_notice() {
+    let (mut h, _) = interactive(include_str!("fixtures/studio.json"));
+    let w = h.window();
+    let layout = h.program().layout(Page::Audio).unwrap();
+    let rect = h.find_id(w, "matrix").unwrap();
+    let firefox = layout.rows.groups.iter().find(|g| g.name == "Firefox").unwrap();
+    let point = Point::new(rect.x0 + 35., rect.y0 + layout.column_header + firefox.start + 9.);
+    h.move_to(w, point);
+    h.advance(std::time::Duration::from_millis(649));
+    let before = h.render_rgba(w, 1.).2;
+    h.advance(std::time::Duration::from_millis(1));
+    let shown = h.render_rgba(w, 1.).2;
+    assert!(aizome_kit::testing::difference(&before, &shown, 0) > 0.);
+    h.move_to(w, Point::new(rect.x0 + 10., rect.y0 + 10.));
+    assert_eq!(before, h.render_rgba(w, 1.).2);
+    h.send(Msg::Undo);
+    h.send(Msg::Page(Page::Midi));
+    assert!(!h.program().status_sentence().is_some_and(|s| s.contains("Undo")));
+}
+
+#[test]
 fn interaction_state_goldens() {
     let (mut h, _) = interactive(include_str!("fixtures/studio.json"));
     let w = h.window();
@@ -450,6 +509,29 @@ fn graph_pages_have_night_and_day_goldens() {
             }
             assert_golden(&mut h, w, format!("tests/snapshots/{name}-{mode}.png"), 1.);
         }
+    }
+}
+
+#[test]
+fn stream_full_names_and_tooltip_goldens() {
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        let appearance = Appearance { theme, reduced_motion: true, ..Appearance::default() };
+        let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+        let mut app = Musubi::with_fake(fake);
+        app.options[0].pairs = true;
+        let mut h = Harness::with(app, appearance, true);
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-streams-{mode}.png"), 1.);
+        h.send(Msg::FullNames);
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-full-names-{mode}.png"), 1.);
+        h.send(Msg::FullNames);
+        let layout = h.program().layout(Page::Audio).unwrap();
+        let rect = h.find_id(w, "matrix").unwrap();
+        let firefox = layout.rows.groups.iter().find(|g| g.name == "Firefox").unwrap();
+        h.move_to(w, Point::new(rect.x0 + 35., rect.y0 + layout.column_header + firefox.start + 9.));
+        h.advance(std::time::Duration::from_millis(650));
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-tooltip-{mode}.png"), 1.);
+        h.move_to(w, Point::new(rect.x0 - 10., rect.y0 - 10.));
     }
 }
 
@@ -581,12 +663,18 @@ fn persistence_options_and_fold_relaunch() {
     h.send(Msg::Pairs(true));
     h.send(Msg::Swap);
     h.send(Msg::List(true));
+    h.send(Msg::Matrix(aizome_musubi::matrix::widget::MatrixMsg::HeaderSize(true, 232.)));
+    h.send(Msg::Matrix(aizome_musubi::matrix::widget::MatrixMsg::HeaderSize(false, 204.)));
+    h.send(Msg::FullNames);
     let key = h.program().layout(Page::Audio).unwrap().rows.groups[0].key.clone().unwrap();
     h.send(Msg::ContextAction(aizome_musubi::app::ContextAction::Fold(key)));
     h.advance(std::time::Duration::from_millis(400));
     let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 2).unwrap()));
     let h2 = Harness::new(Musubi::with_fake(fake));
     assert!(h2.program().options[0].pairs && h2.program().options[0].swap && h2.program().options[0].list);
+    assert_eq!(h2.program().options[0].row_header, 232.);
+    assert_eq!(h2.program().options[0].column_header, 204.);
+    assert!(h2.program().options[0].full_names);
     assert!(!h2.program().options[0].folded.is_empty());
     drop((h, h2));
     unsafe {

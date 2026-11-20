@@ -96,13 +96,13 @@ def filter_(id_, value):
 
 
 def cell():
-    # Filters below leave exactly one group on each axis; Channels puts FL
-    # first. Derive the widget origin from the inspector, and use the same
-    # header/cell pitch as PatchMatrix::view and Axis::new.
-    x, y, width, height = until("inspected matrix", lambda: element("matrix"))["rect"]
-    assert width > 188 + 24 and height > 180 + 24, (width, height)
+    # Parts are window-relative rectangles in the inspect JSON.
+    e = until("inspected matrix", lambda: element("matrix"))
+    body = next(part for part in e["parts"] if part["name"] == "body")
+    x, y, width, height = body["rect"]
+    assert width > 24 and height > 24, (width, height)
     g = window()["geometry"]
-    return g["x"] + x + 188 + 12, g["y"] + y + 180 + 12
+    return g["x"] + x + 12, g["y"] + y + 12
 
 
 def ports():

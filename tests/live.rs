@@ -2,7 +2,7 @@
 use aizome_kit::{Point, testing::Harness};
 use aizome_musubi::{
     app::{Musubi, Page},
-    matrix::layout::{COLUMN_HEADER, CellState, ROW_HEADER},
+    matrix::layout::CellState,
 };
 use aizome_musubi::{
     backend::{Backend, Command, Connection, Event, Handle, pipewire::PipeWireBackend},
@@ -81,8 +81,8 @@ fn harness_clicks_private_interface_to_speakers() {
     assert_eq!(layout.state(cell), CellState::Empty);
     let rect = h.find_id(w, "matrix").unwrap();
     let point = Point::new(
-        rect.x0 + ROW_HEADER + layout.cols.offsets[cell.col] + 12.,
-        rect.y0 + COLUMN_HEADER + layout.rows.offsets[cell.row] + 12.,
+        rect.x0 + layout.row_header.min((rect.width() - 240.).max(0.)) + layout.cols.offsets[cell.col] + 12.,
+        rect.y0 + layout.column_header.min((rect.height() - 240.).max(0.)) + layout.rows.offsets[cell.row] + 12.,
     );
     h.click(w, point);
     assert!(

@@ -2030,5 +2030,25 @@
       "input-port-id": 312,
       "state": "active"
     }
-  }
+  },
+  {"id": 26, "type": "PipeWire:Interface:Node", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 26, "object.serial": 10026, "node.name": "firefox.music", "media.name": "Firefox Music Player", "media.class": "Stream/Output/Audio", "client.id": 5}}},
+  {"id": 27, "type": "PipeWire:Interface:Node", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 27, "object.serial": 10027, "node.name": "pw-cat.player.one", "media.name": "First pw-cat Player", "media.class": "Stream/Output/Audio", "client.id": 28}}},
+  {"id": 29, "type": "PipeWire:Interface:Node", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 29, "object.serial": 10029, "node.name": "pw-cat.player.two", "media.name": "Second pw-cat Player", "media.class": "Stream/Output/Audio", "client.id": 28}}},
+  {"id": 28, "type": "PipeWire:Interface:Client", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 28, "object.serial": 10028, "client.name": "pw-cat", "application.name": "pw-cat", "client.api": "pipewire"}}},
+  {"id": 330, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 330, "object.serial": 10330, "node.id": 26, "port.direction": "out", "port.id": 0, "port.name": "capture_FL", "port.alias": "26:capture_FL", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FL"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}},
+  {"id": 331, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 331, "object.serial": 10331, "node.id": 26, "port.direction": "out", "port.id": 1, "port.name": "capture_FR", "port.alias": "26:capture_FR", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FR"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}},
+  {"id": 332, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 332, "object.serial": 10332, "node.id": 27, "port.direction": "out", "port.id": 0, "port.name": "capture_FL", "port.alias": "27:capture_FL", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FL"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}},
+  {"id": 333, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 333, "object.serial": 10333, "node.id": 27, "port.direction": "out", "port.id": 1, "port.name": "capture_FR", "port.alias": "27:capture_FR", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FR"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}},
+  {"id": 334, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 334, "object.serial": 10334, "node.id": 29, "port.direction": "out", "port.id": 0, "port.name": "capture_FL", "port.alias": "29:capture_FL", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FL"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}},
+  {"id": 335, "type": "PipeWire:Interface:Port", "version": 3, "permissions": ["r", "m"],
+   "info": {"change_mask": ["props"], "props": {"object.id": 335, "object.serial": 10335, "node.id": 29, "port.direction": "out", "port.id": 1, "port.name": "capture_FR", "port.alias": "29:capture_FR", "port.group": "stream.0", "format.dsp": "32 bit float mono audio", "audio.channel": "FR"}, "direction": "output", "params": {"EnumFormat": [{"mediaType": "audio", "mediaSubtype": "dsp", "format": "F32P"}]}}}
 ]

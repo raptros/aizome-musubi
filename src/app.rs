@@ -111,6 +111,7 @@ pub enum Msg {
     Pairs(bool),
     Monitors(bool),
     Swap,
+    FullNames,
     From(String),
     To(String),
     Undo,
@@ -162,6 +163,32 @@ pub struct Musubi {
     removed: HashMap<(GlobalId, GlobalId), Instant>,
     notice: Option<String>,
     window: WindowKey,
+}
+
+fn fit_status(sentence: &str) -> String {
+    let (names, state) = sentence.rsplit_once(" · ").unwrap_or((sentence, ""));
+    let limit = 100usize.saturating_sub(state.chars().count() + if state.is_empty() { 0 } else { 3 }).max(3);
+    let chars: Vec<_> = names.chars().collect();
+    if chars.len() <= limit {
+        return sentence.to_owned();
+    }
+    let left = (limit - 1) / 2;
+    let names = format!(
+        "{}…{}",
+        chars[..left].iter().collect::<String>(),
+        chars[chars.len() - (limit - 1 - left)..].iter().collect::<String>()
+    );
+    if state.is_empty() { names } else { format!("{names} · {state}") }
+}
+
+#[cfg(test)]
+#[test]
+fn long_status_keeps_trailing_state() {
+    let name = "Extraordinarily long audio stream title".repeat(8);
+    let result = fit_status(&format!("{name} → {name} · connected — click to disconnect"));
+    assert!(result.contains('…'));
+    assert!(result.ends_with(" · connected — click to disconnect"));
+    assert!(result.chars().count() <= 100);
 }
 
 impl Musubi {
@@ -635,8 +662,9 @@ impl Musubi {
         Some(format!("{from_name} · {} → {to_name} · {} · {state}", describe(source), describe(target)))
     }
     pub fn status_sentence(&self) -> Option<String> {
-        self.notice.clone().or_else(|| self.hover_sentence())
+        self.notice.clone().or_else(|| self.hover_sentence()).map(|sentence| fit_status(&sentence))
     }
+
     fn unavailable(&self) -> Element<Msg> {
         container(
             column![
@@ -800,6 +828,9 @@ impl Program for Musubi {
     }
 
     fn update(&mut self, msg: Msg, cx: &mut Cx<Msg>) {
+        if !matches!(&msg, Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_))) {
+            self.notice = None;
+        }
         match msg {
             Msg::Page(page) => {
                 self.page = page;
@@ -808,6 +839,31 @@ impl Program for Musubi {
             }
             Msg::Activated => cx.activate(self.window),
             Msg::Matrix(MatrixMsg::Hover(cell)) => self.hovered = cell,
+            Msg::Matrix(MatrixMsg::HeaderSize(row, size)) => {
+                let options = &mut self.options[Self::index(self.page)];
+                options.full_names = false;
+                if row {
+                    options.row_header = size
+                } else {
+                    options.column_header = size
+                };
+                self.refresh_layouts();
+                self.persist_later(cx);
+            }
+            Msg::Matrix(MatrixMsg::FitHeader(row)) => {
+                if let Some(layout) = self.layout(self.page) {
+                    let (width, height) = layout.fitted_headers();
+                    let options = &mut self.options[Self::index(self.page)];
+                    if row {
+                        options.row_header = width
+                    } else {
+                        options.column_header = height
+                    };
+                    options.full_names = false;
+                    self.refresh_layouts();
+                    self.persist_later(cx);
+                }
+            }
             Msg::Matrix(MatrixMsg::Focus(cell)) => self.select_cell(cell, false),
             Msg::Matrix(MatrixMsg::Inspect(cell)) => {
                 self.select_cell(cell, false);
@@ -974,6 +1030,12 @@ impl Program for Musubi {
             Msg::Swap => {
                 let options = &mut self.options[Self::index(self.page)];
                 options.swap = !options.swap;
+                self.refresh_layouts();
+                self.persist_later(cx);
+            }
+            Msg::FullNames => {
+                let options = &mut self.options[Self::index(self.page)];
+                options.full_names = !options.full_names;
                 self.refresh_layouts();
                 self.persist_later(cx);
             }
@@ -1195,7 +1257,8 @@ impl Program for Musubi {
         } else {
             self.unavailable()
         };
-        let title = format!("{} {ports} ports · {links} links", self.page.title());
+        let title =
+            format!("{} {ports} ports · {links} {}", self.page.title(), if links == 1 { "link" } else { "links" });
         let options = &self.options[Self::index(self.page)];
         let mut controls: Vec<Element<Msg>> = vec![
             text(title).semibold().into(),
@@ -1220,6 +1283,7 @@ impl Program for Musubi {
         }
         controls.extend([
             button("Swap").compact().on_press(Msg::Swap).id("swap").into(),
+            checkbox("Full Names", options.full_names).on_toggle(|_| Msg::FullNames).id("full-names").into(),
             button("Undo")
                 .compact()
                 .on_press(Msg::Undo)
@@ -1279,6 +1343,11 @@ impl Program for Musubi {
                     .enabled(self.page == Page::Midi2),
             )
             .item(MenuItem::new("Swap Axes", Msg::Swap).shortcut(Shortcut::cmd('S').alt()).checked(options.swap))
+            .item(
+                MenuItem::new("Show Full Names", Msg::FullNames)
+                    .shortcut(Shortcut::cmd('F').alt())
+                    .checked(options.full_names),
+            )
             .item(MenuItem::new("Collapse All Groups", Msg::CollapseAll));
         let edit = Menu::new("Edit")
             .item(
