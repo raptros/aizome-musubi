@@ -400,6 +400,13 @@ fn stream_subtitle_bands_and_header_controls() {
     let (_, stream_cell) = cell(&h, 330, 104);
     h.click(w, stream_cell);
     assert!(fake.borrow().commands.len() > commands, "line after subtitle must hit its own cell");
+    // The resize grip lies on the header's side: 3pt into the body is the first column's cell.
+    let commands = fake.borrow().commands.len();
+    let row_header = h.program().layout(Page::Audio).unwrap().row_header;
+    let first_column = Point::new(rect.x0 + row_header + 3., stream_cell.y);
+    h.click(w, first_column);
+    assert!(fake.borrow().commands.len() > commands, "first column's cell must take the click");
+    assert_eq!(h.program().layout(Page::Audio).unwrap().row_header, old, "a cell click must not resize");
 
     h.drag(w, edge, Point::new(edge.x + 40., edge.y), 3);
     assert!(h.program().layout(Page::Audio).unwrap().row_header > old);

@@ -148,11 +148,13 @@ impl PatchMatrix {
             Rect::new(x, y, size.width, size.height),
         )
     }
+    /// The header-resize strip: 12pt on the header's side of its edge, so it
+    /// never covers the first row or column of cells.
     fn edge(&self, pos: Point, size: Size) -> Option<bool> {
         let (_, _, _, body) = self.view(size);
-        if (pos.x - body.x0).abs() <= 12. && pos.y >= body.y0 {
+        if (body.x0 - 12.0..=body.x0).contains(&pos.x) && pos.y >= body.y0 {
             Some(true)
-        } else if (pos.y - body.y0).abs() <= 12. && pos.x >= body.x0 {
+        } else if (body.y0 - 12.0..=body.y0).contains(&pos.y) && pos.x >= body.x0 {
             Some(false)
         } else {
             None
