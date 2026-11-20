@@ -432,22 +432,49 @@ fn tooltip_delay_and_leave_clear_popup_and_page_clears_notice() {
 
 #[test]
 fn interaction_state_goldens() {
-    let (mut h, _) = interactive(include_str!("fixtures/studio.json"));
-    let w = h.window();
-    let (_, start) = cell(&h, 100, 104);
-    let (_, end) = cell(&h, 101, 105);
-    h.press(w, start, PointerButton::Left, 1);
-    h.move_to(w, end);
-    assert_golden(&mut h, w, "tests/snapshots/audio-drag-preview-night.png", 1.);
-    h.key(w, Key::Named(NamedKey::Escape), Modifiers::default());
-    h.release(w, end, PointerButton::Left);
-    let (mut h, fake) = interactive(include_str!("fixtures/studio.json"));
-    let w = h.window();
-    fake.borrow_mut().fail_next("Permission denied by PipeWire");
-    let (_, p) = cell(&h, 100, 104);
-    h.click(w, p);
-    h.move_to(w, p);
-    assert_golden(&mut h, w, "tests/snapshots/audio-error-night.png", 1.);
+    for (theme, mode) in [(ThemeChoice::Night, "night"), (ThemeChoice::Day, "day")] {
+        let appearance = Appearance { theme, reduced_motion: true, ..Appearance::default() };
+        let fixture = include_str!("fixtures/studio.json");
+        let make = || {
+            let fake = Rc::new(RefCell::new(FakeBackend::from_dump(fixture, 1).unwrap()));
+            let h = Harness::with(Musubi::with_fake(fake.clone()), appearance, true);
+            (h, fake)
+        };
+        let (mut h, _) = make();
+        let w = h.window();
+        let (_, start) = cell(&h, 100, 104);
+        let (_, end) = cell(&h, 101, 105);
+        h.press(w, start, PointerButton::Left, 1);
+        h.move_to(w, end);
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-drag-preview-{mode}.png"), 1.);
+        h.key(w, Key::Named(NamedKey::Escape), Modifiers::default());
+        h.release(w, end, PointerButton::Left);
+
+        let (mut h, fake) = make();
+        let w = h.window();
+        fake.borrow_mut().fail_next("Permission denied by PipeWire");
+        let (_, p) = cell(&h, 100, 104);
+        h.click(w, p);
+        h.move_to(w, p);
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-error-{mode}.png"), 1.);
+
+        let (mut h, fake) = make();
+        let w = h.window();
+        fake.borrow_mut().defer_next_connect();
+        let (_, p) = cell(&h, 100, 104);
+        h.click(w, p);
+        assert_eq!(h.program().layout(Page::Audio).unwrap().state(cell(&h, 100, 104).0), CellState::Asked);
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-asked-{mode}.png"), 1.);
+
+        let (mut h, _) = make();
+        let w = h.window();
+        let layout = h.program().layout(Page::Audio).unwrap();
+        let cell = layout.cell_for_pair((100, 104)).unwrap();
+        let key = layout.rows.groups[layout.rows.group_of(cell.row)].key.clone().unwrap();
+        h.program_mut().options[0].folded.insert(key);
+        h.send(Msg::Backend(Event::Delta(GraphDelta { epoch: 1, ..Default::default() })));
+        assert_golden(&mut h, w, format!("tests/snapshots/audio-collapsed-count-{mode}.png"), 1.);
+    }
 }
 
 #[test]

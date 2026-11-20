@@ -297,10 +297,18 @@ fn swatch(cx: &mut PaintCx, t: &Theme, state: CellState, x: f64, y: f64, size: f
     }
     match state {
         CellState::Half => {
+            // A contrasting inset diagonal survives the light selection fill at 1×,
+            // including the small legend swatch.
             for step in 2..(size as usize - 2) {
                 let yy = y + step as f64;
-                cx.canvas.fill_rect(Rect::new(x + 2., yy, x + size - step as f64, yy + 1.), edge);
+                let xx = x + size - step as f64;
+                cx.canvas.fill_rect(Rect::new(xx - 1., yy, xx + 1., yy + 1.), t.text());
             }
+        }
+        CellState::Error => {
+            outline(cx, square, edge, 2.);
+            let spec = TextSpec::new(FontSpec::mono(if size < 15. { 8. } else { 11. }), edge);
+            cx.draw_text_in("!", &spec, Rect::new(x + size - 8., y, x + size, y + 11.), Align::Center);
         }
         CellState::Asked => cx.canvas.fill_rect(
             Rect::new(x + (size - 6.) / 2., y + (size - 6.) / 2., x + (size + 6.) / 2., y + (size + 6.) / 2.),
