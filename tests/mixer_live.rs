@@ -7,15 +7,33 @@ use aizome_musubi::{
 use aizome_sys::{Wake, audio::Audio};
 use std::time::{Duration, Instant};
 
-fn until(mut ready: impl FnMut() -> bool) {
+fn until(description: &str, mut observe: impl FnMut() -> (bool, String)) {
     let deadline = Instant::now() + Duration::from_secs(12);
-    while Instant::now() < deadline {
-        if ready() {
+    loop {
+        let (ready, state) = observe();
+        if ready {
             return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}; observed: {state}");
         }
         std::thread::sleep(Duration::from_millis(40));
     }
-    panic!("private audio state did not reach expected value");
+}
+
+fn observed(audio: &Audio, graph: &Graph) -> String {
+    let state = audio.snapshot();
+    let pulse = state.sinks.iter().find(|s| s.name == "musubi_test_speakers");
+    let nodes = ["musubi_test_speakers", "musubi_native_only"].map(|name| {
+        let node = graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|value| value == name));
+        format!("{name}: {:?}", node.map(|n| (&n.native.channel_volumes, n.native.muted, n.native.writable)))
+    });
+    format!(
+        "Pulse speakers volume/balance/mute: {:?}; native {} ; {}",
+        pulse.map(|s| (s.volume, s.balance, s.muted)),
+        nodes[0],
+        nodes[1]
+    )
 }
 
 fn drain(backend: &mut PipeWireBackend, graph: &mut Graph) {
@@ -42,10 +60,11 @@ fn pulse_and_native_props_read_back() {
     let mut backend = PipeWireBackend::channel().unwrap();
     let mut graph = Graph::default();
     // All events are observed on the one backend thread.
-    until(|| {
+    until("Pulse speakers and graph node discovery", || {
         drain(&mut backend, &mut graph);
-        audio.snapshot().sinks.iter().any(|s| s.name == "musubi_test_speakers")
-            && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|s| s == "musubi_test_speakers"))
+        let ready = audio.snapshot().sinks.iter().any(|s| s.name == "musubi_test_speakers")
+            && graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|s| s == "musubi_test_speakers"));
+        (ready, observed(&audio, &graph))
     });
     let index = audio.snapshot().sinks.iter().find(|s| s.name == "musubi_test_speakers").unwrap().index;
     let node =
@@ -57,9 +76,18 @@ fn pulse_and_native_props_read_back() {
             .any(|s| matches!(s.control, StripControl::Pulse { index: i, .. } if i == index))
     );
     audio.set_sink_volume(index, 0.5).wait_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    until("Pulse volume and native Props after volume write", || {
+        drain(&mut backend, &mut graph);
+        let state = audio.snapshot();
+        let native =
+            graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|s| s == "musubi_test_speakers"));
+        let ready = state.sink(index).is_some_and(|s| (s.volume - 0.5).abs() < 0.02)
+            && native.is_some_and(|n| n.native.channel_volumes.as_ref().is_some_and(|v| v.iter().all(|x| *x < 0.9)));
+        (ready, observed(&audio, &graph))
+    });
     audio.set_sink_balance(index, 0.2).wait_timeout(Duration::from_secs(5)).unwrap().unwrap();
     audio.set_sink_mute(index, true).wait_timeout(Duration::from_secs(5)).unwrap().unwrap();
-    until(|| {
+    until("Pulse volume/balance/mute and speakers native Props read-back", || {
         drain(&mut backend, &mut graph);
         let state = audio.snapshot();
         let pulse = state.sink(index).unwrap();
@@ -68,11 +96,12 @@ fn pulse_and_native_props_read_back() {
             .values()
             .find(|n| n.props.get("node.name").is_some_and(|s| s == "musubi_test_speakers"))
             .unwrap();
-        (pulse.volume - 0.5).abs() < 0.02
+        let ready = (pulse.volume - 0.5).abs() < 0.02
             && (pulse.balance - 0.2).abs() < 0.03
             && pulse.muted
             && native.native.muted == Some(true)
-            && native.native.channel_volumes.as_ref().is_some_and(|v| v.iter().all(|gain| *gain < 0.9))
+            && native.native.channel_volumes.as_ref().is_some_and(|v| v.iter().all(|gain| *gain < 0.9));
+        (ready, observed(&audio, &graph))
     });
     let native =
         graph.nodes.values().find(|n| n.props.get("node.name").is_some_and(|s| s == "musubi_native_only")).unwrap();
@@ -85,20 +114,23 @@ fn pulse_and_native_props_read_back() {
             .any(|d| d.index.to_string() == native.props["object.serial"])
     );
     let handle = Handle { epoch: graph.epoch, id: native.id };
-    until(|| {
+    until("writable native-only channelVolumes Props", || {
         drain(&mut backend, &mut graph);
-        graph.nodes.get(&handle.id).is_some_and(|n| n.native.writable && n.native.channel_volumes.is_some())
+        let ready =
+            graph.nodes.get(&handle.id).is_some_and(|n| n.native.writable && n.native.channel_volumes.is_some());
+        (ready, observed(&audio, &graph))
     });
     let channels = graph.nodes[&handle.id].native.channel_volumes.as_ref().unwrap().len();
     assert!(channels > 0);
     backend.command(Command::SetNodeVolume { node: handle, channel_volumes: vec![0.25; channels], request: 801 });
-    until(|| {
+    until("native-only channelVolumes read-back after write", || {
         drain(&mut backend, &mut graph);
-        graph.nodes[&handle.id]
+        let ready = graph.nodes[&handle.id]
             .native
             .channel_volumes
             .as_ref()
-            .is_some_and(|v| v.iter().all(|x| (*x - 0.25).abs() < 0.01))
+            .is_some_and(|v| v.iter().all(|x| (*x - 0.25).abs() < 0.01));
+        (ready, observed(&audio, &graph))
     });
     assert!(matches!(
         strips(&audio.snapshot(), &graph).iter().find(|s| s.node == Some(handle)).unwrap().control,

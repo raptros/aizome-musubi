@@ -18,7 +18,6 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$root/no-bus"
 unset PIPEWIRE_REMOTE
 cat > "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/90-musubi-test.conf" <<'CONF'
 context.objects = [
-    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_speakers node.description = "Test Speakers" media.class = Audio/Sink audio.position = [ FL FR ] node.always-process = true } }
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_out node.description = "Test Interface Output" media.class = Audio/Sink audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_in node.description = "Test Interface Input" media.class = Audio/Source audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_mic node.description = "Test Mic" media.class = Audio/Source audio.position = [ MONO ] node.always-process = true } }
@@ -57,6 +56,11 @@ for (( attempt=0; attempt<100; attempt++ )); do
     sleep 0.1
 done
 [[ -S "$root/runtime/pulse/native" ]] || { echo 'Private Pulse socket did not appear' >&2; cat "$root/pipewire-pulse.log" >&2; exit 1; }
+# A Pulse-owned null sink accepts libpulse volume writes without WirePlumber.
+# The static adapter's sink reports success for Pulse volume changes but keeps
+# its native channelVolumes at unity when no session manager handles the write.
+pactl load-module module-null-sink sink_name=musubi_test_speakers channels=2 channel_map=front-left,front-right \
+    >"$root/pulse-speakers-module.log"
 # Without WirePlumber there is no policy manager to select adapter port
 # configuration; set each static node's DSP layout ourselves.
 while IFS=$'\t' read -r id class channels positions; do
