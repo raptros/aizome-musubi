@@ -39,11 +39,22 @@ fn serial(node: &NodeRecord) -> Option<u64> {
 /// A serial match takes precedence; only an absent serial permits name fallback.
 /// Multiple candidates, mismatched names, and missing nodes are read-only.
 fn resolve<'a>(graph: &'a Graph, index: u32, name: Option<&str>) -> Result<&'a NodeRecord, String> {
-    let candidates: Vec<_> = graph.nodes.values().filter(|n| serial(n) == Some(u64::from(index))).collect();
+    let candidates: Vec<_> = graph
+        .nodes
+        .values()
+        .filter(|n| !crate::graph::is_musubi_meter(&n.props) && serial(n) == Some(u64::from(index)))
+        .collect();
     let match_name = |n: &&NodeRecord| n.props.get("node.name").is_some_and(|value| Some(value.as_str()) == name);
     let nodes = if candidates.is_empty() {
         name.filter(|n| !n.is_empty())
-            .map(|_| graph.nodes.values().filter(match_name).collect::<Vec<_>>())
+            .map(|_| {
+                graph
+                    .nodes
+                    .values()
+                    .filter(|n| !crate::graph::is_musubi_meter(&n.props))
+                    .filter(match_name)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default()
     } else {
         candidates
@@ -91,8 +102,20 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
     let mut result = Vec::new();
     result.extend(audio.sinks.iter().map(|d| device_strip(graph, d, StripKind::Output)));
     result.extend(audio.sources.iter().map(|d| device_strip(graph, d, StripKind::Input)));
-    result.extend(audio.playback.iter().map(|s| stream_strip(graph, s, StripKind::Playback)));
-    result.extend(audio.recording.iter().map(|s| stream_strip(graph, s, StripKind::Recording)));
+    result.extend(
+        audio
+            .playback
+            .iter()
+            .filter(|s| s.app_id != "org.aizome.Musubi" || s.media_name != "Musubi level meter")
+            .map(|s| stream_strip(graph, s, StripKind::Playback)),
+    );
+    result.extend(
+        audio
+            .recording
+            .iter()
+            .filter(|s| s.app_id != "org.aizome.Musubi" || s.media_name != "Musubi level meter")
+            .map(|s| stream_strip(graph, s, StripKind::Recording)),
+    );
     let pulse_nodes: HashSet<_> = result.iter().filter_map(|s| s.node.map(|n| n.id)).collect();
     let pulse_serials: HashSet<_> = audio
         .sinks
@@ -103,6 +126,9 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
         .chain(audio.recording.iter().map(|s| s.index))
         .collect();
     for node in graph.nodes.values() {
+        if crate::graph::is_musubi_meter(&node.props) {
+            continue;
+        }
         if pulse_nodes.contains(&node.id)
             || serial(node).is_some_and(|value| u32::try_from(value).ok().is_some_and(|v| pulse_serials.contains(&v)))
             || !node.props.get("media.class").is_some_and(|class| {

@@ -1,8 +1,10 @@
 //! Backend boundary: commands refer to IDs in one observed connection epoch.
 pub mod fake;
+pub mod meters;
 pub mod pipewire;
 
 use crate::graph::{GlobalId, GraphDelta};
+use meters::MeterReading;
 
 pub type RequestId = u64;
 
@@ -18,6 +20,8 @@ pub enum Command {
     Disconnect { link: Handle, request: RequestId },
     SetNodeVolume { node: Handle, channel_volumes: Vec<f32>, request: RequestId },
     SetNodeMute { node: Handle, muted: bool, request: RequestId },
+    StartMeters(Vec<Handle>),
+    StopMeters,
     Shutdown,
 }
 
@@ -38,4 +42,6 @@ pub enum Connection {
 pub trait Backend {
     fn command(&mut self, command: Command);
     fn next_event(&mut self) -> Option<Event>;
+    /// Returns only snapshots; implementations never poll PipeWire from the UI.
+    fn meters(&self) -> Vec<MeterReading>;
 }

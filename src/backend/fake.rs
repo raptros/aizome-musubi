@@ -1,7 +1,12 @@
 //! Deterministic registry simulation for graph, UI and undo tests.
 use std::collections::{HashMap, VecDeque};
+use std::{collections::HashSet, sync::Arc};
 
 use super::{Backend, Command, Connection, Event};
+use super::{
+    Handle,
+    meters::{MAX_METERS, MeterReading, MeterStore, Slot},
+};
 use crate::graph::{
     GlobalId, Graph, GraphDelta, LinkRecord, LinkState, Properties, Upsert, dump,
     legal::{LinkLegality, can_link},
@@ -15,6 +20,8 @@ pub struct FakeBackend {
     defer_next: bool,
     pending_connect: HashMap<GlobalId, u64>,
     pub commands: Vec<Command>,
+    meters: MeterStore,
+    meter_slots: HashMap<Handle, Arc<Slot>>,
 }
 
 impl FakeBackend {
@@ -34,6 +41,8 @@ impl FakeBackend {
             next_failure: None,
             defer_next: false,
             pending_connect: HashMap::new(),
+            meters: MeterStore::default(),
+            meter_slots: HashMap::new(),
             commands: Vec::new(),
         })
     }
@@ -67,11 +76,37 @@ impl FakeBackend {
     /// Simulate a registry disappearance and deliver its delta to the Harness.
     pub fn remove(&mut self, id: GlobalId) {
         self.publish(GraphDelta { epoch: self.graph.epoch, upserts: vec![], removals: vec![id] });
+        self.meters.remove(Handle { epoch: self.graph.epoch, id });
+        self.meter_slots.remove(&Handle { epoch: self.graph.epoch, id });
     }
 
     fn publish(&mut self, delta: GraphDelta) {
         self.graph.apply(delta.clone());
         self.events.push_back(Event::Delta(delta));
+    }
+    /// Script deterministic linear peaks without creating a PipeWire client.
+    pub fn script_meter(&self, node: Handle, peaks: &[f32]) {
+        if !self.meter_slots.contains_key(&node) {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(peaks.len() * 4);
+        for peak in peaks {
+            bytes.extend_from_slice(&peak.to_ne_bytes());
+        }
+        // Keep the existing slot: `replace` only occurs on StartMeters.
+        self.script_meter_bytes(node, &bytes);
+    }
+    fn script_meter_bytes(&self, node: Handle, bytes: &[u8]) {
+        if let Some(slot) = self.meter_slots.get(&node) {
+            slot.process(bytes, bytes.len(), self.meters.elapsed_ns());
+        }
+    }
+    /// Simulate a lost connection and discard all epoch-bound meter values.
+    pub fn reset_epoch(&mut self, epoch: u64) {
+        self.meters.clear();
+        self.meter_slots.clear();
+        self.publish(GraphDelta { epoch, ..GraphDelta::default() });
+        self.events.push_back(Event::Connection(Connection::Down("fake disconnect".into())));
     }
 }
 
@@ -176,6 +211,36 @@ impl Backend for FakeBackend {
                 };
                 (request, result)
             }
+            Command::StartMeters(nodes) => {
+                self.meters.clear();
+                self.meter_slots.clear();
+                let mut paused = HashSet::new();
+                for node in nodes {
+                    if node.epoch != self.graph.epoch || !self.graph.nodes.contains_key(&node.id) {
+                        continue;
+                    }
+                    if self.meter_slots.contains_key(&node) || paused.contains(&node) {
+                        continue;
+                    }
+                    if self.meter_slots.len() >= MAX_METERS {
+                        paused.insert(node);
+                        continue;
+                    }
+                    let channels = self.graph.nodes[&node.id]
+                        .props
+                        .get("audio.channels")
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(2);
+                    self.meter_slots.insert(node, Arc::new(Slot::new(channels)));
+                }
+                self.meters.replace(self.meter_slots.clone(), paused);
+                return;
+            }
+            Command::StopMeters => {
+                self.meter_slots.clear();
+                self.meters.clear();
+                return;
+            }
             Command::Shutdown => {
                 self.events.push_back(Event::Connection(Connection::Down("shutdown".into())));
                 return;
@@ -186,6 +251,9 @@ impl Backend for FakeBackend {
 
     fn next_event(&mut self) -> Option<Event> {
         self.events.pop_front()
+    }
+    fn meters(&self) -> Vec<MeterReading> {
+        self.meters.readings()
     }
 }
 
@@ -261,5 +329,31 @@ mod tests {
             matches!(fake.next_event(), Some(Event::CommandResult { result: Err(e), .. }) if e.contains("not found"))
         );
         assert!(fake.graph.links.contains_key(&id));
+    }
+    #[test]
+    fn meter_cap_script_stop_and_epoch_reset() {
+        let mut fake = FakeBackend::from_dump(include_str!("../../tests/fixtures/studio.json"), 4).unwrap();
+        let sample = fake.graph.nodes.values().next().unwrap().clone();
+        let nodes: Vec<_> = (1000..1026)
+            .map(|id| {
+                let node = crate::graph::NodeRecord { id, ..sample.clone() };
+                fake.graph.apply(GraphDelta { epoch: 4, upserts: vec![Upsert::Node(node)], removals: vec![] });
+                Handle { epoch: 4, id }
+            })
+            .collect();
+        fake.command(Command::StartMeters(nodes.clone()));
+        let readings = fake.meters();
+        assert_eq!(readings.iter().filter(|m| !m.paused).count(), 24);
+        assert_eq!(readings.iter().filter(|m| m.paused).count(), 2);
+        let active = readings.iter().find(|m| !m.paused).unwrap().node;
+        fake.script_meter(active, &[0.8, 0.4]);
+        assert!(fake.meters().iter().find(|m| m.node == active).unwrap().peaks[0] > 0.7);
+        fake.command(Command::StopMeters);
+        assert!(fake.meters().is_empty());
+        fake.command(Command::StartMeters(vec![active]));
+        fake.reset_epoch(5);
+        assert!(fake.meters().is_empty());
+        fake.command(Command::StartMeters(vec![active]));
+        assert!(fake.meters().is_empty());
     }
 }

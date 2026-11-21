@@ -10,6 +10,11 @@ use std::collections::{HashMap, HashSet};
 
 pub type GlobalId = u32;
 pub type Properties = HashMap<String, String>;
+/// The meter's capture node is internal, including all its ports and policy links.
+pub fn is_musubi_meter(props: &Properties) -> bool {
+    props.get("application.id").is_some_and(|id| id == "org.aizome.Musubi")
+        && props.get("musubi.meter").is_some_and(|marker| marker == "true")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -115,6 +120,8 @@ pub struct Graph {
     pub ports_by_kind: HashMap<classify::PortKind, HashSet<GlobalId>>,
     pending_ports: HashMap<GlobalId, PortRecord>,
     pending_links: HashMap<GlobalId, LinkRecord>,
+    hidden_nodes: HashSet<GlobalId>,
+    hidden_ports: HashSet<GlobalId>,
 }
 
 impl Graph {
@@ -127,9 +134,45 @@ impl Graph {
         }
         for id in delta.removals {
             self.remove(id);
+            self.hidden_nodes.remove(&id);
+            self.hidden_ports.remove(&id);
         }
         for upsert in delta.upserts {
-            self.upsert(upsert);
+            match &upsert {
+                Upsert::Node(node) if is_musubi_meter(&node.props) => {
+                    self.remove(node.id);
+                    self.hidden_nodes.insert(node.id);
+                }
+                Upsert::Port(port) if port.node_id.is_some_and(|id| self.hidden_nodes.contains(&id)) => {
+                    self.remove(port.id);
+                    self.hidden_ports.insert(port.id);
+                }
+                Upsert::Link(link)
+                    if self.hidden_ports.contains(&link.input) || self.hidden_ports.contains(&link.output) => {}
+                _ => self.upsert(upsert),
+            }
+        }
+        // Port and Link globals can precede the meter Node/Port globals in a batch.
+        let hidden_ports: Vec<_> = self
+            .ports
+            .values()
+            .chain(self.pending_ports.values())
+            .filter(|port| port.node_id.is_some_and(|id| self.hidden_nodes.contains(&id)))
+            .map(|port| port.id)
+            .collect();
+        for id in hidden_ports {
+            self.remove(id);
+            self.hidden_ports.insert(id);
+        }
+        let hidden_links: Vec<_> = self
+            .links
+            .values()
+            .chain(self.pending_links.values())
+            .filter(|link| self.hidden_ports.contains(&link.input) || self.hidden_ports.contains(&link.output))
+            .map(|link| link.id)
+            .collect();
+        for id in hidden_links {
+            self.remove(id);
         }
         self.attach_pending();
     }
@@ -328,5 +371,20 @@ mod tests {
             vec![],
         ));
         assert_eq!(graph.kind(2), Some(classify::PortKind::Video));
+    }
+    #[test]
+    fn own_meter_node_ports_and_policy_links_are_never_visible() {
+        let mut graph = Graph::default();
+        let Upsert::Node(mut meter) = node(10) else { unreachable!() };
+        meter.props.extend(props(&[("application.id", "org.aizome.Musubi"), ("musubi.meter", "true")]));
+        graph.apply(delta(1, vec![node(1), port(2, 1), link(12, 2, 11), port(11, 10), Upsert::Node(meter)], vec![]));
+        assert_eq!(graph.nodes.len(), 1);
+        assert!(graph.ports.contains_key(&2));
+        assert!(!graph.ports.contains_key(&11));
+        assert!(graph.links.is_empty());
+        graph.apply(delta(1, vec![link(13, 2, 11), port(14, 10)], vec![]));
+        assert!(graph.links.is_empty() && !graph.ports.contains_key(&14));
+        graph.apply(delta(2, vec![node(10), port(11, 10)], vec![]));
+        assert!(graph.nodes.contains_key(&10) && graph.ports.contains_key(&11));
     }
 }

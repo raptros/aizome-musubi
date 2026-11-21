@@ -13,14 +13,20 @@ use pw::spa::{
 use std::{
     cell::RefCell,
     collections::HashMap,
+    collections::HashSet,
     io::Cursor,
     rc::Rc,
+    sync::Arc,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
 use super::{Backend, Command, Connection, Event, RequestId};
+use super::{
+    Handle,
+    meters::{MAX_METERS, MeterReading, MeterStore, Slot},
+};
 use crate::graph::{
     ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NativeProps, NodeRecord,
     PortRecord, Properties, Upsert,
@@ -348,8 +354,104 @@ fn bind(
     }
 }
 
+struct MeterStream {
+    // Listener must be destroyed before its stream.
+    _listener: pw::stream::StreamListener<()>,
+    _stream: pw::stream::StreamRc,
+}
+
+fn start_meter(
+    core: &pw::core::CoreRc,
+    node: &NodeRecord,
+    store: &MeterStore,
+) -> Result<(MeterStream, Arc<Slot>), String> {
+    let channels = node.props.get("audio.channels").and_then(|v| v.parse::<usize>().ok()).unwrap_or(2).clamp(1, 64);
+    let serial = node.props.get("object.serial").ok_or("meter target has no object.serial")?;
+    let slot = Arc::new(Slot::new(channels));
+    let props = pw::properties::properties! {
+        "media.type" => "Audio", "media.category" => "Capture", "media.role" => "Measurement",
+        "media.name" => "Musubi level meter",
+        "application.name" => "Musubi", "application.id" => "org.aizome.Musubi",
+        "musubi.meter" => "true",
+        "target.object" => serial.as_str(),
+        "node.passive" => "true", "node.dont-reconnect" => "true",
+        "stream.monitor" => "true",
+        "resample.peaks" => "true", "node.rate" => "1/25", "node.latency" => "1/25",
+        "audio.channels" => channels.to_string().as_str(),
+        "stream.capture.sink" => if node.props.get("media.class").is_some_and(|v| v == "Audio/Sink") { "true" } else { "false" },
+    };
+    let stream = pw::stream::StreamRc::new(core.clone(), "Musubi level meter", props).map_err(|e| e.to_string())?;
+    let process_slot = slot.clone();
+    let origin = store.clone();
+    let listener = stream
+        .add_local_listener::<()>()
+        .process(move |stream, _| unsafe {
+            let buffer = stream.dequeue_raw_buffer();
+            if buffer.is_null() {
+                return;
+            }
+            let spa_buffer = (*buffer).buffer;
+            if !spa_buffer.is_null() && (*spa_buffer).n_datas > 0 {
+                let data = &*(*spa_buffer).datas;
+                if !data.data.is_null() && !data.chunk.is_null() {
+                    let chunk = &*data.chunk;
+                    let offset = chunk.offset as usize;
+                    let size = chunk.size as usize;
+                    if offset <= data.maxsize as usize && size <= data.maxsize as usize - offset {
+                        let bytes = std::slice::from_raw_parts((data.data as *const u8).add(offset), size);
+                        let stride = (chunk.stride as usize).max(channels * 4);
+                        process_slot.process(bytes, stride, origin.elapsed_ns());
+                    }
+                }
+            }
+            stream.queue_raw_buffer(buffer);
+        })
+        .register()
+        .map_err(|e| e.to_string())?;
+    let mut info = spa::param::audio::AudioInfoRaw::new();
+    info.set_format(spa::param::audio::AudioFormat::F32LE);
+    info.set_rate(144);
+    info.set_channels(channels as u32);
+    let mut position = [spa::sys::SPA_AUDIO_CHANNEL_UNKNOWN; 64];
+    if channels == 1 {
+        position[0] = spa::sys::SPA_AUDIO_CHANNEL_MONO;
+    } else {
+        position[0] = spa::sys::SPA_AUDIO_CHANNEL_FL;
+        position[1] = spa::sys::SPA_AUDIO_CHANNEL_FR;
+        for (i, channel) in position.iter_mut().enumerate().take(channels).skip(2) {
+            *channel = spa::sys::SPA_AUDIO_CHANNEL_AUX0 + (i as u32 - 2);
+        }
+    }
+    info.set_position(position);
+    let bytes = PodSerializer::serialize(
+        Cursor::new(Vec::new()),
+        &Value::Object(Object {
+            type_: spa::sys::SPA_TYPE_OBJECT_Format,
+            id: spa::sys::SPA_PARAM_EnumFormat,
+            properties: info.into(),
+        }),
+    )
+    .map_err(|e| format!("{e:?}"))?
+    .0
+    .into_inner();
+    let mut params = [Pod::from_bytes(&bytes).ok_or("invalid meter format")?];
+    stream
+        .connect(
+            spa::utils::Direction::Input,
+            Some(node.id),
+            pw::stream::StreamFlags::AUTOCONNECT
+                | pw::stream::StreamFlags::MAP_BUFFERS
+                | pw::stream::StreamFlags::RT_PROCESS
+                | pw::stream::StreamFlags::DONT_RECONNECT,
+            &mut params,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok((MeterStream { _listener: listener, _stream: stream }, slot))
+}
+
 struct Session {
     // Order matters: listener hooks and bound proxies are destroyed before registry/core.
+    meters: HashMap<Handle, MeterStream>,
     objects: Objects,
     _registry_listener: pw::registry::Listener,
     _core_listener: pw::core::Listener,
@@ -454,6 +556,7 @@ fn connect(
         .register();
     core.sync(0).map_err(|e| e.to_string())?;
     Ok(Session {
+        meters: HashMap::new(),
         objects,
         _registry_listener: registry_listener,
         _core_listener: core_listener,
@@ -470,6 +573,7 @@ fn execute(
     pending: &Pending,
     actions: &Actions,
     results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
+    meter_store: &MeterStore,
 ) {
     let (request, outcome) = match command {
         Command::Connect { out, input, confirmed, request } => {
@@ -628,6 +732,55 @@ fn execute(
             }
             (request, result)
         }
+        Command::StartMeters(nodes) => {
+            let mut borrowed = session.borrow_mut();
+            if let Some(active) = borrowed.as_mut() {
+                active.meters.clear();
+                let batch = pending.borrow();
+                let mut slots = HashMap::new();
+                let mut paused = HashSet::new();
+                for handle in nodes {
+                    if handle.epoch != batch.epoch || slots.contains_key(&handle) || paused.contains(&handle) {
+                        continue;
+                    }
+                    let node = match batch.changed.get(&handle.id) {
+                        Some(Upsert::Node(node)) => Some(node.clone()),
+                        _ => graph.borrow().nodes.get(&handle.id).cloned(),
+                    };
+                    let Some(node) = node else {
+                        continue;
+                    };
+                    if crate::graph::is_musubi_meter(&node.props) {
+                        continue;
+                    }
+                    if slots.len() >= MAX_METERS {
+                        paused.insert(handle);
+                        continue;
+                    }
+                    match start_meter(&active._core, &node, meter_store) {
+                        Ok((meter, slot)) => {
+                            active.meters.insert(handle, meter);
+                            slots.insert(handle, slot);
+                        }
+                        Err(reason) => {
+                            eprintln!("Musubi meter for node {} could not start: {reason}", handle.id);
+                            paused.insert(handle);
+                        }
+                    }
+                }
+                meter_store.replace(slots, paused);
+            } else {
+                meter_store.clear();
+            }
+            return;
+        }
+        Command::StopMeters => {
+            if let Some(active) = session.borrow_mut().as_mut() {
+                active.meters.clear();
+            }
+            meter_store.clear();
+            return;
+        }
         Command::Shutdown => return,
     };
     if let Err(reason) = outcome {
@@ -639,15 +792,20 @@ pub struct PipeWireBackend {
     tx: pw::channel::Sender<Command>,
     thread: Option<thread::JoinHandle<()>>,
     events: Option<mpsc::Receiver<Event>>,
+    meters: MeterStore,
 }
 impl PipeWireBackend {
     pub fn start(sink: impl Fn(Event) + Send + 'static) -> Result<Self, String> {
         let (tx, rx) = pw::channel::channel();
+        let meters = MeterStore::default();
         let thread = thread::Builder::new()
             .name("musubi-pipewire".into())
-            .spawn(move || run(rx, Box::new(sink)))
+            .spawn({
+                let meters = meters.clone();
+                move || run(rx, Box::new(sink), meters)
+            })
             .map_err(|e| e.to_string())?;
-        Ok(Self { tx, thread: Some(thread), events: None })
+        Ok(Self { tx, thread: Some(thread), events: None, meters })
     }
     pub fn channel() -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
@@ -674,6 +832,9 @@ impl Backend for PipeWireBackend {
     fn next_event(&mut self) -> Option<Event> {
         self.events.as_ref().and_then(|events| events.try_recv().ok())
     }
+    fn meters(&self) -> Vec<MeterReading> {
+        self.meters.readings()
+    }
 }
 impl Drop for PipeWireBackend {
     fn drop(&mut self) {
@@ -681,7 +842,7 @@ impl Drop for PipeWireBackend {
     }
 }
 
-fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
+fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     pw::init();
     let Ok(mainloop) = pw::main_loop::MainLoopRc::new(None) else {
         sink(Event::Connection(Connection::Down("Cannot create PipeWire loop".into())));
@@ -712,12 +873,14 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
     let sink = Rc::new(sink);
     let tick_sink = sink.clone();
     let tick_loop = mainloop.clone();
+    let meters_tick = meters.clone();
     let timer = mainloop.loop_().add_timer(move |_| {
         if let Some(reason) = failure_tick.borrow_mut().take() {
             for request in actions_tick.borrow().keys().copied().collect::<Vec<_>>() {
                 complete(&actions_tick, &results_tick, request, Err(format!("PipeWire down: {reason}")));
             }
             session_tick.borrow_mut().take();
+            meters_tick.clear();
             let mut batch = pending_tick.borrow_mut();
             batch.changed.clear();
             batch.removed.clear();
@@ -753,6 +916,14 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
             tick_sink(Event::Connection(Connection::Up(version)));
             if let Some((rate, quantum)) = clock_tick.borrow_mut().take() {
                 tick_sink(Event::ClockDefaults { rate, quantum });
+            }
+        }
+        // Registry removals are observed in the pending batch before it drains.
+        if let Some(active) = session_tick.borrow_mut().as_mut() {
+            for id in &pending_tick.borrow().removed {
+                let handle = Handle { epoch: pending_tick.borrow().epoch, id: *id };
+                active.meters.remove(&handle);
+                meters_tick.remove(handle);
             }
         }
         if let Some(delta) = pending_tick.borrow_mut().drain() {
@@ -792,7 +963,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink) {
     let command_results = results.clone();
     let _attached = rx.attach(mainloop.loop_(), move |cmd| match cmd {
         Command::Shutdown => stop.quit(),
-        command => execute(command, &command_session, &command_graph, &pending, &command_actions, &command_results),
+        command => {
+            execute(command, &command_session, &command_graph, &pending, &command_actions, &command_results, &meters)
+        }
     });
     mainloop.run();
     drop(timer);
