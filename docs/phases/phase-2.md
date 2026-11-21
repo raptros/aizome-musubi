@@ -24,6 +24,27 @@ Sidebar gains MIXER ▸ Mixer. Sections OUTPUTS · INPUTS · PLAYING · RECORDIN
 ### P2-S5 — Devices page + inspector meter
 Sidebar SYSTEM ▸ Devices (Tansu's layout): device list (icon, name, bus, active profile, status dot) and details (profile pop-up incl. Pro Audio when offered, routes per direction with availability, the device's nodes with channel counts); writes through the Pulse path (`set_card_profile`, port) so WirePlumber's restore keeps them. Profile switches that replace nodes keep the matrix and mixer consistent (epoch-safe, stable identity). Inspector (§2.7) gains the selected audio port's meter (one stream while the inspector shows). Tests + goldens; live where the private PipeWire allows (null devices have no profiles: say so; the VM covers it).
 
+Also in P2-S5, from `docs/design/visual-review-phase2-preview.md`:
+- **Blockers:**
+  - Device strips get the route pop-up (ports/routes with availability, through the Pulse path) instead of the "Device route" placeholder.
+  - Default device: ◉ accent-filled when default (both themes), semantics Toggle checked. The same goes for M on (red as in the mockup) and channel link on.
+- **Majors:**
+  - Mute and link on-states captured.
+  - Meters off: keep the channel columns, dim them and add a readable "Meters off" overlay; label paused meters; MAIN's meter keeps its channel count.
+  - Sidebar Mixer row: inset rounded selection like the matrix rows, a strip count, its own icon.
+  - Night disabled fader visibly dimmed.
+- **Minors:**
+  - Icon tiles instead of OUT/IN/PLAY tags.
+  - Device subtitles: description/route, not raw node names.
+  - Balance L/R labels.
+  - Channel labels under the value boxes.
+  - Meters/Show… icons and a title count; the Show… EFFECTS option waits for phase 3.
+  - Scale: show −60 with −∞ on its own row.
+  - % mode uses a % scale.
+  - Align stream and device rows.
+  - Scroll indicator.
+  - Per-control status hover.
+
 ### P2-S6 — VM, docs, reviews
 VM check extended: Mixer page lowers the test sink's volume with real input and `wpctl get-volume` confirms; the player's strip meter moves; Devices page lists the virtual devices. README/DEVELOPERS/architecture updated; code review (reviewer) and visual review (sekka-visual); backlog items fixed on the way are struck through.
 
