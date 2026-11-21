@@ -12,10 +12,12 @@ pub struct Handle {
     pub id: GlobalId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     Connect { out: Handle, input: Handle, confirmed: bool, request: RequestId },
     Disconnect { link: Handle, request: RequestId },
+    SetNodeVolume { node: Handle, channel_volumes: Vec<f32>, request: RequestId },
+    SetNodeMute { node: Handle, muted: bool, request: RequestId },
     Shutdown,
 }
 

@@ -6,7 +6,7 @@ keep=0
 if [[ ${1:-} == --keep ]]; then keep=1; shift; fi
 [[ ${1:-} == -- && $# -ge 2 ]] || usage
 shift
-for tool in pipewire pw-dump pw-link pw-cli pw-cat gst-launch-1.0 jq; do
+for tool in pipewire pipewire-pulse pactl pw-dump pw-link pw-cli pw-cat gst-launch-1.0 jq; do
     command -v "$tool" >/dev/null || { echo "missing $tool; enter the pinned Nix shell (see DEVELOPERS.md)" >&2; exit 127; }
 done
 
@@ -22,6 +22,7 @@ context.objects = [
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_out node.description = "Test Interface Output" media.class = Audio/Sink audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_interface_in node.description = "Test Interface Input" media.class = Audio/Source audio.position = [ AUX0 AUX1 AUX2 AUX3 ] node.always-process = true } }
     { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_test_mic node.description = "Test Mic" media.class = Audio/Source audio.position = [ MONO ] node.always-process = true } }
+    { factory = adapter args = { factory.name = support.null-audio-sink node.name = musubi_native_only node.description = "Native Filter" media.class = Audio/Filter audio.position = [ FL FR ] node.always-process = true } }
 ]
 CONF
 children=()
@@ -46,6 +47,16 @@ for (( attempt=0; attempt<100; attempt++ )); do
     sleep 0.1
 done
 [[ -S "$root/runtime/pipewire-0" ]] || { echo 'Private PipeWire socket did not appear' >&2; cat "$root/pipewire.log" >&2; exit 1; }
+export PULSE_SERVER="unix:$root/runtime/pulse/native"
+mkdir -p "$root/runtime/pulse"
+pipewire-pulse >"$root/pipewire-pulse.log" 2>&1 &
+children+=("$!")
+for (( attempt=0; attempt<100; attempt++ )); do
+    [[ -S "$root/runtime/pulse/native" ]] && break
+    kill -0 "${children[-1]}" 2>/dev/null || { cat "$root/pipewire-pulse.log" >&2; exit 1; }
+    sleep 0.1
+done
+[[ -S "$root/runtime/pulse/native" ]] || { echo 'Private Pulse socket did not appear' >&2; cat "$root/pipewire-pulse.log" >&2; exit 1; }
 # Without WirePlumber there is no policy manager to select adapter port
 # configuration; set each static node's DSP layout ourselves.
 while IFS=$'\t' read -r id class channels positions; do

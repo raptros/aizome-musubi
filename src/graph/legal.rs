@@ -81,7 +81,13 @@ mod tests {
         g.apply(GraphDelta {
             epoch: 1,
             upserts: vec![
-                Upsert::Node(NodeRecord { id: 900, device_id: None, client_id: None, props: Properties::new() }),
+                Upsert::Node(NodeRecord {
+                    id: 900,
+                    device_id: None,
+                    client_id: None,
+                    props: Properties::new(),
+                    native: Default::default(),
+                }),
                 Upsert::Port(midi),
                 Upsert::Port(unknown),
             ],

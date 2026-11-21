@@ -122,6 +122,7 @@ mod tests {
             client_id: None,
             device_id: None,
             props: Properties::from([("media.class".into(), "Video/Source".into())]),
+            native: Default::default(),
         };
         assert_eq!(classify(&p, Some(&n)), PortKind::Video);
         p.enum_formats = vec![PortKind::Audio];

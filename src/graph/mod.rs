@@ -28,12 +28,20 @@ pub struct DeviceRecord {
     pub id: GlobalId,
     pub props: Properties,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NodeRecord {
     pub id: GlobalId,
     pub device_id: Option<GlobalId>,
     pub client_id: Option<GlobalId>,
     pub props: Properties,
+    pub native: NativeProps,
+}
+/// Observed node parameter, never a pending/requested value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NativeProps {
+    pub channel_volumes: Option<Vec<f32>>,
+    pub muted: Option<bool>,
+    pub writable: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortRecord {
@@ -65,7 +73,7 @@ pub struct MetadataRecord {
     pub props: Properties,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Upsert {
     Client(ClientRecord),
     Device(DeviceRecord),
@@ -262,6 +270,7 @@ mod tests {
             client_id: None,
             device_id: None,
             props: props(&[("media.class", "Audio/Sink")]),
+            native: Default::default(),
         })
     }
     fn port(id: u32, node_id: u32) -> Upsert {
@@ -314,6 +323,7 @@ mod tests {
                 client_id: None,
                 device_id: None,
                 props: props(&[("media.class", "Video/Source")]),
+                native: Default::default(),
             })],
             vec![],
         ));

@@ -13,3 +13,4 @@ Known, non-blocking issues carried past phase 1. Sources: `docs/design/visual-re
 | B7 | Add Route sheet: no scroll indicator; background not visibly dimmed | `routes` sheet / kit | review 3 #10 |
 | B8 | MIDI matrices use a small part of the body; Day rotated port labels still mid-grey; narrow toolbar icon-only | layout, theme roles | review 3 #11 |
 | B9 | Paint-as-you-go drag as an optional setting, if users ask (D10) | gesture | D10 |
+| B10 | The Pulse `index` ↔ PipeWire `object.serial` bridge relies on pipewire-pulse's observed convention (private PipeWire 1.6.11 evidence in `runs/2026-11-20/patchbay/phase2/s1/`); verify against future pipewire-pulse upgrades and fail closed on mismatches | `mixer::model` | P2-S1 |

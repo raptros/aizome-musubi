@@ -11,7 +11,7 @@
         a=${sekka}/desktop/aizome
         mkdir -p $out/crates $out/sukumo
         cp $a/Cargo.toml $out/
-        for c in aizome-kit aizome-theme aizome-config aizome-shell-proto; do
+        for c in aizome-kit aizome-theme aizome-config aizome-shell-proto aizome-sys aizome-apps; do
           cp -r $a/crates/$c $out/crates/
         done
         cp $a/sukumo/Cargo.toml $out/sukumo/
@@ -32,9 +32,9 @@
         program = "${musubi}/bin/aizome-musubi";
       };
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ rustc cargo rustfmt clippy pkg-config pipewire clang ];
+        packages = with pkgs; [ rustc cargo rustfmt clippy pkg-config pipewire clang libpulseaudio ];
         LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
-        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.fontconfig pkgs.wayland pkgs.pipewire ];
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.fontconfig pkgs.wayland pkgs.pipewire pkgs.libpulseaudio ];
         AIZOME_FONT_DIR = fontsFor;
       };
       checks.${system} = {

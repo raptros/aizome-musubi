@@ -127,6 +127,55 @@ impl Backend for FakeBackend {
                 };
                 (request, result)
             }
+            Command::SetNodeVolume { node, channel_volumes, request } => {
+                let result = if node.epoch != self.graph.epoch {
+                    Err("stale connection epoch".into())
+                } else if let Some(current) = self.graph.nodes.get(&node.id) {
+                    if !current.native.writable
+                        || current.native.channel_volumes.as_ref().is_none_or(|v| v.len() != channel_volumes.len())
+                        || channel_volumes.iter().any(|v| !v.is_finite() || *v < 0.0)
+                    {
+                        Err("node has no writable channelVolumes Props".into())
+                    } else if let Some(error) = self.next_failure.take() {
+                        Err(error)
+                    } else {
+                        let mut changed = current.clone();
+                        changed.native.channel_volumes = Some(channel_volumes);
+                        self.publish(GraphDelta {
+                            epoch: node.epoch,
+                            upserts: vec![Upsert::Node(changed)],
+                            removals: vec![],
+                        });
+                        Ok(())
+                    }
+                } else {
+                    Err("node not found".into())
+                };
+                (request, result)
+            }
+            Command::SetNodeMute { node, muted, request } => {
+                let result = if node.epoch != self.graph.epoch {
+                    Err("stale connection epoch".into())
+                } else if let Some(current) = self.graph.nodes.get(&node.id) {
+                    if !current.native.writable || current.native.muted.is_none() {
+                        Err("node has no writable mute".into())
+                    } else if let Some(error) = self.next_failure.take() {
+                        Err(error)
+                    } else {
+                        let mut changed = current.clone();
+                        changed.native.muted = Some(muted);
+                        self.publish(GraphDelta {
+                            epoch: node.epoch,
+                            upserts: vec![Upsert::Node(changed)],
+                            removals: vec![],
+                        });
+                        Ok(())
+                    }
+                } else {
+                    Err("node not found".into())
+                };
+                (request, result)
+            }
             Command::Shutdown => {
                 self.events.push_back(Event::Connection(Connection::Down("shutdown".into())));
                 return;

@@ -7,11 +7,13 @@ use pw::spa::{
         format::{MediaSubtype, MediaType},
         format_utils,
     },
+    pod::{Object, Pod, Property, Value, ValueArray, deserialize::PodDeserializer, serialize::PodSerializer},
     utils::dict::DictRef,
 };
 use std::{
     cell::RefCell,
     collections::HashMap,
+    io::Cursor,
     rc::Rc,
     sync::mpsc,
     thread,
@@ -20,8 +22,8 @@ use std::{
 
 use super::{Backend, Command, Connection, Event, RequestId};
 use crate::graph::{
-    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NodeRecord, PortRecord,
-    Properties, Upsert,
+    ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NativeProps, NodeRecord,
+    PortRecord, Properties, Upsert,
     classify::PortKind,
     legal::{LinkLegality, can_link},
 };
@@ -99,7 +101,7 @@ impl Batch {
 // a proxy (or its listener) to the application thread.
 #[allow(dead_code)]
 enum Bound {
-    Node(pw::node::NodeListener, pw::node::Node),
+    Node(pw::node::NodeListener, Rc<pw::node::Node>),
     Port(pw::port::PortListener, pw::port::Port),
     Link(pw::link::LinkListener, pw::link::Link),
     Device(pw::device::DeviceListener, pw::device::Device),
@@ -140,6 +142,40 @@ fn format_kind(pod: &spa::pod::Pod) -> PortKind {
     }
 }
 
+fn observed_props(pod: &Pod, previous: &NativeProps) -> NativeProps {
+    // The parameter callback is the sole source of gain/mute values; command submission
+    // never changes a snapshot.
+    let Ok(value) = (unsafe {
+        PodDeserializer::deserialize_ptr::<Value>(std::ptr::NonNull::new(pod.as_raw_ptr()).expect("pod pointer"))
+    }) else {
+        return previous.clone();
+    };
+    let Value::Object(object) = value else { return previous.clone() };
+    let mut observed = NativeProps { writable: previous.writable, ..NativeProps::default() };
+    for prop in object.properties {
+        match (prop.key, prop.value) {
+            (spa::sys::SPA_PROP_channelVolumes, Value::ValueArray(ValueArray::Float(v))) => {
+                observed.channel_volumes = Some(v);
+            }
+            (spa::sys::SPA_PROP_mute, Value::Bool(v)) => observed.muted = Some(v),
+            _ => {}
+        }
+    }
+    observed
+}
+
+fn write_props(proxy: &pw::node::Node, property: Property) -> Result<(), String> {
+    let object =
+        Object { type_: spa::sys::SPA_TYPE_OBJECT_Props, id: spa::sys::SPA_PARAM_Props, properties: vec![property] };
+    let bytes = PodSerializer::serialize(Cursor::new(Vec::new()), &Value::Object(object))
+        .map_err(|e| format!("Cannot encode Props: {e:?}"))?
+        .0
+        .into_inner();
+    let pod = Pod::from_bytes(&bytes).ok_or("Cannot decode encoded Props")?;
+    proxy.set_param(ParamType::Props, 0, pod);
+    Ok(())
+}
+
 fn bind(
     global: &pw::registry::GlobalObject<&DictRef>,
     registry: &pw::registry::RegistryRc,
@@ -152,24 +188,48 @@ fn bind(
     let p = props(global.props);
     let result: Result<Bound, pw::Error> = match global.type_ {
         pw::types::ObjectType::Node => registry.bind::<pw::node::Node, _>(global).map(|proxy| {
+            let proxy = Rc::new(proxy);
+            let can_write =
+                global.permissions.contains(pw::permissions::PermissionFlags::W | pw::permissions::PermissionFlags::X);
             let state = Rc::new(RefCell::new(NodeRecord {
                 id,
                 device_id: prop_id(&p, "device.id"),
                 client_id: prop_id(&p, "client.id"),
                 props: p.clone(),
+                native: NativeProps::default(),
             }));
             pending.borrow_mut().upsert(Upsert::Node(state.borrow().clone()));
-            let batch = pending.clone();
+            let info_state = state.clone();
+            let param_state = state;
+            let info_batch = pending.clone();
+            let param_batch = pending.clone();
+            let info_proxy = proxy.clone();
             let listener = proxy
                 .add_listener_local()
                 .info(move |info| {
-                    let mut record = state.borrow_mut();
+                    let mut record = info_state.borrow_mut();
                     merge(&mut record.props, info.props());
                     record.device_id = prop_id(&record.props, "device.id");
                     record.client_id = prop_id(&record.props, "client.id");
-                    batch.borrow_mut().upsert(Upsert::Node(record.clone()));
+                    let props_param = info.params().iter().find(|param| param.id() == ParamType::Props);
+                    record.native.writable = can_write
+                        && props_param.is_some_and(|param| param.flags().contains(spa::param::ParamInfoFlags::WRITE));
+                    info_batch.borrow_mut().upsert(Upsert::Node(record.clone()));
+                    if props_param.is_some() {
+                        info_proxy.enum_params(0, Some(ParamType::Props), 0, u32::MAX);
+                    }
+                })
+                .param(move |_, kind, _, _, pod| {
+                    if kind == ParamType::Props {
+                        if let Some(pod) = pod {
+                            let mut record = param_state.borrow_mut();
+                            record.native = observed_props(pod, &record.native);
+                            param_batch.borrow_mut().upsert(Upsert::Node(record.clone()));
+                        }
+                    }
                 })
                 .register();
+            proxy.subscribe_params(&[ParamType::Props]);
             Bound::Node(listener, proxy)
         }),
         pw::types::ObjectType::Port => registry.bind::<pw::port::Port, _>(global).map(|proxy| {
@@ -493,6 +553,79 @@ fn execute(
                     },
                 )
             };
+            (request, result)
+        }
+        Command::SetNodeVolume { node, channel_volumes, request } => {
+            let result = if node.epoch != pending.borrow().epoch {
+                Err("stale connection epoch".into())
+            } else {
+                let batch = pending.borrow();
+                let observed = match batch.changed.get(&node.id) {
+                    Some(Upsert::Node(n)) => Some(n.clone()),
+                    _ => graph.borrow().nodes.get(&node.id).cloned(),
+                };
+                let current = observed.ok_or_else(|| "node not found".to_owned());
+                current.and_then(|n| {
+                    let channels = n.native.channel_volumes.as_ref().ok_or("node has no channelVolumes".to_owned())?;
+                    if !n.native.writable {
+                        return Err("node Props are not writable".into());
+                    }
+                    if channel_volumes.len() != channels.len()
+                        || channel_volumes.is_empty()
+                        || channel_volumes.iter().any(|v| !v.is_finite() || *v < 0.0)
+                    {
+                        return Err("invalid channel volumes".into());
+                    }
+                    let borrowed = session.borrow();
+                    let active = borrowed.as_ref().ok_or("PipeWire unavailable".to_owned())?;
+                    let objects = active.objects.borrow();
+                    let Some(Bound::Node(_, proxy)) = objects.get(&node.id) else {
+                        return Err("node proxy not found".into());
+                    };
+                    write_props(
+                        proxy,
+                        Property::new(
+                            spa::sys::SPA_PROP_channelVolumes,
+                            Value::ValueArray(ValueArray::Float(channel_volumes)),
+                        ),
+                    )?;
+                    proxy.enum_params(0, Some(ParamType::Props), 0, 1);
+                    Ok(())
+                })
+            };
+            if result.is_ok() {
+                results.borrow_mut().push((request, Ok(())));
+            }
+            (request, result)
+        }
+        Command::SetNodeMute { node, muted, request } => {
+            let result = if node.epoch != pending.borrow().epoch {
+                Err("stale connection epoch".into())
+            } else {
+                let batch = pending.borrow();
+                let observed = match batch.changed.get(&node.id) {
+                    Some(Upsert::Node(n)) => Some(n.clone()),
+                    _ => graph.borrow().nodes.get(&node.id).cloned(),
+                };
+                let current = observed.ok_or_else(|| "node not found".to_owned());
+                current.and_then(|n| {
+                    if !n.native.writable || n.native.muted.is_none() {
+                        return Err("node has no writable mute".into());
+                    }
+                    let borrowed = session.borrow();
+                    let active = borrowed.as_ref().ok_or("PipeWire unavailable".to_owned())?;
+                    let objects = active.objects.borrow();
+                    let Some(Bound::Node(_, proxy)) = objects.get(&node.id) else {
+                        return Err("node proxy not found".into());
+                    };
+                    write_props(proxy, Property::new(spa::sys::SPA_PROP_mute, Value::Bool(muted)))?;
+                    proxy.enum_params(0, Some(ParamType::Props), 0, 1);
+                    Ok(())
+                })
+            };
+            if result.is_ok() {
+                results.borrow_mut().push((request, Ok(())));
+            }
             (request, result)
         }
         Command::Shutdown => return,

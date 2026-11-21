@@ -1,4 +1,4 @@
-{ lib, rustPlatform, runCommand, makeWrapper, pkg-config, pipewire, clang, libclang, fontconfig, wayland, src, aizome, fonts }:
+{ lib, rustPlatform, runCommand, makeWrapper, pkg-config, pipewire, clang, libclang, fontconfig, wayland, libpulseaudio, src, aizome, fonts }:
 let
   source = runCommand "musubi-source" { } ''
     mkdir -p $out/sekka/desktop
@@ -12,10 +12,10 @@ in rustPlatform.buildRustPackage {
   sourceRoot = "musubi-source/aizome-musubi";
   cargoLock.lockFile = ../Cargo.lock;
   nativeBuildInputs = [ makeWrapper pkg-config clang ];
-  buildInputs = [ pipewire ];
+  buildInputs = [ pipewire libpulseaudio ];
   LIBCLANG_PATH = "${libclang.lib}/lib";
   AIZOME_FONT_DIR = fonts;
-  LD_LIBRARY_PATH = lib.makeLibraryPath [ fontconfig wayland pipewire ];
+  LD_LIBRARY_PATH = lib.makeLibraryPath [ fontconfig wayland pipewire libpulseaudio ];
   # Headless Harness goldens use only pinned fonts; no running PipeWire is accessed.
   # Cargo's registry cache defaults to $HOME/.cargo; under an unsandboxed builder
   # (portable Nix) that creates /homeless-shelter and fails later derivations'
@@ -28,7 +28,7 @@ in rustPlatform.buildRustPackage {
     install -Dm644 data/org.aizome.Musubi.desktop $out/share/applications/org.aizome.Musubi.desktop
     install -Dm644 data/org.aizome.Musubi.svg $out/share/icons/hicolor/scalable/apps/org.aizome.Musubi.svg
     wrapProgram $out/bin/aizome-musubi \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ fontconfig wayland pipewire ]} \
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ fontconfig wayland pipewire libpulseaudio ]} \
       --set-default AIZOME_FONT_DIR ${fonts}
   '';
   meta = {

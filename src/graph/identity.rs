@@ -126,6 +126,7 @@ mod tests {
                 client_id: None,
                 device_id: None,
                 props: Properties::from([("node.name".into(), "shared".into())]),
+                native: Default::default(),
             }));
             changes.push(Upsert::Port(PortRecord {
                 id: port,
