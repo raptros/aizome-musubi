@@ -7,7 +7,7 @@ use aizome_sys::audio::{AudioDevice, AudioState, AudioStream};
 use crate::backend::Handle;
 use crate::graph::{Graph, NodeRecord};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StripKind {
     Output,
     Input,
@@ -27,6 +27,7 @@ pub enum StripControl {
 pub struct Strip {
     pub kind: StripKind,
     pub name: String,
+    pub subtitle: String,
     pub node: Option<Handle>,
     pub control: StripControl,
 }
@@ -81,7 +82,7 @@ fn device_strip(graph: &Graph, device: &AudioDevice, kind: StripKind) -> Strip {
         },
         Err(reason) => StripControl::ReadOnly(reason),
     };
-    Strip { kind, name: device.description.clone(), node, control }
+    Strip { kind, name: device.description.clone(), subtitle: device.name.clone(), node, control }
 }
 
 fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {
@@ -94,7 +95,13 @@ fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {
         Ok(_) => StripControl::ReadOnly("Pulse stream volume is not writable".into()),
         Err(reason) => StripControl::ReadOnly(reason),
     };
-    Strip { kind, name: stream.media_name.clone(), node, control }
+    Strip {
+        kind,
+        name: if stream.application.is_empty() { stream.media_name.clone() } else { stream.application.clone() },
+        subtitle: stream.media_name.clone(),
+        node,
+        control,
+    }
 }
 
 /// Immutable mixer projection; no proxy, command or UI state is stored here.
@@ -155,6 +162,7 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
                 .or_else(|| node.props.get("node.name"))
                 .cloned()
                 .unwrap_or_else(|| format!("Node {}", node.id)),
+            subtitle: node.props.get("node.name").cloned().unwrap_or_default(),
             node: Some(Handle { epoch: graph.epoch, id: node.id }),
             control,
         });
