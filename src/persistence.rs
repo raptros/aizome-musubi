@@ -33,6 +33,44 @@ fn save(path: Option<PathBuf>, body: String) -> std::io::Result<()> {
     fs::write(&temporary, body)?;
     fs::rename(temporary, path)
 }
+#[derive(Clone, Debug)]
+pub struct MixerOptions {
+    pub percent: bool,
+    pub meters: bool,
+    pub shown: [bool; 5],
+}
+
+impl Default for MixerOptions {
+    fn default() -> Self {
+        Self { percent: false, meters: true, shown: [true; 5] }
+    }
+}
+
+pub fn load_mixer(paths: Option<&Paths>) -> MixerOptions {
+    let mut result = MixerOptions::default();
+    let Some(body) = paths.and_then(|p| fs::read_to_string(&p.config).ok()) else { return result };
+    let mut mixer = false;
+    for line in body.lines() {
+        if line.starts_with('[') {
+            mixer = line == "[mixer]";
+        } else if mixer {
+            if let Some((key, value)) = line.split_once(" = ") {
+                let enabled = value == "true";
+                match key {
+                    "percent" => result.percent = enabled,
+                    "meters" => result.meters = enabled,
+                    "outputs" => result.shown[0] = enabled,
+                    "inputs" => result.shown[1] = enabled,
+                    "playing" => result.shown[2] = enabled,
+                    "recording" => result.shown[3] = enabled,
+                    "monitors" => result.shown[4] = enabled,
+                    _ => {}
+                }
+            }
+        }
+    }
+    result
+}
 
 pub fn load_options(paths: Option<&Paths>) -> [ViewOptions; 4] {
     let mut options = std::array::from_fn(|_| ViewOptions::default());
@@ -73,7 +111,7 @@ pub fn load_options(paths: Option<&Paths>) -> [ViewOptions; 4] {
     options
 }
 
-pub fn save_options(paths: Option<&Paths>, options: &[ViewOptions; 4]) -> std::io::Result<()> {
+pub fn save_options(paths: Option<&Paths>, options: &[ViewOptions; 4], mixer: &MixerOptions) -> std::io::Result<()> {
     let mut body = String::new();
     for (name, option) in ["audio", "midi", "midi2", "video"].into_iter().zip(options) {
         body.push_str(&format!(
@@ -82,6 +120,10 @@ pub fn save_options(paths: Option<&Paths>, options: &[ViewOptions; 4]) -> std::i
             option.full_names, option.row_header, option.column_header
         ));
     }
+    body.push_str(&format!(
+        "[mixer]\npercent = {}\nmeters = {}\noutputs = {}\ninputs = {}\nplaying = {}\nrecording = {}\nmonitors = {}\n",
+        mixer.percent, mixer.meters, mixer.shown[0], mixer.shown[1], mixer.shown[2], mixer.shown[3], mixer.shown[4]
+    ));
     save(paths.map(|p| p.config.clone()), body)
 }
 

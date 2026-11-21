@@ -88,12 +88,45 @@ pub struct LinkIntent {
 #[derive(Clone, Debug, Default)]
 pub struct Transaction {
     pub intents: Vec<LinkIntent>,
+    pub mixer: Option<MixerIntent>,
 }
 
 impl Transaction {
     pub fn label(&self) -> &'static str {
+        if let Some(intent) = &self.mixer {
+            return match intent.before {
+                MixerValue::Volume(_) => "Volume",
+                MixerValue::Mute(_) => "Mute",
+                MixerValue::Balance(_) => "Balance",
+                MixerValue::Default(_) => "Default Device",
+                MixerValue::Target(_) => "Move Stream",
+            };
+        }
         if self.intents.first().is_some_and(|intent| intent.connect) { "Connect" } else { "Disconnect" }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MixerIdentity {
+    Device(StripKind, String),
+    Stream(StripKind, String, String, String),
+    Native(String),
+}
+
+#[derive(Clone, Debug)]
+pub enum MixerValue {
+    Volume(f32),
+    Mute(bool),
+    Balance(f32),
+    Default(String),
+    Target(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct MixerIntent {
+    pub identity: MixerIdentity,
+    pub before: MixerValue,
+    pub after: MixerValue,
 }
 
 #[derive(Clone)]
@@ -112,6 +145,13 @@ pub enum Msg {
     MixerDefault(StripKind, String),
     MixerMove(StripKind, u32, u32),
     MixerLink(StripKind, u32),
+    MixerPercent(bool),
+    MixerMeters(bool),
+    MixerShow,
+    MixerShown(usize, bool),
+    MixerFilter(String),
+    MixerSettle(u64),
+    MixerHover(Option<String>),
     Activated,
     Matrix(MatrixMsg),
     Backend(Event),
@@ -171,6 +211,12 @@ pub struct Musubi {
     meter_tick: bool,
     window_suspended: bool,
     linked_channels: HashSet<(StripKind, u32)>,
+    mixer_options: persistence::MixerOptions,
+    mixer_show: bool,
+    mixer_filter: String,
+    mixer_hover: Option<String>,
+    mixer_pending: Option<usize>,
+    mixer_generation: u64,
     pub graph: Graph,
     connection: Option<Connection>,
     clock_defaults: Option<(u32, u32)>,
@@ -279,6 +325,9 @@ struct ToolbarConfig {
     to: String,
     has_ports: bool,
     can_undo: bool,
+    mixer: persistence::MixerOptions,
+    mixer_filter: String,
+    mixer_show: bool,
 }
 
 struct ResponsiveToolbar(ToolbarConfig);
@@ -308,6 +357,61 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
     if !very_narrow {
         let title = if compact { config.short_title.clone() } else { config.title.clone() };
         controls.push(text(title).semibold().into());
+    }
+    if config.page == Page::Mixer {
+        controls.push(
+            segmented(["dB", "%"], if config.mixer.percent { 1 } else { 0 })
+                .on_select(|index| Msg::MixerPercent(index == 1))
+                .id("mixer-unit")
+                .into(),
+        );
+        controls.push(
+            button(if compact { "Meters" } else { "Meters" })
+                .toolbar()
+                .selected(config.mixer.meters)
+                .on_press(Msg::MixerMeters(!config.mixer.meters))
+                .id("mixer-meters")
+                .into(),
+        );
+        let mut checkboxes: Vec<Element<Msg>> = Vec::new();
+        for (index, label) in
+            ["Outputs", "Inputs", "Playing", "Recording", "Monitors/virtual devices"].iter().enumerate()
+        {
+            checkboxes.push(
+                checkbox(*label, config.mixer.shown[index])
+                    .on_toggle(move |on| Msg::MixerShown(index, on))
+                    .id(format!("mixer-show-{index}"))
+                    .into(),
+            );
+        }
+        controls.push(
+            popover(
+                button("Show…").toolbar().on_press(Msg::MixerShow).id("mixer-show"),
+                container(column(checkboxes).spacing(8.).padding(12.)).width(220.),
+                config.mixer_show,
+            )
+            .on_dismiss(Msg::MixerShow)
+            .into(),
+        );
+        controls.push(
+            if compact { icon_button(Icon::Undo2) } else { button("Undo").icon(Icon::Undo2) }
+                .toolbar()
+                .on_press(Msg::Undo)
+                .enabled(config.can_undo)
+                .label("Undo")
+                .id("undo")
+                .into(),
+        );
+        controls.push(spacer().into());
+        controls.push(
+            search_field(&config.mixer_filter)
+                .placeholder("Filter strips")
+                .on_change(Msg::MixerFilter)
+                .width(180.)
+                .id("mixer-filter")
+                .into(),
+        );
+        return toolbar(controls).into();
     }
     controls.push(
         segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
@@ -461,7 +565,7 @@ impl Musubi {
         }
     }
     fn sync_meters(&mut self, cx: &mut Cx<Msg>) {
-        if self.page != Page::Mixer || self.window_suspended {
+        if self.page != Page::Mixer || !self.mixer_options.meters || self.window_suspended {
             if self.meter_running {
                 self.send_command(Command::StopMeters);
                 self.meter_running = false;
@@ -474,6 +578,19 @@ impl Musubi {
             .map(|audio| mixer::model::strips(&audio.snapshot(), &self.graph))
             .unwrap_or_default()
             .into_iter()
+            .filter(|strip| {
+                let category = match strip.kind {
+                    StripKind::Output => 0,
+                    StripKind::Input => 1,
+                    StripKind::Playback => 2,
+                    StripKind::Recording => 3,
+                    StripKind::Native => 4,
+                };
+                self.mixer_options.shown[category]
+                    && (self.mixer_filter.is_empty()
+                        || strip.name.to_lowercase().contains(&self.mixer_filter.to_lowercase())
+                        || strip.subtitle.to_lowercase().contains(&self.mixer_filter.to_lowercase()))
+            })
             .filter_map(|strip| strip.node)
             .collect();
         self.send_command(Command::StartMeters(nodes));
@@ -518,6 +635,137 @@ impl Musubi {
             }
             StripControl::ReadOnly(reason) => self.notice = Some(reason),
         }
+    }
+    fn mixer_identity(
+        &self,
+        kind: StripKind,
+        index: u32,
+        snapshot: &aizome_sys::audio::AudioState,
+    ) -> Option<MixerIdentity> {
+        match kind {
+            StripKind::Output | StripKind::Input => {
+                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                devices.iter().find(|d| d.index == index).map(|d| MixerIdentity::Device(kind, d.name.clone()))
+            }
+            StripKind::Playback | StripKind::Recording => {
+                let streams = if kind == StripKind::Playback { &snapshot.playback } else { &snapshot.recording };
+                let stream = streams.iter().find(|s| s.index == index)?;
+                let serial = self
+                    .graph
+                    .nodes
+                    .values()
+                    .find(|n| n.props.get("object.serial").is_some_and(|s| s.parse::<u32>().ok() == Some(index)))?
+                    .props
+                    .get("object.serial")?
+                    .clone();
+                Some(MixerIdentity::Stream(kind, stream.application.clone(), stream.media_name.clone(), serial))
+            }
+            StripKind::Native => self
+                .graph
+                .nodes
+                .get(&index)
+                .and_then(|node| node.props.get("node.name"))
+                .cloned()
+                .map(MixerIdentity::Native),
+        }
+    }
+
+    fn record_mixer(&mut self, intent: MixerIntent, burst: bool, cx: &mut Cx<Msg>) {
+        if burst {
+            if let Some(index) = self.mixer_pending {
+                if let Some(previous) = &mut self.transactions[index].mixer {
+                    if previous.identity == intent.identity
+                        && std::mem::discriminant(&previous.after) == std::mem::discriminant(&intent.after)
+                    {
+                        previous.after = intent.after;
+                        self.mixer_generation += 1;
+                        cx.after(Duration::from_millis(500), Msg::MixerSettle(self.mixer_generation));
+                        return;
+                    }
+                }
+                self.history.record(index);
+                self.mixer_pending = None;
+            }
+        } else if let Some(index) = self.mixer_pending.take() {
+            self.history.record(index);
+        }
+        let index = self.transactions.len();
+        self.transactions.push(Transaction { intents: Vec::new(), mixer: Some(intent) });
+        if burst {
+            self.mixer_pending = Some(index);
+            self.mixer_generation += 1;
+            cx.after(Duration::from_millis(500), Msg::MixerSettle(self.mixer_generation));
+        } else {
+            self.history.record(index);
+        }
+    }
+
+    fn replay_mixer(&mut self, transaction_index: usize, undo: bool) {
+        let intent = self.transactions[transaction_index].mixer.as_ref().unwrap().clone();
+        let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+        let target = if undo { &intent.before } else { &intent.after };
+        let resolution: Vec<_> = mixer::model::strips(&snapshot, &self.graph)
+            .into_iter()
+            .filter(|strip| {
+                let id = match &strip.control {
+                    StripControl::Pulse { index, .. } => *index,
+                    StripControl::Native { node, .. } => node.id,
+                    StripControl::ReadOnly(_) => return false,
+                };
+                self.mixer_identity(strip.kind, id, &snapshot).as_ref() == Some(&intent.identity)
+            })
+            .collect();
+        if resolution.len() != 1 {
+            self.notice = Some(format!(
+                "{} skipped: {} object.",
+                if undo { "Undo" } else { "Redo" },
+                if resolution.is_empty() { "missing" } else { "ambiguous" }
+            ));
+            return;
+        }
+        let strip = &resolution[0];
+        let index = match &strip.control {
+            StripControl::Pulse { index, .. } => *index,
+            StripControl::Native { node, .. } => node.id,
+            StripControl::ReadOnly(_) => unreachable!(),
+        };
+        match target {
+            MixerValue::Volume(value) => self.mixer_write(strip.kind, strip.control.clone(), Some(*value), None),
+            MixerValue::Mute(value) => self.mixer_write(strip.kind, strip.control.clone(), None, Some(*value)),
+            MixerValue::Balance(value) => {
+                if let Some(audio) = &self.audio {
+                    audio.balance(strip.kind, index, *value);
+                }
+            }
+            MixerValue::Default(name) => {
+                let devices = if strip.kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                if devices.iter().filter(|d| &d.name == name).count() != 1 {
+                    self.notice =
+                        Some(format!("{} skipped: missing default device.", if undo { "Undo" } else { "Redo" }));
+                    return;
+                }
+                if let Some(audio) = &self.audio {
+                    audio.default_device(strip.kind, name);
+                }
+            }
+            MixerValue::Target(name) => {
+                let devices = if strip.kind == StripKind::Playback { &snapshot.sinks } else { &snapshot.sources };
+                let destinations: Vec<_> = devices.iter().filter(|d| &d.name == name).collect();
+                if destinations.len() != 1 {
+                    self.notice = Some(format!("{} skipped: missing target.", if undo { "Undo" } else { "Redo" }));
+                    return;
+                }
+                if let Some(audio) = &self.audio {
+                    audio.move_stream(strip.kind, index, destinations[0].index);
+                }
+            }
+        }
+        if undo {
+            self.history.after_undo(Some(transaction_index));
+        } else {
+            self.history.after_redo(Some(transaction_index));
+        }
+        self.notice = Some(format!("{} applied.", if undo { "Undo" } else { "Redo" }));
     }
     fn commands_for(&mut self, cells: Vec<Cell>, connect: bool, cx: &mut Cx<Msg>) {
         self.notice = None;
@@ -690,6 +938,10 @@ impl Musubi {
     fn replay(&mut self, undo: bool, cx: &mut Cx<Msg>) {
         let index = if undo { self.history.undo() } else { self.history.redo() };
         let Some(index) = index else { return };
+        if self.transactions[index].mixer.is_some() {
+            self.replay_mixer(index, undo);
+            return;
+        }
         if self.transactions[index]
             .intents
             .iter()
@@ -929,7 +1181,10 @@ impl Musubi {
         Some(format!("{from_name} · {} → {to_name} · {} · {state}", describe(source), describe(target)))
     }
     pub fn status_sentence(&self) -> Option<String> {
-        self.notice.clone().or_else(|| self.hover_sentence()).map(|sentence| fit_status(&sentence))
+        self.notice
+            .clone()
+            .or_else(|| if self.page == Page::Mixer { self.mixer_hover.clone() } else { self.hover_sentence() })
+            .map(|sentence| fit_status(&sentence))
     }
 
     fn unavailable(&self) -> Element<Msg> {
@@ -1073,6 +1328,7 @@ impl Program for Musubi {
         }
         if self.persist_enabled {
             self.options = persistence::load_options(self.paths.as_ref());
+            self.mixer_options = persistence::load_mixer(self.paths.as_ref());
             self.persisted_folds = persistence::load_folds(self.paths.as_ref());
         }
         self.window = cx.open_window(WindowSpec::new("Musubi — Patchbay").size(1280., 800.).min_size(900., 560.));
@@ -1106,28 +1362,131 @@ impl Program for Musubi {
     }
 
     fn update(&mut self, msg: Msg, cx: &mut Cx<Msg>) {
-        if !matches!(&msg, Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_))) {
+        if !matches!(&msg, Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_)) | Msg::MixerHover(_)) {
             self.notice = None;
         }
         match msg {
             Msg::AudioWake => {}
             Msg::MeterTick => {
                 self.meter_tick = false;
-                if self.page == Page::Mixer && !self.window_suspended {
+                if self.page == Page::Mixer && self.mixer_options.meters && !self.window_suspended {
                     cx.after(Duration::from_millis(33), Msg::MeterTick);
                     self.meter_tick = true;
                 }
             }
-            Msg::MixerVolume(kind, control, value) => self.mixer_write(kind, control, Some(value), None),
-            Msg::MixerMute(kind, control, value) => self.mixer_write(kind, control, None, Some(value)),
+            Msg::MixerPercent(value) => {
+                self.mixer_options.percent = value;
+                self.persist_later(cx);
+            }
+            Msg::MixerMeters(value) => {
+                self.mixer_options.meters = value;
+                self.sync_meters(cx);
+                self.persist_later(cx);
+            }
+            Msg::MixerShow => self.mixer_show = !self.mixer_show,
+            Msg::MixerShown(index, shown) => {
+                self.mixer_options.shown[index] = shown;
+                self.sync_meters(cx);
+                self.persist_later(cx);
+            }
+            Msg::MixerFilter(filter) => {
+                self.mixer_filter = filter;
+                self.sync_meters(cx);
+            }
+            Msg::MixerHover(text) => self.mixer_hover = text,
+            Msg::MixerSettle(generation) => {
+                if generation == self.mixer_generation {
+                    if let Some(index) = self.mixer_pending.take() {
+                        self.history.record(index);
+                    }
+                }
+            }
+            Msg::MixerVolume(kind, control, value) => {
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let index = match &control {
+                    StripControl::Pulse { index, .. } => *index,
+                    StripControl::Native { node, .. } => node.id,
+                    StripControl::ReadOnly(_) => 0,
+                };
+                let before = match &control {
+                    StripControl::Pulse { volume, .. } => *volume,
+                    StripControl::Native { channel_volumes, .. } => {
+                        channel_volumes.iter().copied().fold(0_f32, f32::max)
+                    }
+                    StripControl::ReadOnly(_) => value,
+                };
+                if (before - value).abs() > 1e-6 {
+                    if let Some(identity) = self.mixer_identity(kind, index, &snapshot) {
+                        self.record_mixer(
+                            MixerIntent {
+                                identity,
+                                before: MixerValue::Volume(before),
+                                after: MixerValue::Volume(value),
+                            },
+                            true,
+                            cx,
+                        );
+                    }
+                    self.mixer_write(kind, control, Some(value), None);
+                }
+            }
+            Msg::MixerMute(kind, control, value) => {
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let (index, before) = match &control {
+                    StripControl::Pulse { index, muted, .. } => (*index, Some(*muted)),
+                    StripControl::Native { node, muted, .. } => (node.id, *muted),
+                    StripControl::ReadOnly(_) => (0, None),
+                };
+                if let Some(before) = before.filter(|before| *before != value) {
+                    if let Some(identity) = self.mixer_identity(kind, index, &snapshot) {
+                        self.record_mixer(
+                            MixerIntent { identity, before: MixerValue::Mute(before), after: MixerValue::Mute(value) },
+                            false,
+                            cx,
+                        );
+                    }
+                    self.mixer_write(kind, control, None, Some(value));
+                }
+            }
             Msg::MixerBalance(kind, index, value) => {
-                if let Some(audio) = &self.audio {
-                    audio.balance(kind, index, value);
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                if let Some(device) = devices.iter().find(|d| d.index == index) {
+                    if (device.balance - value).abs() > 1e-6 {
+                        self.record_mixer(
+                            MixerIntent {
+                                identity: MixerIdentity::Device(kind, device.name.clone()),
+                                before: MixerValue::Balance(device.balance),
+                                after: MixerValue::Balance(value),
+                            },
+                            true,
+                            cx,
+                        );
+                        if let Some(audio) = &self.audio {
+                            audio.balance(kind, index, value);
+                        }
+                    }
                 }
             }
             Msg::MixerDefault(kind, name) => {
-                if let Some(audio) = &self.audio {
-                    audio.default_device(kind, &name);
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let previous = devices.iter().find(|d| d.is_default);
+                if let Some(previous) = previous.filter(|d| d.name != name) {
+                    if devices.iter().any(|d| d.name == name) {
+                        self.record_mixer(
+                            MixerIntent {
+                                identity: MixerIdentity::Device(kind, name.clone()),
+                                before: MixerValue::Default(previous.name.clone()),
+                                after: MixerValue::Default(name.clone()),
+                            },
+                            false,
+                            cx,
+                        );
+                        if let Some(audio) = &self.audio {
+                            audio.default_device(kind, &name);
+                        }
+                    }
                 }
             }
             Msg::MixerLink(kind, index) => {
@@ -1141,13 +1500,34 @@ impl Program for Musubi {
                 }
             }
             Msg::MixerMove(kind, index, target) => {
-                if let Some(audio) = &self.audio {
-                    audio.move_stream(kind, index, target);
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let streams = if kind == StripKind::Playback { &snapshot.playback } else { &snapshot.recording };
+                let devices = if kind == StripKind::Playback { &snapshot.sinks } else { &snapshot.sources };
+                if let Some(stream) = streams.iter().find(|s| s.index == index && s.device != target) {
+                    if let (Some(old), Some(new), Some(identity)) = (
+                        devices.iter().find(|d| d.index == stream.device),
+                        devices.iter().find(|d| d.index == target),
+                        self.mixer_identity(kind, index, &snapshot),
+                    ) {
+                        self.record_mixer(
+                            MixerIntent {
+                                identity,
+                                before: MixerValue::Target(old.name.clone()),
+                                after: MixerValue::Target(new.name.clone()),
+                            },
+                            false,
+                            cx,
+                        );
+                        if let Some(audio) = &self.audio {
+                            audio.move_stream(kind, index, target);
+                        }
+                    }
                 }
             }
             Msg::Page(page) => {
                 self.page = page;
                 self.hovered = None;
+                self.mixer_hover = None;
                 self.matrix_focus.set(None);
                 self.sync_meters(cx);
             }
@@ -1279,9 +1659,11 @@ impl Program for Musubi {
                 }
             }
             Msg::Persist(generation) if generation == self.persist_generation => {
-                if let Err(error) = persistence::save_options(self.paths.as_ref(), &self.options).and_then(|_| {
-                    persistence::save_folds(self.paths.as_ref(), &self.graph, &self.options, &self.persisted_folds)
-                }) {
+                if let Err(error) = persistence::save_options(self.paths.as_ref(), &self.options, &self.mixer_options)
+                    .and_then(|_| {
+                        persistence::save_folds(self.paths.as_ref(), &self.graph, &self.options, &self.persisted_folds)
+                    })
+                {
                     self.notice = Some(format!("Could not save view settings: {error}"));
                 }
             }
@@ -1583,7 +1965,17 @@ impl Program for Musubi {
                 } else {
                     Vec::new()
                 };
-                mixer::page::view(&strips, &snapshot, &readings, Instant::now(), &self.linked_channels)
+                mixer::page::view(
+                    &strips,
+                    &snapshot,
+                    &readings,
+                    Instant::now(),
+                    &self.linked_channels,
+                    self.mixer_options.percent,
+                    self.mixer_options.meters,
+                    &self.mixer_options.shown,
+                    &self.mixer_filter,
+                )
             } else {
                 self.unavailable()
             }
@@ -1663,35 +2055,60 @@ impl Program for Musubi {
         let options = &self.options[Self::index(self.page)];
         let available = matches!(self.connection, Some(Connection::Up(_))) || self.matrix_spike.is_some();
         let has_ports = available && ports > 0;
-        let controls: Element<Msg> = if self.page == Page::Mixer {
-            toolbar(vec![text("Mixer").semibold().into()]).into()
-        } else {
-            Element::new(
-                ResponsiveToolbar(ToolbarConfig {
-                    title,
-                    short_title,
-                    page: self.page,
-                    list: options.list,
-                    pairs: options.pairs,
-                    monitors: options.monitors,
-                    swap: options.swap,
-                    full_names: options.full_names,
-                    show_midi_1: options.show_midi_1,
-                    from: options.from.clone(),
-                    to: options.to.clone(),
-                    has_ports,
-                    can_undo: self.history.undo_label(&self.transactions).is_some(),
-                }),
-                vec![],
-            )
-            .width(Fill)
-        };
+        let controls: Element<Msg> = Element::new(
+            ResponsiveToolbar(ToolbarConfig {
+                title: if self.page == Page::Mixer { "Mixer".into() } else { title },
+                short_title: if self.page == Page::Mixer { "Mixer".into() } else { short_title },
+                page: self.page,
+                list: options.list,
+                pairs: options.pairs,
+                monitors: options.monitors,
+                swap: options.swap,
+                full_names: options.full_names,
+                show_midi_1: options.show_midi_1,
+                from: options.from.clone(),
+                to: options.to.clone(),
+                has_ports,
+                can_undo: self.history.undo_label(&self.transactions).is_some(),
+                mixer: self.mixer_options.clone(),
+                mixer_filter: self.mixer_filter.clone(),
+                mixer_show: self.mixer_show,
+            }),
+            vec![],
+        )
+        .width(Fill);
         let status = if let Some(Connection::Down(error)) = &self.connection {
             error.clone()
         } else {
             self.status_sentence().unwrap_or_default()
         };
-        let right = if !options.from.is_empty() {
+        let right = if self.page == Page::Mixer {
+            let snapshot = self.audio.as_ref().map(|audio| audio.snapshot()).unwrap_or_default();
+            let strips = mixer::model::strips(&snapshot, &self.graph);
+            let hidden = strips
+                .iter()
+                .filter(|strip| {
+                    let category = match strip.kind {
+                        StripKind::Output => 0,
+                        StripKind::Input => 1,
+                        StripKind::Playback => 2,
+                        StripKind::Recording => 3,
+                        StripKind::Native => 4,
+                    };
+                    !self.mixer_options.shown[category]
+                        || (!self.mixer_filter.is_empty()
+                            && !strip.name.to_lowercase().contains(&self.mixer_filter.to_lowercase())
+                            && !strip.subtitle.to_lowercase().contains(&self.mixer_filter.to_lowercase()))
+                })
+                .count();
+            if !self.mixer_filter.is_empty() || hidden > 0 {
+                format!("{hidden} strips hidden")
+            } else {
+                let default =
+                    snapshot.sinks.iter().find(|d| d.is_default).map(|d| d.description.as_str()).unwrap_or("none");
+                format!("{} strips · default output {default}", strips.len())
+            }
+        } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
             format!("To “{}” hides {} ports", options.to, self.layout(self.page).map_or(0, |l| l.hidden_to))

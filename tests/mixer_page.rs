@@ -127,3 +127,55 @@ fn populated_mixer_goldens() {
         assert_golden(&mut h, w, format!("tests/snapshots/mixer-page-narrow-{theme}.png"), 1.);
     }
 }
+
+#[test]
+fn mixer_toolbar_filter_show_meters_and_percent_goldens() {
+    let (mut h, _audio, backend) = setup(false);
+    let w = h.window();
+    h.send(Msg::MixerFilter("Firefox".into()));
+    h.send(Msg::MixerShow);
+    assert_golden(&mut h, w, "tests/snapshots/mixer-toolbar-show-night.png", 1.);
+    h.send(Msg::MixerShow);
+    h.send(Msg::MixerFilter(String::new()));
+    h.send(Msg::MixerMeters(false));
+    assert!(matches!(backend.borrow().commands.last(), Some(Command::StopMeters)));
+    assert_golden(&mut h, w, "tests/snapshots/mixer-meters-off-night.png", 1.);
+    h.send(Msg::MixerPercent(true));
+    assert!(
+        h.semantics(w)
+            .iter()
+            .any(|(s, _)| s.label.as_deref() == Some("Volume") && s.value.as_deref().is_some_and(|v| v.contains('%')))
+    );
+    assert_golden(&mut h, w, "tests/snapshots/mixer-percent-night.png", 1.);
+}
+
+#[test]
+fn mixer_undo_volume_mute_balance_default_and_move() {
+    let (mut h, audio, _) = setup(false);
+    let control = model::strips(&audio.state.borrow(), &h.program().graph)
+        .into_iter()
+        .find(|s| s.name == "Studio Output")
+        .unwrap()
+        .control;
+    h.send(Msg::MixerVolume(StripKind::Output, control, 0.5));
+    h.advance(Duration::from_millis(510));
+    let control = model::strips(&audio.state.borrow(), &h.program().graph)
+        .into_iter()
+        .find(|s| s.name == "Studio Output")
+        .unwrap()
+        .control;
+    h.send(Msg::MixerMute(StripKind::Output, control, true));
+    h.send(Msg::MixerBalance(StripKind::Output, 10010, 0.4));
+    h.advance(Duration::from_millis(510));
+    h.send(Msg::MixerMove(StripKind::Playback, 10017, 10013));
+    h.send(Msg::MixerDefault(StripKind::Output, "alsa_output.analog".into()));
+    for _ in 0..5 {
+        h.send(Msg::Undo);
+    }
+    let state = audio.state.borrow();
+    assert_eq!(state.sinks[0].volume, 0.8);
+    assert!(!state.sinks[0].muted);
+    assert_eq!(state.sinks[0].balance, 0.);
+    assert!(state.sinks[0].is_default);
+    assert_eq!(state.playback[0].device, 10010);
+}

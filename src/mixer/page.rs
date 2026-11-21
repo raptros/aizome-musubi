@@ -15,6 +15,8 @@ fn strip_view(
     now: Instant,
     main: bool,
     linked: bool,
+    percent: bool,
+    meters: bool,
 ) -> Element<Msg> {
     let index = match &strip.control {
         StripControl::Pulse { index, .. } => Some(*index),
@@ -65,15 +67,19 @@ fn strip_view(
     let kind = strip.kind;
     let node = strip.node;
     let control = strip.control.clone();
-    let fader = Fader::with_reason(volume, false, reason.clone(), move |value| {
-        Msg::MixerVolume(kind, control.clone(), value as f32)
-    })
+    let fader = Fader::with_reason_and_mute(
+        volume,
+        percent,
+        reason.clone(),
+        move |value| Msg::MixerVolume(kind, control.clone(), value as f32),
+        Some(Msg::MixerMute(kind, strip.control.clone(), !muted)),
+    )
     .width(75.)
     .height(Fill)
     .id(format!("fader-{kind:?}-{}", index.unwrap_or_else(|| node.map_or(0, |n| n.id))));
-    let reading = node.and_then(|n| readings.iter().find(|r| r.node == n));
+    let reading = if meters { node.and_then(|n| readings.iter().find(|r| r.node == n)) } else { None };
     let peaks: &[f32] = reading.map_or(&[], |r| r.peaks.as_slice());
-    let paused = reading.is_some_and(|r| r.paused) || node.is_none();
+    let paused = !meters || reading.is_some_and(|r| r.paused) || node.is_none();
     let meter = LevelMeter::element::<Msg>(peaks, now, paused).width(20.).height(Fill);
     let title = if main { "MAIN" } else { &strip.name };
     let mut buttons = row![
@@ -95,7 +101,8 @@ fn strip_view(
                     .selected(d.is_default)
                     .enabled(reason.is_none())
                     .on_press(Msg::MixerDefault(kind, d.name.clone()))
-                    .tooltip("Make default"),
+                    .tooltip(if d.is_default { "Default device" } else { "Make default" })
+                    .label(if d.is_default { "Default device — on" } else { "Default device — off" }),
             );
         }
     }
@@ -121,36 +128,40 @@ fn strip_view(
         container(text(" ")).height(22.).into()
     };
     let subtitle = if main { &strip.name } else { &strip.subtitle };
-    container(
-        column![
-            container(
-                text(match kind {
-                    StripKind::Output => "OUT",
-                    StripKind::Input => "IN",
-                    StripKind::Playback => "PLAY",
-                    StripKind::Recording => "REC",
-                    StripKind::Native => "NODE",
-                })
-                .size(10.)
-                .role(Role::Accent)
-            )
-            .height(18.),
-            text(title).semibold().size(12.).tooltip(title),
-            text(subtitle.as_str()).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
-            target,
-            balance_control,
-            buttons,
-            row![fader, meter].spacing(1.).height(Fill),
-        ]
-        .spacing(5.)
-        .width(Fill)
+    let label = format!("{} · {} · {:?}", strip.name, subtitle, kind);
+    mouse_area(
+        container(
+            column![
+                container(
+                    text(match kind {
+                        StripKind::Output => "OUT",
+                        StripKind::Input => "IN",
+                        StripKind::Playback => "PLAY",
+                        StripKind::Recording => "REC",
+                        StripKind::Native => "NODE",
+                    })
+                    .size(10.)
+                    .role(Role::Accent)
+                )
+                .height(18.),
+                text(title).semibold().size(12.).tooltip(title),
+                text(subtitle.as_str()).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
+                target,
+                balance_control,
+                buttons,
+                row![fader, meter].spacing(1.).height(Fill),
+            ]
+            .spacing(5.)
+            .width(Fill)
+            .height(Fill),
+        )
+        .padding(5.)
+        .fill(Tone::Chrome)
+        .border(Edge::Line)
+        .width(120.)
         .height(Fill),
     )
-    .padding(5.)
-    .fill(Tone::Chrome)
-    .border(Edge::Line)
-    .width(120.)
-    .height(Fill)
+    .on_hover(move |hovered| Msg::MixerHover(hovered.then(|| label.clone())))
     .into()
 }
 
@@ -160,7 +171,25 @@ pub fn view(
     readings: &[MeterReading],
     now: Instant,
     linked: &std::collections::HashSet<(StripKind, u32)>,
+    percent: bool,
+    meters: bool,
+    shown: &[bool; 5],
+    filter: &str,
 ) -> Element<Msg> {
+    let filter = filter.to_lowercase();
+    let visible = |s: &&Strip| {
+        let category = match s.kind {
+            StripKind::Output => 0,
+            StripKind::Input => 1,
+            StripKind::Playback => 2,
+            StripKind::Recording => 3,
+            StripKind::Native => 4,
+        };
+        shown[category]
+            && (filter.is_empty()
+                || s.name.to_lowercase().contains(&filter)
+                || s.subtitle.to_lowercase().contains(&filter))
+    };
     let main = strips
         .iter()
         .find(|s| s.kind == StripKind::Output && audio.sinks.iter().any(|d| d.is_default && s.name == d.description));
@@ -172,7 +201,7 @@ pub fn view(
         (StripKind::Recording, "RECORDING"),
         (StripKind::Native, "NATIVE"),
     ] {
-        let group: Vec<_> = strips.iter().filter(|s| s.kind == kind).collect();
+        let group: Vec<_> = strips.iter().filter(|s| s.kind == kind).filter(&visible).collect();
         if group.is_empty() {
             continue;
         }
@@ -182,15 +211,23 @@ pub fn view(
                 StripControl::Pulse { index, .. } => *index,
                 _ => strip.node.map_or(0, |n| n.id),
             };
-            strips_row =
-                strips_row.push(strip_view(strip, audio, readings, now, false, linked.contains(&(strip.kind, id))));
+            strips_row = strips_row.push(strip_view(
+                strip,
+                audio,
+                readings,
+                now,
+                false,
+                linked.contains(&(strip.kind, id)),
+                percent,
+                meters,
+            ));
         }
         content = content.push(column![text(heading).size(10.).role(Role::Text3), strips_row].spacing(5.).height(Fill));
     }
     let scrolling = scroll(content).horizontal().height(Fill);
     let main_strip: Element<Msg> = main.map_or_else(
         || container(text("No default output")).width(120.).height(Fill).into(),
-        |s| strip_view(s, audio, readings, now, true, false),
+        |s| strip_view(s, audio, readings, now, true, false, percent, meters),
     );
     row![
         scrolling,

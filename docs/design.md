@@ -88,6 +88,7 @@ Sections OUTPUTS · INPUTS · PLAYING · RECORDING · EFFECTS, MAIN strip pinned
 - Control path: Pulse-visible objects through `aizome-sys::audio`-equivalent semantics with a **verified identity bridge** (Pulse proplist `object.serial`/`node.name` ↔ graph node; ambiguous → read-only + reason). Native-only nodes get a fader only with writable `Props.channelVolumes`, read back after writing.
 - Meters: one engine on the PipeWire thread, only visible strips (cap 24; strips over the cap show "meter paused"), stop when hidden.
 - Strip width follows its content within 84–120pt so names, pop-ups (always with their chevron) and value boxes aren't clipped; dB scale labels at the kit's caption size (10.5pt), clear of the value box; strips stop 8pt above the status bar.
+- Playback and recording strips have no balance control until `aizome-sys::audio` exposes stream channel maps and a Pulse balance setter; native Props must not become a second writer for Pulse-visible streams (B11).
 - Devices page (Tansu's layout): device list + profile/route pop-ups with availability.
 
 ## 4. Effects and Clock & Load (phase 3) — `design/mockups/effects-night.png`, `design/mockups/graph-night.png`

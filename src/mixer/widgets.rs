@@ -60,10 +60,11 @@ pub struct Fader {
     percent: bool,
     read_only_reason: Option<String>,
     on_change: MsgMap<f64>,
+    on_mute: Option<MsgFn>,
 }
 
 impl Fader {
-    pub fn new<Msg: Send + 'static>(
+    pub fn new<Msg: Clone + Send + 'static>(
         value: f64,
         percent: bool,
         on_change: impl Fn(f64) -> Msg + 'static,
@@ -71,11 +72,21 @@ impl Fader {
         Self::with_reason(value, percent, None, on_change)
     }
 
-    pub fn with_reason<Msg: Send + 'static>(
+    pub fn with_reason<Msg: Clone + Send + 'static>(
         value: f64,
         percent: bool,
         reason: Option<String>,
         on_change: impl Fn(f64) -> Msg + 'static,
+    ) -> Element<Msg> {
+        Self::with_reason_and_mute(value, percent, reason, on_change, None)
+    }
+
+    pub fn with_reason_and_mute<Msg: Clone + Send + 'static>(
+        value: f64,
+        percent: bool,
+        reason: Option<String>,
+        on_change: impl Fn(f64) -> Msg + 'static,
+        on_mute: Option<Msg>,
     ) -> Element<Msg> {
         Element::new(
             Self {
@@ -83,6 +94,7 @@ impl Fader {
                 percent,
                 read_only_reason: reason,
                 on_change: MsgMap::new(on_change),
+                on_mute: on_mute.map(MsgFn::new),
             },
             vec![],
         )
@@ -130,8 +142,7 @@ impl Widget for Fader {
         let track = Self::track(size);
         let disabled = self.read_only_reason.is_some();
         let caption = TextSpec::new(FontSpec::mono(t.metrics.caption), t.text2());
-        for (db, text) in
-            [(6., "+6"), (0., "0"), (-6., "−6"), (-12., "−12"), (-24., "−24"), (-36., "−36"), (-60., "−60")].into_iter()
+        for (db, text) in [(6., "+6"), (0., "0"), (-6., "−6"), (-12., "−12"), (-24., "−24"), (-36., "−36")].into_iter()
         {
             let y = self.y(db, size);
             cx.draw_text_in(text, &caption, Rect::new(0., y - 10., 31., y + 10.), Align::End);
@@ -163,17 +174,16 @@ impl Widget for Fader {
                 t.focus(),
             );
         }
-        if disabled && cx.state::<FaderState>().is_some_and(|s| s.tooltip) {
-            if let Some(reason) = &self.read_only_reason {
-                let tip = Rect::new(2., 2., size.width - 2., 29.);
-                cx.canvas.fill_rect(tip, t.raised());
-                cx.draw_text_in(
-                    reason,
-                    &TextSpec::new(FontSpec::ui(t.metrics.small), t.text()),
-                    tip.inset(3.),
-                    Align::Center,
-                );
-            }
+        if cx.state::<FaderState>().is_some_and(|s| s.tooltip) {
+            let tip = Rect::new(2., 2., size.width - 2., 29.);
+            cx.canvas.fill_rect(tip, t.raised());
+            let label = self.read_only_reason.as_deref().map_or_else(|| self.display(), str::to_owned);
+            cx.draw_text_in(
+                &label,
+                &TextSpec::new(FontSpec::ui(t.metrics.small), t.text()),
+                tip.inset(3.),
+                Align::Center,
+            );
         }
     }
     fn hash(&self, h: &mut PaintHasher) {
@@ -192,105 +202,107 @@ impl Widget for Fader {
         false
     }
     fn event(&mut self, cx: &mut EventCx, event: &Event) -> Status {
-        if self.read_only_reason.is_some() {
-            match event {
-                Event::PointerMove { .. } => {
-                    cx.set_timer(1, Duration::from_millis(650));
-                    Status::Handled
-                }
-                Event::Timer(1) => {
-                    cx.state::<FaderState>().tooltip = true;
-                    cx.invalidate_rect(cx.bounds());
-                    Status::Handled
-                }
-                Event::PointerLeave => {
-                    cx.cancel_timer(1);
-                    cx.state::<FaderState>().tooltip = false;
-                    cx.invalidate_rect(cx.bounds());
-                    Status::Handled
-                }
-                _ => Status::Ignored,
+        match event {
+            Event::PointerMove { .. } if self.read_only_reason.is_some() => {
+                cx.set_timer(1, Duration::from_millis(650));
+                Status::Handled
             }
-        } else {
-            match event {
-                Event::PointerDown { pos, button: PointerButton::Left, clicks, .. } => {
-                    cx.request_focus();
-                    if *clicks >= 2 && Self::box_rect(cx.size()).contains(*pos) {
-                        cx.state::<FaderState>().editing = Some(self.display());
-                        cx.invalidate_rect(Self::box_rect(cx.size()));
-                    } else if !Self::box_rect(cx.size()).contains(*pos) {
-                        cx.state::<FaderState>().dragging = true;
-                        cx.capture_pointer();
-                        self.send(cx, self.at(pos.y, cx.size()));
-                    }
-                    Status::Handled
-                }
-                Event::PointerMove { pos, .. } if cx.state::<FaderState>().dragging => {
+            Event::PointerMove { pos, .. } if cx.state::<FaderState>().dragging => {
+                self.send(cx, self.at(pos.y, cx.size()));
+                Status::Handled
+            }
+            Event::PointerMove { .. } => {
+                cx.state::<FaderState>().tooltip = true;
+                cx.invalidate_rect(cx.bounds());
+                Status::Ignored
+            }
+            Event::Timer(1) => {
+                cx.state::<FaderState>().tooltip = true;
+                cx.invalidate_rect(cx.bounds());
+                Status::Handled
+            }
+            Event::PointerLeave => {
+                cx.cancel_timer(1);
+                cx.state::<FaderState>().tooltip = false;
+                cx.invalidate_rect(cx.bounds());
+                Status::Handled
+            }
+            _ if self.read_only_reason.is_some() => Status::Ignored,
+            Event::PointerDown { pos, button: PointerButton::Left, clicks, .. } => {
+                cx.request_focus();
+                if *clicks >= 2 && Self::box_rect(cx.size()).contains(*pos) {
+                    cx.state::<FaderState>().editing = Some(self.display());
+                    cx.invalidate_rect(Self::box_rect(cx.size()));
+                } else if !Self::box_rect(cx.size()).contains(*pos) {
+                    cx.state::<FaderState>().dragging = true;
+                    cx.capture_pointer();
                     self.send(cx, self.at(pos.y, cx.size()));
-                    Status::Handled
                 }
-                Event::PointerUp { button: PointerButton::Left, .. } => {
-                    cx.state::<FaderState>().dragging = false;
-                    cx.release_pointer();
-                    Status::Handled
-                }
-                Event::Scroll { delta, .. } => {
-                    let db = if self.value == 0. { MIN_DB } else { linear_to_db(self.value) };
-                    self.send(cx, db_to_linear(db - delta.y.signum()));
-                    Status::Handled
-                }
-                Event::Key(k) if k.pressed => {
-                    if let Some(buffer) = cx.state::<FaderState>().editing.as_mut() {
-                        match &k.key {
-                            Key::Named(NamedKey::Escape) => {
+                Status::Handled
+            }
+            Event::PointerUp { button: PointerButton::Left, .. } => {
+                cx.state::<FaderState>().dragging = false;
+                cx.release_pointer();
+                Status::Handled
+            }
+            Event::Scroll { delta, .. } => {
+                let db = if self.value == 0. { MIN_DB } else { linear_to_db(self.value) };
+                self.send(cx, db_to_linear(db - delta.y.signum()));
+                Status::Handled
+            }
+            Event::Key(k) if k.pressed => {
+                if let Some(buffer) = cx.state::<FaderState>().editing.as_mut() {
+                    match &k.key {
+                        Key::Named(NamedKey::Escape) => cx.state::<FaderState>().editing = None,
+                        Key::Named(NamedKey::Enter) => {
+                            if let Some(value) = parse_value(buffer, self.percent) {
                                 cx.state::<FaderState>().editing = None;
+                                self.send(cx, value);
                             }
-                            Key::Named(NamedKey::Enter) => {
-                                if let Some(value) = parse_value(buffer, self.percent) {
-                                    cx.state::<FaderState>().editing = None;
-                                    self.send(cx, value);
-                                }
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                buffer.pop();
-                            }
-                            Key::Character(_) => {
-                                if let Some(text) = &k.text {
-                                    buffer.push_str(text);
-                                }
-                            }
-                            _ => return Status::Ignored,
                         }
-                        cx.invalidate_rect(Self::box_rect(cx.size()));
+                        Key::Named(NamedKey::Backspace) => {
+                            buffer.pop();
+                        }
+                        Key::Character(_) => {
+                            if let Some(text) = &k.text {
+                                buffer.push_str(text);
+                            }
+                        }
+                        _ => return Status::Ignored,
+                    }
+                    cx.invalidate_rect(Self::box_rect(cx.size()));
+                    return Status::Handled;
+                }
+                let db = if self.value == 0. { MIN_DB } else { linear_to_db(self.value) };
+                let new = match &k.key {
+                    Key::Named(NamedKey::ArrowUp) => db_to_linear(db + 1.),
+                    Key::Named(NamedKey::ArrowDown) => db_to_linear(db - 1.),
+                    Key::Character(c) if c.eq_ignore_ascii_case("m") && self.on_mute.is_some() => {
+                        cx.emit(self.on_mute.as_ref().unwrap());
                         return Status::Handled;
                     }
-                    let db = if self.value == 0. { MIN_DB } else { linear_to_db(self.value) };
-                    let new = match k.key {
-                        Key::Named(NamedKey::ArrowUp) => db_to_linear(db + 1.),
-                        Key::Named(NamedKey::ArrowDown) => db_to_linear(db - 1.),
-                        Key::Named(NamedKey::PageUp) => db_to_linear(db + 6.),
-                        Key::Named(NamedKey::PageDown) => db_to_linear(db - 6.),
-                        Key::Named(NamedKey::Home) => 1.,
-                        Key::Named(NamedKey::End) => 0.,
-                        _ => return Status::Ignored,
-                    };
-                    self.send(cx, new);
-                    Status::Handled
-                }
-                Event::Ime(Ime::Commit(text)) if cx.state::<FaderState>().editing.is_some() => {
-                    cx.state::<FaderState>().editing.as_mut().unwrap().push_str(text);
-                    cx.invalidate_rect(Self::box_rect(cx.size()));
-                    Status::Handled
-                }
-                _ => Status::Ignored,
+                    Key::Named(NamedKey::PageUp) => db_to_linear(db + 6.),
+                    Key::Named(NamedKey::PageDown) => db_to_linear(db - 6.),
+                    Key::Named(NamedKey::Home) => 1.,
+                    Key::Named(NamedKey::End) => 0.,
+                    _ => return Status::Ignored,
+                };
+                self.send(cx, new);
+                Status::Handled
             }
+            Event::Ime(Ime::Commit(text)) if cx.state::<FaderState>().editing.is_some() => {
+                cx.state::<FaderState>().editing.as_mut().unwrap().push_str(text);
+                cx.invalidate_rect(Self::box_rect(cx.size()));
+                Status::Handled
+            }
+            _ => Status::Ignored,
         }
     }
     fn semantics(&self) -> Option<Semantics> {
         Some(Semantics {
             role: SemanticRole::Slider,
             label: Some(self.read_only_reason.as_deref().map_or_else(|| "Volume".into(), |r| format!("Volume — {r}"))),
-            value: Some(db_text(linear_to_db(self.value))),
+            value: Some(self.display()),
             range: Some((0., MAX_LINEAR, self.value)),
             disabled: self.read_only_reason.is_some(),
             actions: if self.read_only_reason.is_some() {
@@ -393,9 +405,9 @@ impl Widget for LevelMeter {
         }
         if self.paused {
             cx.draw_text_in(
-                "paused",
-                &TextSpec::new(FontSpec::ui(t.metrics.caption), t.text2()),
-                Rect::new(0., size.height / 2. - 10., size.width, size.height / 2. + 10.),
+                "off",
+                &TextSpec::new(FontSpec::ui(t.metrics.small), t.text2()),
+                Rect::new(0., 2., size.width, 18.),
                 Align::Center,
             );
         }
@@ -430,7 +442,7 @@ impl Widget for LevelMeter {
         Some(Semantics {
             role: SemanticRole::Meter,
             label: Some("Level peak".into()),
-            value: Some(if self.paused { "paused".into() } else { db_text(Self::db(peak)) }),
+            value: Some(if self.paused { "off".into() } else { db_text(Self::db(peak)) }),
             range: Some((-60., 6., Self::db(peak).max(-60.))),
             disabled: self.paused,
             ..Default::default()
