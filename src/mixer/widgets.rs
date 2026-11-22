@@ -57,6 +57,7 @@ struct FaderState {
 /// Vertical volume control; `.value` is the observed linear value, never an optimistic write.
 pub struct Fader {
     value: f64,
+    observed: f64,
     percent: bool,
     read_only_reason: Option<String>,
     on_change: MsgMap<f64>,
@@ -91,6 +92,7 @@ impl Fader {
         Element::new(
             Self {
                 value: value.clamp(0., MAX_LINEAR),
+                observed: value.clamp(0., MAX_LINEAR),
                 percent,
                 read_only_reason: reason,
                 on_change: MsgMap::new(on_change),
@@ -258,6 +260,8 @@ impl Widget for Fader {
             }
             Event::PointerUp { button: PointerButton::Left, .. } => {
                 cx.state::<FaderState>().dragging = false;
+                self.value = self.observed;
+                cx.invalidate_rect(cx.bounds());
                 cx.release_pointer();
                 Status::Handled
             }

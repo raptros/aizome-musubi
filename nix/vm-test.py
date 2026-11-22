@@ -197,16 +197,21 @@ try:
         filter_("from-filter", "pw-")
         filter_("to-filter", "musubi-vm-patch")
         until("filtered Audio matrix", lambda: element("matrix"))
-        before = link_list()
-        assert "musubi-vm-patch:playback_FL" not in before or "musubi_vm_player:output_FL" not in before, before
+        audio_ports = until("FL audio endpoint IDs", lambda: (
+            pair if len(pair[0]) == 1 and len(pair[1]) == 1 else None
+        ) if (pair := (
+            [p["id"] for p, n in ports() if n.get("node.name") == "musubi_vm_player"
+             and p.get("port.direction") == "out" and p.get("port.name") == "output_FL"],
+            [p["id"] for p, n in ports() if n.get("node.name") == "musubi-vm-patch"
+             and p.get("port.direction") == "in" and p.get("port.name") == "playback_FL"],
+        )) else None)
+        source, destination = audio_ports[0][0], audio_ports[1][0]
+        assert not linked(source, destination), (source, destination)
         click(*cell())
-        until("FL audio patch created", lambda: (
-            "musubi_vm_player:output_FL" in link_list() and
-            "musubi-vm-patch:playback_FL" in link_list()))
+        until("FL audio patch created", lambda: linked(source, destination))
         capture("02-audio-linked")
         input_("chord super+z")
-        until("FL audio patch removed on Undo", lambda: (
-            "musubi-vm-patch:playback_FL" not in link_list()))
+        until("FL audio patch removed on Undo", lambda: not linked(source, destination))
         capture("03-audio-undo")
 
     with subtest("virtual MIDI output to virtual MIDI input"):

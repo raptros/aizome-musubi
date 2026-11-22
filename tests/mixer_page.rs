@@ -229,3 +229,47 @@ fn mixer_undo_volume_mute_balance_default_and_move() {
     assert!(state.sinks[0].is_default);
     assert_eq!(state.playback[0].device, 10010);
 }
+
+#[test]
+fn audio_wake_starts_meter_for_newly_visible_pulse_strip() {
+    let (mut h, audio, backend) = setup(false);
+    let playback = audio.state.borrow_mut().playback.remove(0);
+    h.send(Msg::MixerFilter("Video".into()));
+    backend.borrow_mut().commands.clear();
+    audio.state.borrow_mut().playback.push(playback);
+    h.send(Msg::AudioWake);
+    assert!(backend.borrow().commands.iter().any(|command| matches!(
+        command,
+        Command::StartMeters(nodes) if nodes.contains(&aizome_musubi::backend::Handle { epoch: 1, id: 17 })
+    )));
+}
+
+#[test]
+fn failed_audio_done_never_commits_history_and_failed_replay_can_retry() {
+    let (mut h, audio, _) = setup(false);
+    let control = model::strips(&audio.state.borrow(), &h.program().graph)
+        .into_iter()
+        .find(|s| s.name == "Studio Output")
+        .unwrap()
+        .control;
+    *audio.fail_next.borrow_mut() = Some("refused".into());
+    h.send(Msg::MixerVolume(StripKind::Output, control, 0.5));
+    assert!(h.program().status_sentence().unwrap().contains("refused"));
+    h.advance(Duration::from_millis(510));
+    let commands = audio.commands.borrow().len();
+    h.send(Msg::Undo);
+    assert_eq!(audio.commands.borrow().len(), commands);
+
+    let control = model::strips(&audio.state.borrow(), &h.program().graph)
+        .into_iter()
+        .find(|s| s.name == "Studio Output")
+        .unwrap()
+        .control;
+    h.send(Msg::MixerVolume(StripKind::Output, control, 0.5));
+    h.advance(Duration::from_millis(510));
+    *audio.fail_next.borrow_mut() = Some("undo refused".into());
+    h.send(Msg::Undo);
+    assert!(h.program().status_sentence().unwrap().contains("undo refused"));
+    h.send(Msg::Undo);
+    assert_eq!(audio.state.borrow().sinks[0].volume, 0.8);
+}

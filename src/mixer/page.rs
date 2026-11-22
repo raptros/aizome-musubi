@@ -357,9 +357,7 @@ pub fn view(
                 || s.name.to_lowercase().contains(&filter)
                 || s.subtitle.to_lowercase().contains(&filter))
     };
-    let main = strips
-        .iter()
-        .find(|s| s.kind == StripKind::Output && audio.sinks.iter().any(|d| d.is_default && s.name == d.description));
+    let main = main_output(strips, audio);
     let mut content = row![].spacing(12.).height(Fill);
     for (kind, heading) in [
         (StripKind::Output, "OUTPUTS"),
@@ -409,4 +407,32 @@ pub fn view(
     .height(Fill)
     .width(Fill)
     .into()
+}
+
+fn main_output<'a>(strips: &'a [Strip], audio: &AudioState) -> Option<&'a Strip> {
+    let name = &audio.sinks.iter().find(|d| d.is_default)?.name;
+    strips.iter().find(|s| s.kind == StripKind::Output && s.pulse_name.as_ref() == Some(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aizome_sys::audio::AudioDevice;
+
+    #[test]
+    fn main_uses_pulse_name_when_descriptions_match() {
+        let mut audio = AudioState::default();
+        audio.sinks = vec![
+            AudioDevice { name: "first".into(), description: "Speakers".into(), ..Default::default() },
+            AudioDevice {
+                name: "second".into(),
+                description: "Speakers".into(),
+                is_default: true,
+                ..Default::default()
+            },
+        ];
+        let graph = crate::graph::Graph::default();
+        let strips = crate::mixer::model::strips(&audio, &graph);
+        assert_eq!(main_output(&strips, &audio).unwrap().pulse_name.as_deref(), Some("second"));
+    }
 }

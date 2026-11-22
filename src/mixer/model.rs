@@ -27,6 +27,7 @@ pub enum StripControl {
 pub struct Strip {
     pub kind: StripKind,
     pub name: String,
+    pub pulse_name: Option<String>,
     pub subtitle: String,
     pub node: Option<Handle>,
     pub control: StripControl,
@@ -52,7 +53,7 @@ fn resolve<'a>(graph: &'a Graph, index: u32, name: Option<&str>) -> Result<&'a N
                 graph
                     .nodes
                     .values()
-                    .filter(|n| !crate::graph::is_musubi_meter(&n.props))
+                    .filter(|n| !crate::graph::is_musubi_meter(&n.props) && serial(n).is_none())
                     .filter(match_name)
                     .collect::<Vec<_>>()
             })
@@ -89,7 +90,7 @@ fn device_strip(graph: &Graph, device: &AudioDevice, kind: StripKind) -> Strip {
         .map(|port| port.description.clone())
         .or_else(|| (!device.bus.is_empty()).then(|| device.bus.clone()))
         .unwrap_or_else(|| device.description.clone());
-    Strip { kind, name: device.description.clone(), subtitle, node, control }
+    Strip { kind, name: device.description.clone(), pulse_name: Some(device.name.clone()), subtitle, node, control }
 }
 
 fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {
@@ -105,6 +106,7 @@ fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {
     Strip {
         kind,
         name: if stream.application.is_empty() { stream.media_name.clone() } else { stream.application.clone() },
+        pulse_name: None,
         subtitle: stream.media_name.clone(),
         node,
         control,
@@ -131,20 +133,16 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
             .map(|s| stream_strip(graph, s, StripKind::Recording)),
     );
     let pulse_nodes: HashSet<_> = result.iter().filter_map(|s| s.node.map(|n| n.id)).collect();
-    let pulse_serials: HashSet<_> = audio
-        .sinks
-        .iter()
-        .map(|d| d.index)
-        .chain(audio.sources.iter().map(|d| d.index))
-        .chain(audio.playback.iter().map(|s| s.index))
-        .chain(audio.recording.iter().map(|s| s.index))
-        .collect();
+    let pulse_names: HashSet<_> = audio.sinks.iter().chain(&audio.sources).map(|d| d.name.as_str()).collect();
+    let pulse_stream_serials: HashSet<_> =
+        audio.playback.iter().chain(&audio.recording).map(|s| u64::from(s.index)).collect();
     for node in graph.nodes.values() {
         if crate::graph::is_musubi_meter(&node.props) {
             continue;
         }
         if pulse_nodes.contains(&node.id)
-            || serial(node).is_some_and(|value| u32::try_from(value).ok().is_some_and(|v| pulse_serials.contains(&v)))
+            || node.props.get("node.name").is_some_and(|name| pulse_names.contains(name.as_str()))
+            || serial(node).is_some_and(|value| pulse_stream_serials.contains(&value))
             || !node.props.get("media.class").is_some_and(|class| {
                 class.starts_with("Audio/")
                     || class.starts_with("Stream/Output/Audio")
@@ -153,13 +151,15 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
         {
             continue;
         }
-        let control = match (&node.native.channel_volumes, node.native.writable) {
-            (Some(gains), true) if !gains.is_empty() => StripControl::Native {
+        // A filter is not a Pulse sink/source or playback/recording stream.
+        let native_only = node.props.get("media.class").is_some_and(|class| class == "Audio/Filter");
+        let control = match (&node.native.channel_volumes, node.native.writable, native_only) {
+            (Some(gains), true, true) if !gains.is_empty() => StripControl::Native {
                 node: Handle { epoch: graph.epoch, id: node.id },
                 channel_volumes: gains.clone(),
                 muted: node.native.muted,
             },
-            _ => StripControl::ReadOnly("Node has no writable channelVolumes Props".into()),
+            _ => StripControl::ReadOnly("Native-only control not established".into()),
         };
         result.push(Strip {
             kind: StripKind::Native,
@@ -169,6 +169,7 @@ pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
                 .or_else(|| node.props.get("node.name"))
                 .cloned()
                 .unwrap_or_else(|| format!("Node {}", node.id)),
+            pulse_name: None,
             subtitle: node.props.get("node.name").cloned().unwrap_or_default(),
             node: Some(Handle { epoch: graph.epoch, id: node.id }),
             control,
@@ -245,5 +246,32 @@ mod tests {
         graph.nodes.get_mut(&135).unwrap().props.remove("object.serial");
         assert_eq!(resolve(&graph, 35, Some("musubi_test_interface_in")).unwrap().id, 135);
         assert!(resolve(&graph, 9999, None).is_err());
+    }
+
+    #[test]
+    fn conflicting_serial_never_grants_pulse_or_native_control() {
+        let mut graph = Graph::default();
+        graph.nodes.insert(
+            4,
+            NodeRecord {
+                id: 4,
+                client_id: None,
+                device_id: None,
+                props: Properties::from([
+                    ("object.serial".into(), "99".into()),
+                    ("node.name".into(), "sink.one".into()),
+                    ("media.class".into(), "Audio/Sink".into()),
+                ]),
+                native: crate::graph::NativeProps {
+                    channel_volumes: Some(vec![0.5]),
+                    writable: true,
+                    ..Default::default()
+                },
+            },
+        );
+        let mut audio = AudioState::default();
+        audio.sinks.push(AudioDevice { index: 7, name: "sink.one".into(), ..Default::default() });
+        assert!(resolve(&graph, 7, Some("sink.one")).is_err());
+        assert!(strips(&audio, &graph).iter().all(|strip| matches!(strip.control, StripControl::ReadOnly(_))));
     }
 }

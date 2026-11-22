@@ -15,7 +15,7 @@ use crate::{
     },
     mixer::{
         self,
-        audio::AudioControl,
+        audio::{AudioControl, AudioTask},
         model::{StripControl, StripKind},
     },
     persistence, routes,
@@ -144,6 +144,12 @@ struct Pending {
     pair: (GlobalId, GlobalId),
 }
 
+struct PendingAudio {
+    task: AudioTask,
+    transaction: Option<usize>,
+    replay: Option<(usize, bool)>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Msg {
     Page(Page),
@@ -237,6 +243,12 @@ pub struct Musubi {
     mixer_filter: String,
     mixer_hover: Option<String>,
     mixer_pending: Option<usize>,
+    audio_pending: Vec<PendingAudio>,
+    mixer_succeeded: HashSet<usize>,
+    mixer_failed: HashSet<usize>,
+    native_pending: HashMap<RequestId, (Option<usize>, Option<(usize, bool)>)>,
+    mixer_current: Option<usize>,
+    mixer_replaying: Option<(usize, bool)>,
     mixer_generation: u64,
     pub graph: Graph,
     connection: Option<Connection>,
@@ -652,20 +664,34 @@ impl Musubi {
     fn mixer_write(&mut self, kind: StripKind, control: StripControl, volume: Option<f32>, mute: Option<bool>) {
         match control {
             StripControl::Pulse { index, .. } => {
-                if let Some(audio) = &self.audio {
+                let tasks = if let Some(audio) = &self.audio {
+                    let mut tasks = Vec::new();
                     if let Some(value) = volume {
-                        audio.volume(kind, index, value);
+                        tasks.push(audio.volume(kind, index, value));
                         if self.linked_channels.contains(&(kind, index)) {
-                            audio.balance(kind, index, 0.);
+                            tasks.push(audio.balance(kind, index, 0.));
                         }
                     }
                     if let Some(value) = mute {
-                        audio.mute(kind, index, value);
+                        tasks.push(audio.mute(kind, index, value));
                     }
+                    tasks
+                } else {
+                    Vec::new()
+                };
+                let transaction = self.mixer_current.take();
+                let replay = self.mixer_replaying.take();
+                for (position, task) in tasks.into_iter().enumerate() {
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction,
+                        replay: if position == 0 { replay } else { None },
+                    });
                 }
             }
             StripControl::Native { node, channel_volumes, muted } => {
                 self.next_request += 1;
+                self.native_pending.insert(self.next_request, (self.mixer_current.take(), self.mixer_replaying.take()));
                 if let Some(value) = volume {
                     let max = channel_volumes.iter().copied().fold(0_f32, f32::max);
                     let gains = if self.linked_channels.contains(&(kind, node.id)) {
@@ -719,33 +745,87 @@ impl Musubi {
         }
     }
 
+    fn queue_audio(&mut self, task: AudioTask) {
+        let transaction = self.mixer_current.take();
+        let replay = self.mixer_replaying.take();
+        self.audio_pending.push(PendingAudio { task, transaction, replay });
+    }
+    fn record_success(&mut self, index: usize) {
+        if !self.mixer_failed.contains(&index)
+            && self.mixer_succeeded.contains(&index)
+            && !self.audio_pending.iter().any(|p| p.transaction == Some(index))
+            && !self.native_pending.values().any(|pending| pending.0 == Some(index))
+        {
+            self.mixer_succeeded.remove(&index);
+            self.history.record(index);
+        }
+    }
+    fn finish_audio(&mut self) {
+        let mut index = 0;
+        while index < self.audio_pending.len() {
+            let Some(result) = self.audio_pending[index].task.take() else {
+                index += 1;
+                continue;
+            };
+            let pending = self.audio_pending.remove(index);
+            match result {
+                Ok(()) => {
+                    if let Some(transaction) = pending.transaction {
+                        if !self.mixer_failed.contains(&transaction) {
+                            self.mixer_succeeded.insert(transaction);
+                            if self.mixer_pending != Some(transaction) {
+                                self.record_success(transaction);
+                            }
+                        }
+                    }
+                    if let Some((transaction, undo)) = pending.replay {
+                        if undo {
+                            self.history.after_undo(Some(transaction));
+                        } else {
+                            self.history.after_redo(Some(transaction));
+                        }
+                        self.notice = Some(format!("{} applied.", if undo { "Undo" } else { "Redo" }));
+                    }
+                }
+                Err(reason) => {
+                    if let Some(transaction) = pending.transaction {
+                        self.mixer_succeeded.remove(&transaction);
+                        self.mixer_failed.insert(transaction);
+                    }
+                    if let Some((transaction, undo)) = pending.replay {
+                        self.history.defer(transaction, undo);
+                    }
+                    self.notice = Some(format!("Audio command failed: {reason}"));
+                }
+            }
+        }
+    }
     fn record_mixer(&mut self, intent: MixerIntent, burst: bool, cx: &mut Cx<Msg>) {
         if burst {
             if let Some(index) = self.mixer_pending {
-                if let Some(previous) = &mut self.transactions[index].mixer {
-                    if previous.identity == intent.identity
-                        && std::mem::discriminant(&previous.after) == std::mem::discriminant(&intent.after)
-                    {
-                        previous.after = intent.after;
-                        self.mixer_generation += 1;
-                        cx.after(Duration::from_millis(500), Msg::MixerSettle(self.mixer_generation));
-                        return;
-                    }
+                if let Some(previous) = &mut self.transactions[index].mixer
+                    && previous.identity == intent.identity
+                    && std::mem::discriminant(&previous.after) == std::mem::discriminant(&intent.after)
+                {
+                    previous.after = intent.after;
+                    self.mixer_current = Some(index);
+                    self.mixer_generation += 1;
+                    cx.after(Duration::from_millis(500), Msg::MixerSettle(self.mixer_generation));
+                    return;
                 }
-                self.history.record(index);
                 self.mixer_pending = None;
+                self.record_success(index);
             }
         } else if let Some(index) = self.mixer_pending.take() {
-            self.history.record(index);
+            self.record_success(index);
         }
         let index = self.transactions.len();
         self.transactions.push(Transaction { intents: Vec::new(), mixer: Some(intent) });
+        self.mixer_current = Some(index);
         if burst {
             self.mixer_pending = Some(index);
             self.mixer_generation += 1;
             cx.after(Duration::from_millis(500), Msg::MixerSettle(self.mixer_generation));
-        } else {
-            self.history.record(index);
         }
     }
 
@@ -766,14 +846,13 @@ impl Musubi {
                     return;
                 }
                 if let Some(audio) = &self.audio {
-                    audio.profile(cards[0].index, profile);
+                    let task = audio.profile(cards[0].index, profile);
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction: None,
+                        replay: Some((transaction_index, undo)),
+                    });
                 }
-                if undo {
-                    self.history.after_undo(Some(transaction_index));
-                } else {
-                    self.history.after_redo(Some(transaction_index));
-                }
-                self.notice = Some(format!("{} applied.", if undo { "Undo" } else { "Redo" }));
                 return;
             }
         }
@@ -802,12 +881,20 @@ impl Musubi {
             StripControl::Native { node, .. } => node.id,
             StripControl::ReadOnly(_) => unreachable!(),
         };
+        if matches!(target, MixerValue::Volume(_) | MixerValue::Mute(_)) {
+            self.mixer_replaying = Some((transaction_index, undo));
+        }
         match target {
             MixerValue::Volume(value) => self.mixer_write(strip.kind, strip.control.clone(), Some(*value), None),
             MixerValue::Mute(value) => self.mixer_write(strip.kind, strip.control.clone(), None, Some(*value)),
             MixerValue::Balance(value) => {
                 if let Some(audio) = &self.audio {
-                    audio.balance(strip.kind, index, *value);
+                    let task = audio.balance(strip.kind, index, *value);
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction: None,
+                        replay: Some((transaction_index, undo)),
+                    });
                 }
             }
             MixerValue::Default(name) => {
@@ -818,7 +905,12 @@ impl Musubi {
                     return;
                 }
                 if let Some(audio) = &self.audio {
-                    audio.default_device(strip.kind, name);
+                    let task = audio.default_device(strip.kind, name);
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction: None,
+                        replay: Some((transaction_index, undo)),
+                    });
                 }
             }
             MixerValue::Target(name) => {
@@ -829,7 +921,12 @@ impl Musubi {
                     return;
                 }
                 if let Some(audio) = &self.audio {
-                    audio.move_stream(strip.kind, index, destinations[0].index);
+                    let task = audio.move_stream(strip.kind, index, destinations[0].index);
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction: None,
+                        replay: Some((transaction_index, undo)),
+                    });
                 }
             }
             MixerValue::Port(name) => {
@@ -842,17 +939,17 @@ impl Musubi {
                     return;
                 }
                 if let Some(audio) = &self.audio {
-                    audio.port(strip.kind, index, name);
+                    let task = audio.port(strip.kind, index, name);
+                    self.audio_pending.push(PendingAudio {
+                        task,
+                        transaction: None,
+                        replay: Some((transaction_index, undo)),
+                    });
                 }
             }
             MixerValue::Profile(_) => unreachable!("card profiles are replayed above"),
         }
-        if undo {
-            self.history.after_undo(Some(transaction_index));
-        } else {
-            self.history.after_redo(Some(transaction_index));
-        }
-        self.notice = Some(format!("{} applied.", if undo { "Undo" } else { "Redo" }));
+        self.mixer_replaying = None;
     }
     fn commands_for(&mut self, cells: Vec<Cell>, connect: bool, cx: &mut Cx<Msg>) {
         self.notice = None;
@@ -1027,6 +1124,11 @@ impl Musubi {
         let Some(index) = index else { return };
         if self.transactions[index].mixer.is_some() {
             self.replay_mixer(index, undo);
+            if !self.audio_pending.iter().any(|pending| pending.replay == Some((index, undo)))
+                && !self.native_pending.values().any(|pending| pending.1 == Some((index, undo)))
+            {
+                self.history.defer(index, undo);
+            }
             return;
         }
         if self.transactions[index]
@@ -1476,11 +1578,17 @@ impl Program for Musubi {
     }
 
     fn update(&mut self, msg: Msg, cx: &mut Cx<Msg>) {
-        if !matches!(&msg, Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_)) | Msg::MixerHover(_)) {
+        if !matches!(
+            &msg,
+            Msg::AudioWake | Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_)) | Msg::MixerHover(_)
+        ) {
             self.notice = None;
         }
         match msg {
-            Msg::AudioWake => {}
+            Msg::AudioWake => {
+                self.finish_audio();
+                self.sync_meters(cx);
+            }
             Msg::MeterTick => {
                 self.meter_tick = false;
                 if self.meter_running && !self.window_suspended {
@@ -1511,7 +1619,7 @@ impl Program for Musubi {
             Msg::MixerSettle(generation) => {
                 if generation == self.mixer_generation {
                     if let Some(index) = self.mixer_pending.take() {
-                        self.history.record(index);
+                        self.record_success(index);
                     }
                 }
             }
@@ -1577,7 +1685,8 @@ impl Program for Musubi {
                             cx,
                         );
                         if let Some(audio) = &self.audio {
-                            audio.balance(kind, index, value);
+                            let task = audio.balance(kind, index, value);
+                            self.queue_audio(task);
                         }
                     }
                 }
@@ -1598,7 +1707,8 @@ impl Program for Musubi {
                             cx,
                         );
                         if let Some(audio) = &self.audio {
-                            audio.default_device(kind, &name);
+                            let task = audio.default_device(kind, &name);
+                            self.queue_audio(task);
                         }
                     }
                 }
@@ -1633,7 +1743,8 @@ impl Program for Musubi {
                         );
                     }
                     if let Some(audio) = &self.audio {
-                        audio.profile(cards[0].index, &profile);
+                        let task = audio.profile(cards[0].index, &profile);
+                        self.queue_audio(task);
                     }
                 }
             }
@@ -1684,7 +1795,8 @@ impl Program for Musubi {
                         );
                     }
                     if let Some(audio) = &self.audio {
-                        audio.port(kind, index, &port);
+                        let task = audio.port(kind, index, &port);
+                        self.queue_audio(task);
                     }
                 }
             }
@@ -1693,7 +1805,8 @@ impl Program for Musubi {
                     self.linked_channels.insert((kind, index));
                     if let Some(audio) = &self.audio {
                         if matches!(kind, StripKind::Output | StripKind::Input) {
-                            audio.balance(kind, index, 0.);
+                            let task = audio.balance(kind, index, 0.);
+                            self.queue_audio(task);
                         }
                     }
                 }
@@ -1718,7 +1831,8 @@ impl Program for Musubi {
                             cx,
                         );
                         if let Some(audio) = &self.audio {
-                            audio.move_stream(kind, index, target);
+                            let task = audio.move_stream(kind, index, target);
+                            self.queue_audio(task);
                         }
                     }
                 }
@@ -1970,6 +2084,7 @@ impl Program for Musubi {
             Msg::Backend(Event::Connection(connection)) => {
                 if matches!(connection, Connection::Down(_)) {
                     self.graph = Graph::default();
+                    self.linked_channels.clear();
                     self.pending.clear();
                     self.errors.clear();
                     self.removed.clear();
@@ -1997,6 +2112,18 @@ impl Program for Musubi {
                     }
                 }
                 self.graph.apply(delta);
+                let snapshot = self.audio.as_ref().map(|audio| audio.snapshot()).unwrap_or_default();
+                let existing: HashSet<_> = mixer::model::strips(&snapshot, &self.graph)
+                    .iter()
+                    .filter_map(|strip| {
+                        let id = match strip.control {
+                            StripControl::Pulse { index, .. } => index,
+                            _ => strip.node?.id,
+                        };
+                        Some((strip.kind, id))
+                    })
+                    .collect();
+                self.linked_channels.retain(|key| existing.contains(key));
                 if self.persist_enabled {
                     persistence::restore_folds(&self.graph, &mut self.options, &self.persisted_folds);
                 }
@@ -2040,6 +2167,36 @@ impl Program for Musubi {
                         intent.result = Some(result.clone());
                     }
                 }
+                if let Some((transaction, replay)) = self.native_pending.remove(&request) {
+                    match &result {
+                        Ok(()) => {
+                            if let Some(transaction) = transaction {
+                                self.mixer_succeeded.insert(transaction);
+                                if self.mixer_pending != Some(transaction) {
+                                    self.record_success(transaction);
+                                }
+                            }
+                            if let Some((transaction, undo)) = replay {
+                                if undo {
+                                    self.history.after_undo(Some(transaction));
+                                } else {
+                                    self.history.after_redo(Some(transaction));
+                                }
+                                self.notice = Some(format!("{} applied.", if undo { "Undo" } else { "Redo" }));
+                            }
+                        }
+                        Err(reason) => {
+                            if let Some(transaction) = transaction {
+                                self.mixer_succeeded.remove(&transaction);
+                                self.mixer_failed.insert(transaction);
+                            }
+                            if let Some((transaction, undo)) = replay {
+                                self.history.defer(transaction, undo);
+                            }
+                            self.notice = Some(format!("Native control failed: {reason}"));
+                        }
+                    }
+                }
                 if let Err(reason) = result {
                     if let Some(pending) = self.pending.remove(&request) {
                         self.errors.insert(pending.pair, reason.clone());
@@ -2059,6 +2216,7 @@ impl Program for Musubi {
                 self.refresh_layouts();
             }
         }
+        self.finish_audio();
     }
 
     fn window_state(&mut self, window: WindowKey, state: aizome_kit::WindowState, cx: &mut Cx<Msg>) {
