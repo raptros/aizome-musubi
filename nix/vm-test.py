@@ -68,6 +68,15 @@ def element(id_):
     return next((e for e in elements() if e.get("name") == id_), None)
 
 
+def popover_elements():
+    w = window()
+    documents = [json.loads(line) for line in machine.succeed(
+        f'for f in {INSPECT}/*.json; do if test -f "$f"; then cat "$f"; printf "\\n"; fi; done'
+    ).splitlines() if line.strip()]
+    return [e for doc in documents if doc.get("kind") == "popover"
+            and doc.get("pid") == w["pid"] and doc.get("app_id") == w["app_id"]
+            for e in doc["elements"] if e["visible"]]
+
 def input_(command):
     inputs.append(command)
     user("aizomectl input " + command)
@@ -273,11 +282,28 @@ try:
                     and profile["name"] != card["active_profile"] and profile["name"] != "off"
                     and profile["available"] not in ("no", False)]
         if profiles:
+            before_label = element("device-profile")["text"]
             click_element("device-profile")
-            click_element("profile-" + profiles[0]["name"])
+            target = "profile-" + profiles[0]["name"]
+            choices = until("profile popover has offered entry", lambda: (
+                entries if any(e.get("name") == target for e in entries) else None
+            ) if (entries := popover_elements()) else None)
+            # The kit renders popovers in a separate Wayland popup; use its
+            # own keyboard focus rather than coordinates from the main window.
+            for _ in range(len(choices) + 2):
+                if any(e.get("name") == target and e.get("focused") for e in popover_elements()):
+                    break
+                input_("key tab")
+            else:
+                raise AssertionError(("profile not keyboard reachable", target, popover_elements()))
+            input_("key return")
             switched = until("Pulse and WirePlumber observe selected profile", lambda: next(
                 (c for c in cards() if c["name"] == card["name"] and c["active_profile"] == profiles[0]["name"]),
                 None), seconds=45)
+            assert f"Active Profile: {profiles[0]['name']}" in user("pactl list cards")
+            until("Devices profile button reflects read-back", lambda: (
+                button if button.get("text") != before_label else None
+            ) if (button := element("device-profile")) else None)
             observations.append({"profile_selected": profiles[0]["name"], "cards_after": switched,
                                  "pactl_after": user("pactl list cards"), "wpctl_after": user("wpctl status")})
             capture("08-devices-profile-switched")
