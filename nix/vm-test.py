@@ -203,13 +203,16 @@ try:
         click_element("MIDI")
         until("MIDI matrix", lambda: element("matrix"))
         capture("04-midi-before")
-        # ALSA MIDI reaches PipeWire through the bridge node; snd-virmidi's
-        # clients show up in the bridge's port names and aliases.
-        midi = [(p, n) for p, n in ports() if "midi" in p.get("format.dsp", "").lower()
-                and any("VirMIDI" in p.get(k, "") or "Virtual Raw MIDI" in p.get(k, "")
-                        for k in ("port.name", "port.alias"))]
-        assert any(p.get("port.direction") == "out" for p, _ in midi), midi
-        assert any(p.get("port.direction") == "in" for p, _ in midi), midi
+        # ALSA MIDI reaches PipeWire through the bridge node; wait for the
+        # 0-0 client's input and output before fixing their PipeWire IDs.
+        midi = until("VirMIDI 0-0 input and output ports", lambda: (
+            found if all(any(
+                p.get("port.direction") == direction
+                and any("0-0" in p.get(k, "") for k in ("port.name", "port.alias"))
+                for p, _ in found) for direction in ("out", "in")) else None
+        ) if (found := [(p, n) for p, n in ports() if "midi" in p.get("format.dsp", "").lower()
+                       and any("VirMIDI" in p.get(k, "") or "Virtual Raw MIDI" in p.get(k, "")
+                               for k in ("port.name", "port.alias"))]) else None, seconds=60)
         # Filtered to the virtual clients, the first row is client 0-0's output
         # and the first column client 0-0's input.
         first = lambda direction: next(p["id"] for p, _ in midi if p.get("port.direction") == direction
