@@ -152,8 +152,8 @@ def meter_nodes():
 
 def sink_meter(fader):
     x, y, width, height = fader["rect"]
-    return next((e for e in elements() if e["name"] == "mixer-level-meter"
-                 and e["role"] == "meter" and e["rect"][1] >= y
+    return next((e for e in elements() if e["role"] == "meter" and e["label"] == "Level peak"
+                 and e["rect"][1] >= y
                  and e["rect"][1] < y + height and x + width <= e["rect"][0]
                  and e["rect"][0] < x + width + 48), None)
 
@@ -225,8 +225,10 @@ try:
 
     with subtest("Mixer fader writes via WirePlumber and live sink meter"):
         click_element("Mixer")
-        until("Mixer fader", lambda: any(e["name"] == "mixer-fader" for e in elements()))
-        faders = [e for e in elements() if e["name"] == "mixer-fader" and e["role"] == "slider"]
+        until("Mixer output fader", lambda: any(
+            (e.get("name") or "").startswith("fader-Output-") for e in elements()))
+        faders = [e for e in elements() if (e.get("name") or "").startswith("fader-Output-")
+                  and e["role"] == "slider"]
         assert faders, elements()
         fader = max(faders, key=lambda e: e["rect"][0])
         assert not fader.get("disabled"), fader
@@ -234,11 +236,11 @@ try:
         x, y, width, height = fader["rect"]
         geometry = window()["geometry"]
         click(geometry["x"] + x + width / 2, geometry["y"] + y + height - 16)
-        input_("key PageDown")
+        input_("key 109")  # KEY_PAGEDOWN (evdev; the compositor's named keys omit it)
         first = until("first 6 dB fader decrement", lambda: (
             value if 0.75 < value / initial < 0.83 else None
         ) if (value := default_volume()) else None)
-        input_("key PageDown")
+        input_("key 109")
         second = until("second 6 dB fader decrement", lambda: (
             value if 0.59 < value / initial < 0.67 else None
         ) if (value := default_volume()) else None)
