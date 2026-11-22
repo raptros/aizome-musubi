@@ -139,9 +139,39 @@ def capture(name):
     machine.screenshot(name)
     observations.append({"step": name, "window": window(), "elements": elements()})
 
+def default_volume():
+    return float(user("wpctl get-volume @DEFAULT_AUDIO_SINK@").split("Volume: ", 1)[1].split()[0])
+
+
+def meter_nodes():
+    return json.loads(user(
+        "pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\") "
+        "| select(.info.props[\"media.name\"] == \"Musubi level meter\" "
+        "and .info.props[\"application.id\"] == \"org.aizome.Musubi\") | .id]'"))
+
+
+def sink_meter(fader):
+    x, y, width, height = fader["rect"]
+    return next((e for e in elements() if e["name"] == "mixer-level-meter"
+                 and e["role"] == "meter" and e["rect"][1] >= y
+                 and e["rect"][1] < y + height and x + width <= e["rect"][0]
+                 and e["rect"][0] < x + width + 48), None)
+
+
+def cards():
+    return json.loads(user(
+        "pactl -f json list cards | jq -c '[.[] | {index, name, description: .properties[\"device.description\"],"
+        " active_profile: (if (.active_profile | type) == \"object\" then .active_profile.name else .active_profile end),"
+        " profiles: [.profiles[] | {name, available}]}]'"))
+
 
 machine.start()
 machine.wait_until_succeeds("pgrep -u alice -x aizome-shell", timeout=120)
+default_sink = until("null sink appears", lambda: user(
+    "pw-dump | jq -r '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+    "and .info.props[\"node.name\"] == \"musubi-vm-default\")] | first | .id // empty'").strip())
+user("wpctl set-default " + default_sink)
+observations.append({"default_sink": default_sink, "wpctl": user("wpctl status")})
 try:
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
@@ -192,6 +222,60 @@ try:
         click(*cell())
         until("virmidi 0-0 output linked to 0-0 input", lambda: linked(source, destination))
         capture("05-midi-linked")
+
+    with subtest("Mixer fader writes via WirePlumber and live sink meter"):
+        click_element("Mixer")
+        until("Mixer fader", lambda: any(e["name"] == "mixer-fader" for e in elements()))
+        faders = [e for e in elements() if e["name"] == "mixer-fader" and e["role"] == "slider"]
+        assert faders, elements()
+        fader = max(faders, key=lambda e: e["rect"][0])
+        assert not fader.get("disabled"), fader
+        initial = default_volume()
+        x, y, width, height = fader["rect"]
+        geometry = window()["geometry"]
+        click(geometry["x"] + x + width / 2, geometry["y"] + y + height - 16)
+        input_("key PageDown")
+        first = until("first 6 dB fader decrement", lambda: (
+            value if 0.75 < value / initial < 0.83 else None
+        ) if (value := default_volume()) else None)
+        input_("key PageDown")
+        second = until("second 6 dB fader decrement", lambda: (
+            value if 0.59 < value / initial < 0.67 else None
+        ) if (value := default_volume()) else None)
+        assert second < first < initial, (initial, first, second)
+        observations.append({"wpctl_volume": [initial, first, second], "fader": fader})
+        until("meter capture nodes active", meter_nodes)
+        meter = until("default sink meter has a nonzero peak", lambda: (
+            e if e and e["value"] not in ("−∞ dB", "paused", "Meters off") else None
+        ) if (e := sink_meter(fader)) else None, seconds=45)
+        observations.append({"sink_meter": meter, "meter_nodes": meter_nodes()})
+        capture("06-mixer-live-meter")
+        click_element("Devices")
+        until("meter nodes removed on hide", lambda: not meter_nodes())
+        observations.append({"meter_nodes_after_hide": meter_nodes()})
+
+    with subtest("Devices lists ALSA card and switches a real offered profile"):
+        available_cards = until("Pulse sees VM ALSA card", cards, seconds=60)
+        listed = until("VM card in Devices page", lambda: [
+            card for card in available_cards if element(f"device-{card['index']}")
+        ])
+        observations.append({"cards_before": available_cards, "pactl_before": user("pactl list cards")})
+        card = listed[0]
+        capture("07-devices-before")
+        profiles = [profile for profile in card["profiles"]
+                    if profile["name"] != card["active_profile"] and profile["name"] != "off"
+                    and profile["available"] not in ("no", False)]
+        if profiles:
+            click_element("device-profile")
+            click_element("profile-" + profiles[0]["name"])
+            switched = until("Pulse and WirePlumber observe selected profile", lambda: next(
+                (c for c in cards() if c["name"] == card["name"] and c["active_profile"] == profiles[0]["name"]),
+                None), seconds=45)
+            observations.append({"profile_selected": profiles[0]["name"], "cards_after": switched,
+                                 "pactl_after": user("pactl list cards"), "wpctl_after": user("wpctl status")})
+            capture("08-devices-profile-switched")
+        else:
+            observations.append({"profile_switch": "No alternate available non-off profile on VM card"})
     machine.fail("coredumpctl --no-pager list aizome-musubi")
 finally:
     machine.screenshot("final")

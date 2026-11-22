@@ -38,16 +38,16 @@ pkgs.testers.runNixOSTest {
     };
     # No video device: the test kernel has no `vivid` module, so the VM
     # check covers audio and MIDI only.
-    boot.kernelModules = [ "snd-seq" "snd-virmidi" ];
-    environment.systemPackages = [ pkgs.pipewire pkgs.alsa-utils pkgs.jq ];
+    boot.kernelModules = [ "snd-dummy" "snd-seq" "snd-virmidi" ];
+    environment.systemPackages = [ pkgs.pipewire pkgs.pulseaudio pkgs.alsa-utils pkgs.jq pkgs.sox ];
     # A stream connected to the default sink gets WirePlumber-managed output
     # ports, which can then be patched to the other sink by Musubi.
     systemd.user.services.musubi-vm-player = {
-      description = "Endless silent stereo stream for Musubi";
+      description = "Stereo tone for Musubi meter checks";
       wantedBy = [ "default.target" ];
       after = [ "pipewire.service" "wireplumber.service" ];
       serviceConfig = {
-        ExecStart = "${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --target=musubi-vm-default --properties={\\\"node.name\\\":\\\"musubi_vm_player\\\",\\\"node.description\\\":\\\"Musubi_VM_Player\\\"} /dev/zero";
+        ExecStart = "${pkgs.bash}/bin/bash -o pipefail -c '${pkgs.sox}/bin/sox -n -t raw -b 16 -e signed-integer -c 2 -r 48000 - synth 3600 sine 440 vol 0.2 | ${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --target=musubi-vm-default --properties={\\\"node.name\\\":\\\"musubi_vm_player\\\",\\\"node.description\\\":\\\"Musubi_VM_Player\\\"} -'";
         Restart = "always";
         RestartSec = 2;
       };
