@@ -48,6 +48,18 @@ Also in P2-S5, from `docs/design/visual-review-phase2-preview.md`:
 ### P2-S6 — VM, docs, reviews
 VM check extended: Mixer page lowers the test sink's volume with real input and `wpctl get-volume` confirms; the player's strip meter moves; Devices page lists the virtual devices. README/DEVELOPERS/architecture updated; code review (reviewer) and visual review (sekka-visual); backlog items fixed on the way are struck through.
 
+### P2-S7 — review fixes
+- **S7a (done, `f5d0069`):** the code review's findings under decision A7; unit, `mixer_live`, `mixer_page_live` and the VM check (incl. the exact FL→FL link assertion) green after it (`runs/2026-11-22/patchbay/phase2/s7/`).
+- **S7b:** visual review majors from `docs/design/visual-review-phase2.md`:
+  1. Stream/MAIN target pop-ups and device names elide the middle or end so the distinguishing part shows, and get a tooltip (the VM showed "musubi-vm…" twice).
+  2. Devices list: kit list/sidebar selection look (row fill, not bordered buttons), with a strong selection in both themes.
+  3. Inspector meter: per-channel columns at a readable width, with a dB scale and a peak readout.
+  4. "Meters off"/"paused": a readable caption (kit caption size) below the meter or across the strip, not spilling; the meter dimmed.
+  5. Mixer fixture: input devices get input routes, and subtitles come from their own route/description (or fix the rendering if it isn't the fixture).
+  6. Devices node rows carry direction ("Output"/"Input"), with distinct names.
+  - Minors as budget allows: menu items with a check mark on the current one and no button borders; one pop-up style; chain-link icon; −∞ spacing; stream/device row alignment; "1 device(s)" wording; "-" subtitle.
+  - Then a short sekka-visual confirmation of the majors.
+
 ## Acceptance
 
 | # | Behaviour | Evidence |
