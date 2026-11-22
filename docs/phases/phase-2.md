@@ -52,11 +52,11 @@ VM check extended: Mixer page lowers the test sink's volume with real input and 
 
 | # | Behaviour | Evidence |
 |---|---|---|
-| 1 | Volume, mute, balance of devices and streams change PipeWire state through one writer, and the UI shows the read-back value | unit + private PipeWire (+pulse) live + VM |
+| 1 | Volume, mute, balance of devices and streams change PipeWire state through one writer, and the UI shows the read-back value | unit + private PipeWire (+pulse) live; VM `runs/2026-11-21/patchbay/phase2/s6/evidence/{observations.json,inputs.json,06-mixer-live-meter.png}`: two real Page Down presses on the default output fader changed `wpctl get-volume @DEFAULT_AUDIO_SINK@` from 1.00 → 0.79 → 0.63 (−6 dB each); mute/balance and streams retain their private-live/Harness evidence, not an additional VM assertion |
 | 2 | Pulse ↔ graph identity is verified; ambiguous strips are read-only with a reason | unit (recorded proplists) |
 | 3 | Native-only nodes get a fader only when writable `Props` exist | unit + live |
 | 4 | Meters show real peaks, cost nothing when hidden, never appear as recording apps | live + Harness + `pw-dump` after hide |
-| 5 | Default output/input and stream moves work and survive WirePlumber's policy | live + VM |
-| 6 | Profiles/routes change through the Pulse path; node replacement keeps pages consistent | VM |
+| 5 | Default output/input and stream moves work and survive WirePlumber's policy | live + VM `runs/2026-11-21/patchbay/phase2/s6/evidence/observations.json`: the VM explicitly selected the null sink as default with `wpctl`, then proved that the Mixer fader writes and reads back through WirePlumber; default-changing and stream-moving UI actions are **not** asserted by this VM check |
+| 6 | Profiles/routes change through the Pulse path; node replacement keeps pages consistent | VM `runs/2026-11-21/patchbay/phase2/s6/evidence/{07-devices-before.png,08-devices-profile-switched.png,observations.json,inputs.json}`: the `snd-dummy` card lists five profiles; Tab/Return on its real popover selected `output:stereo-fallback` from `output:stereo-fallback+input:stereo-fallback`; `pactl list cards` confirmed Active Profile and the Devices button reflected read-back. Route writes and node replacement retain earlier live/Harness evidence, not a VM assertion |
 | 7 | Mixer and Devices pages: keyboard reachable, semantics, Night/Day goldens | Harness |
 | 8 | Docs, code review, visual review | files under `docs/` |
