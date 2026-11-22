@@ -1,4 +1,5 @@
 //! Harness drives the real app against the private PipeWire/Pulse service.
+//! The private server has null sinks but no cards/profiles; real profile switching is a P2-S6 VM gate.
 use aizome_kit::{
     Appearance, Point,
     sidestep_ui::{Key, Modifiers, NamedKey},

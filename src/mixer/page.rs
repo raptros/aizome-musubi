@@ -83,6 +83,9 @@ impl Widget for DefaultToggle {
     }
 }
 
+fn control_hover(control: Element<Msg>, label: String) -> Element<Msg> {
+    mouse_area(control).on_hover(move |over| Msg::MixerHover(over.then(|| label.clone()))).into()
+}
 fn strip_view(
     strip: &Strip,
     audio: &AudioState,
@@ -293,11 +296,16 @@ fn strip_view(
                 .height(22.),
                 text(title).semibold().size(12.).tooltip(title),
                 text(subtitle.as_str()).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
-                target,
-                balance_control,
-                buttons,
+                control_hover(target, format!("{title} · route or target — choose from available devices")),
+                control_hover(balance_control, format!("{title} · left/right balance")),
+                control_hover(buttons.into(), format!("{title} · mute, default and channel link")),
                 column![
-                    row![fader, meter].spacing(1.).height(Fill),
+                    row![
+                        control_hover(fader, format!("{title} · volume — adjust with arrows or drag")),
+                        control_hover(meter, format!("{title} · level meter"))
+                    ]
+                    .spacing(1.)
+                    .height(Fill),
                     text(match channels {
                         1 => "MONO".to_owned(),
                         2 => "FL·FR".to_owned(),

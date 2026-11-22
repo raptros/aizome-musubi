@@ -366,7 +366,7 @@ impl Layout {
 
     pub fn from_graph(graph: &Graph, page: Page, options: &ViewOptions) -> Self {
         let kinds: &[PortKind] = match page {
-            Page::Audio | Page::Mixer => &[PortKind::Audio],
+            Page::Audio | Page::Mixer | Page::Devices => &[PortKind::Audio],
             Page::Midi => &[PortKind::Midi],
             Page::Midi2 if options.show_midi_1 => &[PortKind::Ump, PortKind::Midi],
             Page::Midi2 => &[PortKind::Ump],

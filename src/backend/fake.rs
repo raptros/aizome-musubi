@@ -79,6 +79,10 @@ impl FakeBackend {
         self.meters.remove(Handle { epoch: self.graph.epoch, id });
         self.meter_slots.remove(&Handle { epoch: self.graph.epoch, id });
     }
+    /// Simulate a new registry object after a profile switch.
+    pub fn upsert(&mut self, object: Upsert) {
+        self.publish(GraphDelta { epoch: self.graph.epoch, upserts: vec![object], removals: vec![] });
+    }
 
     fn publish(&mut self, delta: GraphDelta) {
         self.graph.apply(delta.clone());

@@ -11,6 +11,7 @@ pub trait AudioControl {
     fn default_device(&self, kind: StripKind, name: &str);
     fn move_stream(&self, kind: StripKind, index: u32, target: u32);
     fn port(&self, kind: StripKind, index: u32, port: &str);
+    fn profile(&self, card: u32, profile: &str);
 }
 
 impl AudioControl for Audio {
@@ -95,6 +96,9 @@ impl AudioControl for Audio {
             _ => {}
         }
     }
+    fn profile(&self, card: u32, profile: &str) {
+        let _ = self.set_card_profile(card, profile);
+    }
 }
 
 #[derive(Default)]
@@ -168,6 +172,12 @@ impl AudioControl for FakeAudio {
             stream.device = target;
         }
     }
+    fn profile(&self, card: u32, profile: &str) {
+        self.commands.borrow_mut().push(format!("profile {card} {profile}"));
+        if let Some(entry) = self.state.borrow_mut().cards.iter_mut().find(|entry| entry.index == card) {
+            entry.active_profile = Some(profile.into());
+        }
+    }
 }
 
 impl AudioControl for std::rc::Rc<FakeAudio> {
@@ -191,5 +201,8 @@ impl AudioControl for std::rc::Rc<FakeAudio> {
     }
     fn move_stream(&self, kind: StripKind, index: u32, target: u32) {
         self.as_ref().move_stream(kind, index, target);
+    }
+    fn profile(&self, card: u32, profile: &str) {
+        self.as_ref().profile(card, profile);
     }
 }

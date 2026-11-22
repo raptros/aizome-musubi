@@ -16,6 +16,7 @@ struct Demo {
     peaks: [f32; 2],
     reason: Option<String>,
     now: Instant,
+    paused: bool,
     changes: usize,
 }
 impl Demo {
@@ -26,6 +27,7 @@ impl Demo {
             reason: disabled.then(|| "Ambiguous PipeWire identity".into()),
             now: Instant::now(),
             changes: 0,
+            paused: false,
         }
     }
 }
@@ -54,7 +56,9 @@ impl Program for Demo {
             text("OUTPUT · TEST STEREO").role(Role::Accent),
             row![
                 Fader::with_reason(self.value, false, self.reason.clone(), Msg::Volume).id("fader"),
-                LevelMeter::element(&self.peaks, self.now, false).id("meter"),
+                LevelMeter::element(&self.peaks, self.now, self.paused)
+                    .width(if self.paused { 34. } else { 24. })
+                    .id("meter"),
             ],
         ]
         .padding(20.)
@@ -168,5 +172,19 @@ fn mixer_widget_goldens() {
             let w = h.window();
             assert_golden(&mut h, w, format!("tests/snapshots/mixer-widgets-{theme}-{state}.png"), 1.);
         }
+        // The engine reports this state for a strip beyond its 24-stream cap.
+        let mut demo = Demo::new(1., [0., 0.], false);
+        demo.paused = true;
+        let mut h = Harness::with(
+            demo,
+            Appearance {
+                theme: if day { ThemeChoice::Day } else { ThemeChoice::Night },
+                reduced_motion: true,
+                ..Appearance::default()
+            },
+            true,
+        );
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/mixer-meter-paused-{theme}.png"), 1.);
     }
 }
