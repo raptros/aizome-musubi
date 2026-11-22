@@ -162,7 +162,8 @@ def cards():
     return json.loads(user(
         "pactl -f json list cards | jq -c '[.[] | {index, name, description: .properties[\"device.description\"],"
         " active_profile: (if (.active_profile | type) == \"object\" then .active_profile.name else .active_profile end),"
-        " profiles: [.profiles[] | {name, available}]}]'"))
+        " profiles: (.profiles | if type == \"array\" then map({name, available})"
+        " else to_entries | map({name: .key, available: .value.available}) end)}]'"))
 
 
 machine.start()
@@ -268,7 +269,8 @@ try:
         card = listed[0]
         capture("07-devices-before")
         profiles = [profile for profile in card["profiles"]
-                    if profile["name"] != card["active_profile"] and profile["name"] != "off"
+                    if isinstance(profile["name"], str) and profile["name"]
+                    and profile["name"] != card["active_profile"] and profile["name"] != "off"
                     and profile["available"] not in ("no", False)]
         if profiles:
             click_element("device-profile")
