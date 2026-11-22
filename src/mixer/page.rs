@@ -4,9 +4,84 @@ use super::{
     model::{Strip, StripControl, StripKind},
 };
 use crate::{app::Msg, backend::meters::MeterReading};
-use aizome_kit::{column, prelude::*, row};
+use aizome_kit::{Align, Element, FontSpec, Point, Rect, Size, column, element::MsgFn, prelude::*, row};
+use aizome_kit::{
+    hash::PaintHasher,
+    layout::Constraints,
+    sidestep_ui::PointerButton,
+    text::TextSpec,
+    widget::{Event, EventCx, Focusable, LayoutCx, PaintCx, SemanticRole, Semantics, Status, Widget},
+};
 use aizome_sys::audio::AudioState;
 use std::time::Instant;
+
+/// A checked toggle stays keyboard reachable even when activating it is a no-op.
+struct DefaultToggle {
+    checked: bool,
+    usable: bool,
+    kind: StripKind,
+    name: String,
+}
+
+impl Widget for DefaultToggle {
+    fn name(&self) -> &'static str {
+        "mixer-default-toggle"
+    }
+    fn layout(&mut self, _cx: &mut LayoutCx, bc: Constraints) -> Size {
+        bc.constrain(Size::new(32., 28.))
+    }
+    fn paint(&self, cx: &mut PaintCx) {
+        let t = cx.theme();
+        let rect = Rect::from_origin_size(Point::ZERO, cx.size());
+        cx.canvas.fill_rect(rect, if self.checked { t.selection() } else { t.raised() });
+        aizome_kit::draw::border(cx.canvas, rect, t.line2(), 1.);
+        cx.draw_text_in(
+            "◉",
+            &TextSpec::new(FontSpec::ui(t.metrics.body), if self.checked { t.on_selection() } else { t.text() }),
+            rect,
+            Align::Center,
+        );
+    }
+    fn hash(&self, h: &mut PaintHasher) {
+        h.add(&(self.checked, self.usable));
+    }
+    fn hit(&self) -> bool {
+        true
+    }
+    fn focusable(&self) -> Focusable {
+        if self.usable { Focusable::Tab } else { Focusable::No }
+    }
+    fn event(&mut self, cx: &mut EventCx, event: &Event) -> Status {
+        if let Event::PointerUp { pos, button: PointerButton::Left, .. } = event
+            && self.usable
+            && cx.bounds().contains(*pos)
+        {
+            if !self.checked {
+                cx.emit(&MsgFn::new(Msg::MixerDefault(self.kind, self.name.clone())));
+            }
+            return Status::Handled;
+        }
+        Status::Ignored
+    }
+    fn activate(&mut self, cx: &mut EventCx) -> bool {
+        if !self.usable {
+            return false;
+        }
+        if !self.checked {
+            cx.emit(&MsgFn::new(Msg::MixerDefault(self.kind, self.name.clone())));
+        }
+        true
+    }
+    fn semantics(&self) -> Option<Semantics> {
+        Some(Semantics {
+            role: SemanticRole::Switch,
+            label: Some("Default device".into()),
+            checked: Some(self.checked),
+            disabled: !self.usable,
+            ..Default::default()
+        })
+    }
+}
 
 fn strip_view(
     strip: &Strip,
@@ -15,6 +90,7 @@ fn strip_view(
     now: Instant,
     main: bool,
     linked: bool,
+    route_menu: Option<(StripKind, u32)>,
     percent: bool,
     meters: bool,
 ) -> Element<Msg> {
@@ -33,7 +109,11 @@ fn strip_view(
         }
         StripControl::ReadOnly(_) => (0., false, None),
     };
-    let targets = if main || strip.kind == StripKind::Playback { &audio.sinks } else { &audio.sources };
+    let targets = if main || matches!(strip.kind, StripKind::Output | StripKind::Playback) {
+        &audio.sinks
+    } else {
+        &audio.sources
+    };
     let current = if main {
         audio.sinks.iter().find(|d| d.is_default).map(|d| d.index)
     } else {
@@ -61,8 +141,40 @@ fn strip_view(
             .width(112.)
             .id(if main { "main-target" } else { "strip-target" })
             .into()
+    } else if matches!(strip.kind, StripKind::Output | StripKind::Input)
+        && let Some(device) = index.and_then(|i| targets.iter().find(|d| d.index == i))
+    {
+        let active = device.ports.iter().find(|port| Some(port.name.as_str()) == device.active_port.as_deref());
+        let route_name = active.map_or("No route", |port| port.description.as_str());
+        let entries: Vec<Element<Msg>> = device
+            .ports
+            .iter()
+            .map(|port| {
+                button(if port.available == Some(false) {
+                    format!("{} · unavailable", port.description)
+                } else {
+                    port.description.clone()
+                })
+                .enabled(port.available != Some(false) && reason.is_none())
+                .selected(device.active_port.as_deref() == Some(port.name.as_str()))
+                .on_press(Msg::MixerRoute(strip.kind, device.index, port.name.clone()))
+                .width(Fill)
+                .into()
+            })
+            .collect();
+        popover(
+            button(format!("{route_name} ⌄"))
+                .enabled(!device.ports.is_empty() && reason.is_none())
+                .on_press(Msg::MixerRouteMenu(strip.kind, device.index))
+                .id(format!("route-{:?}-{}", strip.kind, device.index))
+                .width(112.),
+            container(column(entries).spacing(4.).padding(8.)).width(190.),
+            route_menu == Some((strip.kind, device.index)),
+        )
+        .on_dismiss(Msg::MixerRouteMenu(strip.kind, device.index))
+        .into()
     } else {
-        container(text("Device route").size(11.).role(Role::Text3)).height(24.).into()
+        container(text("No routes").size(11.).role(Role::Text3)).height(24.).into()
     };
     let kind = strip.kind;
     let node = strip.node;
@@ -79,16 +191,41 @@ fn strip_view(
     .id(format!("fader-{kind:?}-{}", index.unwrap_or_else(|| node.map_or(0, |n| n.id))));
     let reading = if meters { node.and_then(|n| readings.iter().find(|r| r.node == n)) } else { None };
     let peaks: &[f32] = reading.map_or(&[], |r| r.peaks.as_slice());
-    let paused = !meters || reading.is_some_and(|r| r.paused) || node.is_none();
-    let meter = LevelMeter::element::<Msg>(peaks, now, paused).width(20.).height(Fill);
+    let channels = if !peaks.is_empty() {
+        peaks.len()
+    } else if let Some(i) = index {
+        targets.iter().find(|d| d.index == i).map_or(2, |d| d.channel_volumes.len().max(1))
+    } else {
+        match &strip.control {
+            StripControl::Native { channel_volumes, .. } => channel_volumes.len().max(1),
+            _ => 2,
+        }
+    };
+    let paused = meters && (reading.is_some_and(|r| r.paused) || node.is_none());
+    let meter = LevelMeter::with_state::<Msg>(
+        peaks,
+        channels,
+        now,
+        if !meters {
+            Some("Meters off")
+        } else if paused {
+            Some("paused")
+        } else {
+            None
+        },
+    )
+    .width(34.)
+    .height(Fill);
     let title = if main { "MAIN" } else { &strip.name };
+    let mut mute_button = button("M").width(32.).selected(muted);
+    if muted {
+        mute_button = mute_button.primary().destructive();
+    }
     let mut buttons = row![
-        button("M")
-            .width(32.)
-            .selected(muted)
+        mute_button
             .enabled(reason.is_none() && !matches!(strip.control, StripControl::Native { muted: None, .. }))
             .on_press(Msg::MixerMute(kind, strip.control.clone(), !muted))
-            .tooltip(reason.clone().unwrap_or_else(|| "Mute".into()))
+            .tooltip(reason.clone().unwrap_or_else(|| if muted { "Unmute".into() } else { "Mute".into() }))
             .id(format!("mute-{kind:?}-{}", index.unwrap_or_default())),
     ]
     .spacing(2.);
@@ -96,34 +233,42 @@ fn strip_view(
         let device = if kind == StripKind::Output { &audio.sinks } else { &audio.sources };
         if let Some(d) = index.and_then(|i| device.iter().find(|d| d.index == i)) {
             buttons = buttons.push(
-                button("◉")
-                    .width(32.)
-                    .selected(d.is_default)
-                    .enabled(reason.is_none())
-                    .on_press(Msg::MixerDefault(kind, d.name.clone()))
-                    .tooltip(if d.is_default { "Default device" } else { "Make default" })
-                    .label(if d.is_default { "Default device — on" } else { "Default device — off" }),
+                Element::new(
+                    DefaultToggle { checked: d.is_default, usable: reason.is_none(), kind, name: d.name.clone() },
+                    vec![],
+                )
+                .width(32.)
+                .id(format!("default-{kind:?}-{}", d.index)),
             );
         }
     }
     if matches!(kind, StripKind::Output | StripKind::Input | StripKind::Native) && !main {
         if let Some(id) = index.or_else(|| node.map(|n| n.id)) {
+            let mut link_button = button("↔").width(32.).selected(linked);
+            if linked {
+                link_button = link_button.primary();
+            }
             buttons = buttons.push(
-                button("↔")
-                    .width(32.)
-                    .selected(linked)
-                    .enabled(reason.is_none())
-                    .on_press(Msg::MixerLink(kind, id))
-                    .tooltip("Link channels"),
+                link_button.enabled(reason.is_none()).on_press(Msg::MixerLink(kind, id)).tooltip(if linked {
+                    "Unlink channels"
+                } else {
+                    "Link channels"
+                }),
             );
         }
     }
     let balance_control: Element<Msg> = if let (Some(balance), Some(i)) = (balance, index) {
-        slider(balance as f64, ValueRange::new(-1., 1.).expect("balance range"))
-            .on_change(move |value| Msg::MixerBalance(kind, i, value as f32))
-            .enabled(reason.is_none())
-            .width(100.)
-            .into()
+        row![
+            text("L").size(9.).role(Role::Text3),
+            slider(balance as f64, ValueRange::new(-1., 1.).expect("balance range"))
+                .on_change(move |value| Msg::MixerBalance(kind, i, value as f32))
+                .enabled(reason.is_none())
+                .width(78.),
+            text("R").size(9.).role(Role::Text3),
+        ]
+        .spacing(2.)
+        .height(22.)
+        .into()
     } else {
         container(text(" ")).height(22.).into()
     };
@@ -133,23 +278,36 @@ fn strip_view(
         container(
             column![
                 container(
-                    text(match kind {
-                        StripKind::Output => "OUT",
-                        StripKind::Input => "IN",
-                        StripKind::Playback => "PLAY",
-                        StripKind::Recording => "REC",
-                        StripKind::Native => "NODE",
+                    aizome_kit::icon(match kind {
+                        StripKind::Output => Icon::Speaker,
+                        StripKind::Input | StripKind::Recording => Icon::Mic,
+                        StripKind::Playback => Icon::Headphones,
+                        StripKind::Native => Icon::Volume2,
                     })
-                    .size(10.)
+                    .size(15.)
                     .role(Role::Accent)
                 )
-                .height(18.),
+                .padding(3.)
+                .fill(Tone::Chrome)
+                .border(Edge::Line)
+                .height(22.),
                 text(title).semibold().size(12.).tooltip(title),
                 text(subtitle.as_str()).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
                 target,
                 balance_control,
                 buttons,
-                row![fader, meter].spacing(1.).height(Fill),
+                column![
+                    row![fader, meter].spacing(1.).height(Fill),
+                    text(match channels {
+                        1 => "MONO".to_owned(),
+                        2 => "FL·FR".to_owned(),
+                        n => format!("{n} CH"),
+                    })
+                    .size(9.)
+                    .role(Role::Text3)
+                ]
+                .spacing(2.)
+                .height(Fill),
             ]
             .spacing(5.)
             .width(Fill)
@@ -171,6 +329,7 @@ pub fn view(
     readings: &[MeterReading],
     now: Instant,
     linked: &std::collections::HashSet<(StripKind, u32)>,
+    route_menu: Option<(StripKind, u32)>,
     percent: bool,
     meters: bool,
     shown: &[bool; 5],
@@ -218,6 +377,7 @@ pub fn view(
                 now,
                 false,
                 linked.contains(&(strip.kind, id)),
+                route_menu,
                 percent,
                 meters,
             ));
@@ -227,7 +387,7 @@ pub fn view(
     let scrolling = scroll(content).horizontal().height(Fill);
     let main_strip: Element<Msg> = main.map_or_else(
         || container(text("No default output")).width(120.).height(Fill).into(),
-        |s| strip_view(s, audio, readings, now, true, false, percent, meters),
+        |s| strip_view(s, audio, readings, now, true, false, route_menu, percent, meters),
     );
     row![
         scrolling,

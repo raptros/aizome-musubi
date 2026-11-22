@@ -10,6 +10,7 @@ pub trait AudioControl {
     fn balance(&self, kind: StripKind, index: u32, value: f32);
     fn default_device(&self, kind: StripKind, name: &str);
     fn move_stream(&self, kind: StripKind, index: u32, target: u32);
+    fn port(&self, kind: StripKind, index: u32, port: &str);
 }
 
 impl AudioControl for Audio {
@@ -68,6 +69,17 @@ impl AudioControl for Audio {
             }
             StripKind::Input => {
                 self.set_default_source(name);
+            }
+            _ => {}
+        }
+    }
+    fn port(&self, kind: StripKind, index: u32, port: &str) {
+        match kind {
+            StripKind::Output => {
+                self.set_sink_port(index, port);
+            }
+            StripKind::Input => {
+                self.set_source_port(index, port);
             }
             _ => {}
         }
@@ -138,6 +150,16 @@ impl AudioControl for FakeAudio {
             device.is_default = device.name == name;
         }
     }
+    fn port(&self, kind: StripKind, index: u32, port: &str) {
+        self.commands.borrow_mut().push(format!("port {kind:?} {index} {port}"));
+        let mut state = self.state.borrow_mut();
+        let devices = if kind == StripKind::Output { &mut state.sinks } else { &mut state.sources };
+        if let Some(device) = devices.iter_mut().find(|device| device.index == index)
+            && device.ports.iter().any(|candidate| candidate.name == port && candidate.available != Some(false))
+        {
+            device.active_port = Some(port.into());
+        }
+    }
     fn move_stream(&self, kind: StripKind, index: u32, target: u32) {
         self.commands.borrow_mut().push(format!("move {kind:?} {index} {target}"));
         let mut state = self.state.borrow_mut();
@@ -163,6 +185,9 @@ impl AudioControl for std::rc::Rc<FakeAudio> {
     }
     fn default_device(&self, kind: StripKind, name: &str) {
         self.as_ref().default_device(kind, name);
+    }
+    fn port(&self, kind: StripKind, index: u32, port: &str) {
+        self.as_ref().port(kind, index, port);
     }
     fn move_stream(&self, kind: StripKind, index: u32, target: u32) {
         self.as_ref().move_stream(kind, index, target);

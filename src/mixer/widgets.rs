@@ -141,22 +141,38 @@ impl Widget for Fader {
         let size = cx.size();
         let track = Self::track(size);
         let disabled = self.read_only_reason.is_some();
-        let caption = TextSpec::new(FontSpec::mono(t.metrics.caption), t.text2());
-        for (db, text) in [(6., "+6"), (0., "0"), (-6., "−6"), (-12., "−12"), (-24., "−24"), (-36., "−36")].into_iter()
-        {
+        let caption = TextSpec::new(FontSpec::mono(t.metrics.caption), if disabled { t.text3() } else { t.text2() });
+        let labels: &[(f64, &str)] = if self.percent {
+            &[
+                (10.565_475_543_7, "150"),
+                (0., "100"),
+                (-18.061_799_739_8, "50"),
+                (-36.123_599_479_7, "25"),
+                (-60., "10"),
+            ]
+        } else {
+            &[(6., "+6"), (0., "0"), (-6., "−6"), (-12., "−12"), (-24., "−24"), (-36., "−36"), (-60., "−60")]
+        };
+        for &(db, label) in labels {
             let y = self.y(db, size);
-            cx.draw_text_in(text, &caption, Rect::new(0., y - 10., 31., y + 10.), Align::End);
+            let y = if db == -60. { y - 10. } else { y };
+            cx.draw_text_in(label, &caption, Rect::new(0., y - 10., 31., y + 10.), Align::End);
             cx.canvas.fill_rect(Rect::new(30., y, 33., y + 1.), t.line2());
         }
-        cx.draw_text_in("−∞", &caption, Rect::new(0., track.y1 + 2., 32., track.y1 + 22.), Align::End);
-        cx.canvas.fill_rect(Rect::new(44., track.y0, 46., track.y1), t.line2());
+        cx.draw_text_in(
+            if self.percent { "0%" } else { "−∞" },
+            &caption,
+            Rect::new(0., track.y1 + 5., 32., track.y1 + 25.),
+            Align::End,
+        );
+        cx.canvas.fill_rect(Rect::new(44., track.y0, 46., track.y1), if disabled { t.line() } else { t.line2() });
         let y = if self.value == 0. { track.y1 } else { self.y(linear_to_db(self.value), size) };
         if !disabled {
             cx.canvas.fill_rect(Rect::new(44., y, 46., track.y1), t.selection());
         }
         let thumb = Rect::new(33., y - 7., 57., y + 7.);
-        cx.canvas.fill_rect(thumb, if disabled { t.line() } else { t.raised() });
-        aizome_kit::draw::border(cx.canvas, thumb, t.line2(), 1.);
+        cx.canvas.fill_rect(thumb, if disabled { t.sunk() } else { t.raised() });
+        aizome_kit::draw::border(cx.canvas, thumb, if disabled { t.line() } else { t.line2() }, 1.);
         let box_rect = Self::box_rect(size);
         cx.canvas.fill_rect(box_rect, t.sunk());
         aizome_kit::draw::border(cx.canvas, box_rect, t.line2(), 1.);
@@ -327,6 +343,7 @@ pub struct LevelMeter {
     peaks: [f32; 8],
     channels: usize,
     now: Instant,
+    state: Option<&'static str>,
     paused: bool,
 }
 
@@ -335,12 +352,15 @@ impl LevelMeter {
         Self::element(peaks, now, paused)
     }
     pub fn element<Msg>(peaks: &[f32], now: Instant, paused: bool) -> Element<Msg> {
+        Self::with_state(peaks, peaks.len(), now, paused.then_some("paused"))
+    }
+    pub fn with_state<Msg>(peaks: &[f32], channels: usize, now: Instant, state: Option<&'static str>) -> Element<Msg> {
         let mut values = [0.; 8];
-        let channels = peaks.len().clamp(1, 8);
+        let channels = channels.clamp(1, 8);
         for (dest, peak) in values.iter_mut().zip(peaks) {
             *dest = if peak.is_finite() { peak.max(0.) } else { 0. };
         }
-        Element::new(Self { peaks: values, channels, now, paused }, vec![])
+        Element::new(Self { peaks: values, channels, now, paused: state.is_some(), state }, vec![])
     }
     fn db(peak: f32) -> f64 {
         if peak <= 0. { f64::NEG_INFINITY } else { 20. * f64::from(peak).log10() }
@@ -403,17 +423,18 @@ impl Widget for LevelMeter {
                 );
             }
         }
-        if self.paused {
-            cx.draw_text_in(
-                "off",
-                &TextSpec::new(FontSpec::ui(t.metrics.small), t.text2()),
-                Rect::new(0., 2., size.width, 18.),
-                Align::Center,
-            );
+        if let Some(label) = self.state {
+            let spec = TextSpec::new(FontSpec::ui(8.), t.text());
+            if label == "Meters off" {
+                cx.draw_text_in("Meters", &spec, Rect::new(0., 2., size.width, 13.), Align::Center);
+                cx.draw_text_in("off", &spec, Rect::new(0., 13., size.width, 24.), Align::Center);
+            } else {
+                cx.draw_text_in(label, &spec, Rect::new(0., 2., size.width, 18.), Align::Center);
+            }
         }
     }
     fn hash(&self, h: &mut PaintHasher) {
-        h.add(&(self.channels, self.paused));
+        h.add(&(self.channels, self.state));
         for v in &self.peaks[..self.channels] {
             h.add(&v.to_bits());
         }
@@ -442,7 +463,7 @@ impl Widget for LevelMeter {
         Some(Semantics {
             role: SemanticRole::Meter,
             label: Some("Level peak".into()),
-            value: Some(if self.paused { "off".into() } else { db_text(Self::db(peak)) }),
+            value: Some(self.state.map_or_else(|| db_text(Self::db(peak)), str::to_owned)),
             range: Some((-60., 6., Self::db(peak).max(-60.))),
             disabled: self.paused,
             ..Default::default()

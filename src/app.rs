@@ -50,7 +50,7 @@ impl Page {
         (Page::Midi, Icon::Music, "MIDI"),
         (Page::Midi2, Icon::Keyboard, "MIDI 2.0"),
         (Page::Video, Icon::Video, "Video"),
-        (Page::Mixer, Icon::Volume2, "Mixer"),
+        (Page::Mixer, Icon::SlidersHorizontal, "Mixer"),
     ];
 
     pub fn title(self) -> &'static str {
@@ -100,6 +100,7 @@ impl Transaction {
                 MixerValue::Balance(_) => "Balance",
                 MixerValue::Default(_) => "Default Device",
                 MixerValue::Target(_) => "Move Stream",
+                MixerValue::Port(_) => "Device Route",
             };
         }
         if self.intents.first().is_some_and(|intent| intent.connect) { "Connect" } else { "Disconnect" }
@@ -120,6 +121,7 @@ pub enum MixerValue {
     Balance(f32),
     Default(String),
     Target(String),
+    Port(String),
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +146,8 @@ pub enum Msg {
     MixerBalance(StripKind, u32, f32),
     MixerDefault(StripKind, String),
     MixerMove(StripKind, u32, u32),
+    MixerRoute(StripKind, u32, String),
+    MixerRouteMenu(StripKind, u32),
     MixerLink(StripKind, u32),
     MixerPercent(bool),
     MixerMeters(bool),
@@ -213,6 +217,7 @@ pub struct Musubi {
     linked_channels: HashSet<(StripKind, u32)>,
     mixer_options: persistence::MixerOptions,
     mixer_show: bool,
+    mixer_route_menu: Option<(StripKind, u32)>,
     mixer_filter: String,
     mixer_hover: Option<String>,
     mixer_pending: Option<usize>,
@@ -365,14 +370,11 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
                 .id("mixer-unit")
                 .into(),
         );
-        controls.push(
-            button(if compact { "Meters" } else { "Meters" })
-                .toolbar()
-                .selected(config.mixer.meters)
-                .on_press(Msg::MixerMeters(!config.mixer.meters))
-                .id("mixer-meters")
-                .into(),
-        );
+        let mut meter_button = button("Meters").icon(Icon::Activity).toolbar().selected(config.mixer.meters);
+        if config.mixer.meters {
+            meter_button = meter_button.primary();
+        }
+        controls.push(meter_button.on_press(Msg::MixerMeters(!config.mixer.meters)).id("mixer-meters").into());
         let mut checkboxes: Vec<Element<Msg>> = Vec::new();
         for (index, label) in
             ["Outputs", "Inputs", "Playing", "Recording", "Monitors/virtual devices"].iter().enumerate()
@@ -386,7 +388,7 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
         }
         controls.push(
             popover(
-                button("Show…").toolbar().on_press(Msg::MixerShow).id("mixer-show"),
+                button("Show…").icon(Icon::Plus).toolbar().on_press(Msg::MixerShow).id("mixer-show"),
                 container(column(checkboxes).spacing(8.).padding(12.)).width(220.),
                 config.mixer_show,
             )
@@ -757,6 +759,19 @@ impl Musubi {
                 }
                 if let Some(audio) = &self.audio {
                     audio.move_stream(strip.kind, index, destinations[0].index);
+                }
+            }
+            MixerValue::Port(name) => {
+                let devices = if strip.kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                if !devices
+                    .iter()
+                    .any(|d| d.index == index && d.ports.iter().any(|p| &p.name == name && p.available != Some(false)))
+                {
+                    self.notice = Some(format!("{} skipped: route unavailable.", if undo { "Undo" } else { "Redo" }));
+                    return;
+                }
+                if let Some(audio) = &self.audio {
+                    audio.port(strip.kind, index, name);
                 }
             }
         }
@@ -1489,6 +1504,35 @@ impl Program for Musubi {
                     }
                 }
             }
+            Msg::MixerRouteMenu(kind, index) => {
+                self.mixer_route_menu =
+                    if self.mixer_route_menu == Some((kind, index)) { None } else { Some((kind, index)) };
+            }
+            Msg::MixerRoute(kind, index, port) => {
+                self.mixer_route_menu = None;
+                let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
+                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                if let Some(device) = devices.iter().find(|d| d.index == index)
+                    && let Some(route) =
+                        device.ports.iter().find(|route| route.name == port && route.available != Some(false))
+                    && device.active_port.as_deref() != Some(route.name.as_str())
+                {
+                    if let Some(previous) = &device.active_port {
+                        self.record_mixer(
+                            MixerIntent {
+                                identity: MixerIdentity::Device(kind, device.name.clone()),
+                                before: MixerValue::Port(previous.clone()),
+                                after: MixerValue::Port(port.clone()),
+                            },
+                            false,
+                            cx,
+                        );
+                    }
+                    if let Some(audio) = &self.audio {
+                        audio.port(kind, index, &port);
+                    }
+                }
+            }
             Msg::MixerLink(kind, index) => {
                 if !self.linked_channels.remove(&(kind, index)) {
                     self.linked_channels.insert((kind, index));
@@ -1917,11 +1961,19 @@ impl Program for Musubi {
                 .width(Fill),
             );
         }
+        let strip_count =
+            self.audio.as_ref().map_or(0, |audio| mixer::model::strips(&audio.snapshot(), &self.graph).len());
         side = side.push(caption("MIXER")).push(
-            sidebar_item(Icon::Volume2, "Mixer", self.page == Page::Mixer)
-                .on_press(Msg::Page(Page::Mixer))
-                .id("Mixer")
-                .width(Fill),
+            row![
+                sidebar_item(Icon::SlidersHorizontal, "Mixer", self.page == Page::Mixer)
+                    .on_press(Msg::Page(Page::Mixer))
+                    .id("Mixer")
+                    .width(Fill),
+                text(strip_count.to_string()).mono().size(11.).role(Role::Text3),
+            ]
+            .spacing(4.)
+            .padding([0., 10.])
+            .width(Fill),
         );
         let version = match &self.connection {
             Some(Connection::Up(version)) => format!("PipeWire {version}"),
@@ -1971,6 +2023,7 @@ impl Program for Musubi {
                     &readings,
                     Instant::now(),
                     &self.linked_channels,
+                    self.mixer_route_menu,
                     self.mixer_options.percent,
                     self.mixer_options.meters,
                     &self.mixer_options.shown,
@@ -2057,8 +2110,8 @@ impl Program for Musubi {
         let has_ports = available && ports > 0;
         let controls: Element<Msg> = Element::new(
             ResponsiveToolbar(ToolbarConfig {
-                title: if self.page == Page::Mixer { "Mixer".into() } else { title },
-                short_title: if self.page == Page::Mixer { "Mixer".into() } else { short_title },
+                title: if self.page == Page::Mixer { format!("Mixer · {strip_count} strips") } else { title },
+                short_title: if self.page == Page::Mixer { format!("Mixer · {strip_count}") } else { short_title },
                 page: self.page,
                 list: options.list,
                 pairs: options.pairs,

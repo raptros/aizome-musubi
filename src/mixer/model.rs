@@ -82,7 +82,14 @@ fn device_strip(graph: &Graph, device: &AudioDevice, kind: StripKind) -> Strip {
         },
         Err(reason) => StripControl::ReadOnly(reason),
     };
-    Strip { kind, name: device.description.clone(), subtitle: device.name.clone(), node, control }
+    let subtitle = device
+        .active_port
+        .as_deref()
+        .and_then(|active| device.ports.iter().find(|port| port.name == active))
+        .map(|port| port.description.clone())
+        .or_else(|| (!device.bus.is_empty()).then(|| device.bus.clone()))
+        .unwrap_or_else(|| device.description.clone());
+    Strip { kind, name: device.description.clone(), subtitle, node, control }
 }
 
 fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {

@@ -12,7 +12,7 @@ use aizome_musubi::{
         model::{self, StripControl, StripKind},
     },
 };
-use aizome_sys::audio::{AudioDevice, AudioState, AudioStream};
+use aizome_sys::audio::{AudioDevice, AudioState, AudioStream, Port};
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 fn setup(day: bool) -> (Harness<Musubi>, Rc<FakeAudio>, Rc<RefCell<FakeBackend>>) {
@@ -26,6 +26,17 @@ fn setup(day: bool) -> (Harness<Musubi>, Rc<FakeAudio>, Rc<RefCell<FakeBackend>>
         volume: 0.8,
         channel_volumes: vec![0.8, 0.8],
         is_default: default,
+        ports: vec![
+            Port { name: "analog".into(), description: "Speakers".into(), available: Some(true), ..Port::default() },
+            Port {
+                name: "headphones".into(),
+                description: "Headphones".into(),
+                available: Some(true),
+                ..Port::default()
+            },
+            Port { name: "hdmi".into(), description: "HDMI".into(), available: Some(false), ..Port::default() },
+        ],
+        active_port: Some("analog".into()),
         ..AudioDevice::default()
     };
     let stream = |index, app: &str, title: &str, target| AudioStream {
@@ -103,6 +114,45 @@ fn readback_commands_and_meter_lifecycle() {
     assert!(audio.state.borrow().sinks[1].is_default);
     h.send(Msg::Page(Page::Audio));
     assert!(matches!(backend.borrow().commands.last(), Some(Command::StopMeters)));
+}
+#[test]
+fn device_routes_use_port_setter_and_observed_active_port() {
+    let (mut h, audio, _) = setup(false);
+    let w = h.window();
+    assert!(h.find_id(w, "route-Output-10013").is_some());
+    h.send(Msg::MixerRoute(StripKind::Output, 10013, "hdmi".into()));
+    assert_eq!(audio.state.borrow().sinks[1].active_port.as_deref(), Some("analog"));
+    assert!(!audio.commands.borrow().iter().any(|command| command.starts_with("port ")));
+    h.send(Msg::MixerRoute(StripKind::Output, 10013, "headphones".into()));
+    assert_eq!(audio.state.borrow().sinks[1].active_port.as_deref(), Some("headphones"));
+    assert!(audio.commands.borrow().iter().any(|command| command == "port Output 10013 headphones"));
+    h.send(Msg::Undo);
+    assert_eq!(audio.state.borrow().sinks[1].active_port.as_deref(), Some("analog"));
+    let commands = audio.commands.borrow().len();
+    h.send(Msg::MixerDefault(StripKind::Output, "alsa_output.usb_studio".into()));
+    assert_eq!(audio.commands.borrow().len(), commands);
+    assert!(
+        h.semantics(w).iter().any(|(s, _)| { s.label.as_deref() == Some("Default device") && s.checked == Some(true) })
+    );
+}
+
+#[test]
+fn device_route_popover_golden() {
+    let (mut h, _, _) = setup(false);
+    let w = h.window();
+    h.send(Msg::MixerRouteMenu(StripKind::Output, 10013));
+    assert_golden(&mut h, w, "tests/snapshots/mixer-device-routes-night.png", 1.);
+}
+
+#[test]
+fn muted_and_linked_mixer_goldens() {
+    for (day, theme) in [(false, "night"), (true, "day")] {
+        let (mut h, audio, _) = setup(day);
+        audio.state.borrow_mut().sources[1].muted = true;
+        h.send(Msg::MixerLink(StripKind::Output, 10013));
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/mixer-muted-linked-{theme}.png"), 1.);
+    }
 }
 
 #[test]
