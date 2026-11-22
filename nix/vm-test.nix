@@ -39,6 +39,8 @@ pkgs.testers.runNixOSTest {
     # No video device: the test kernel has no `vivid` module, so the VM
     # check covers audio and MIDI only.
     boot.kernelModules = [ "snd-dummy" "snd-seq" "snd-virmidi" ];
+    # Keep the virtual MIDI client at 0-0 independent of ALSA module load order.
+    boot.extraModprobeConfig = "options snd-virmidi index=0\noptions snd-dummy index=1";
     environment.systemPackages = [ pkgs.pipewire pkgs.pulseaudio pkgs.alsa-utils pkgs.jq pkgs.sox ];
     # A stream connected to the default sink gets WirePlumber-managed output
     # ports, which can then be patched to the other sink by Musubi.
