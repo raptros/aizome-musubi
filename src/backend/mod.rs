@@ -16,12 +16,33 @@ pub struct Handle {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Connect { out: Handle, input: Handle, confirmed: bool, request: RequestId },
-    Disconnect { link: Handle, request: RequestId },
-    SetNodeVolume { node: Handle, channel_volumes: Vec<f32>, request: RequestId },
-    SetNodeMute { node: Handle, muted: bool, request: RequestId },
+    Connect {
+        out: Handle,
+        input: Handle,
+        confirmed: bool,
+        request: RequestId,
+    },
+    Disconnect {
+        link: Handle,
+        request: RequestId,
+    },
+    SetNodeVolume {
+        node: Handle,
+        channel_volumes: Vec<f32>,
+        request: RequestId,
+    },
+    SetNodeMute {
+        node: Handle,
+        muted: bool,
+        request: RequestId,
+    },
     /// Filter-chain's keyed controls, addressed on its capture node.
-    SetEffectGain { node: Handle, left: f32, right: f32, request: RequestId },
+    SetEffectGain {
+        node: Handle,
+        left: f32,
+        right: f32,
+        request: RequestId,
+    },
     StartMeters(Vec<Handle>),
     StopMeters,
     Shutdown,
