@@ -49,6 +49,7 @@ The Audio toolbar offers stereo Pairs or individual Channels, monitor ports, axi
 | Enter | Open the selected cell's inspector |
 | Shift+Space, arrows, Space | Start, extend and apply a line of connections; Escape cancels |
 | Super+1…4 | Audio, MIDI, MIDI 2.0, Video pages |
+| Up/Down, Page Up/Down, Home/End (focused fader) | ±1 dB, ±6 dB, 0 dB, −∞; double-click the value box to type a level |
 | Super+Z / Super+Shift+Z | Undo / redo |
 | Alt+Super+S / Alt+Super+I / Alt+Super+F | Swap axes / toggle inspector / full names |
 | Delete or Backspace | Remove selected routes in List view |
