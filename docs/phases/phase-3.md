@@ -16,6 +16,16 @@ In the private PipeWire, with a scratch chain built from two `bq_peaking` builti
 
    Prefer D-Bus and record the choice as decision A9. The NixOS module ships the template `aizome-musubi-effect@.service`, which runs `pipewire -c %h/.config/aizome-musubi/effects/%i.conf` and has no restart loop (`Restart=on-failure`, `StartLimitBurst=3`).
 
+**P3-S1 spike result (2026-11-22).** The private helper's capture node enumerates a
+second `Props` object with `params` as a struct of alternating string control names
+and float values. Writing `left:Gain` and `right:Gain` to +12 through pipewire-rs
+reads back +12 and raises the 1000 Hz output meter 11.95 dB, without a restart
+(A8). The helper survives backend disconnect/reconnect; killing it removes its
+nodes, and kill-to-reappearance measured 158 ms. A9 selects the user systemd
+D-Bus API; the VM subtest exercises the template and `StartUnit`/`StopUnit`.
+Evidence: `runs/2026-11-22/patchbay/phase3/s1/{live,vm}.log`, with the
+reproducible config in `tests/fixtures/effects-spike.conf`.
+
 ### P3-S2 — effects model, config, service
 - **Config.** `effects::Chain` holds a name, a target (output by stable identity, or "follow default"), up to 8 bands (peaking, low and high shelf: freq, gain, Q), bypass and enabled. Store it under `~/.config/aizome-musubi/effects/` as `<chain>.json`, the source of truth, next to the generated `<chain>.conf`. Both files are written atomically. The conf is generated only from the JSON, with nothing else of the user's in it.
 - **Virtual output.** The chain exposes an `Audio/Sink` named `musubi_eq.<chain>` (description "<name> EQ"), and its playback stream targets the chosen output (`target.object`). It never becomes the default output on its own. Choosing it as default goes through the Mixer, with EasyEffects' warning reasoning shown once.

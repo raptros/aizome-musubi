@@ -56,6 +56,17 @@ flowchart LR
 
 Later phases add: `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
 
+P3-S1 establishes a filter-chain helper independently owned by a template user
+service, not by the GUI's PipeWire connection. The module installs
+`aizome-musubi-effect@.service`, running pinned `pipewire -c` against a per-chain
+generated config in `~/.config/aizome-musubi/effects/`; D-Bus on the user manager
+starts/stops it (A9). The existing backend PipeWire thread can write the helper's
+capture-node `Props.params` struct (`String "<filter>:<control>"`, `Float`) via
+`SetEffectGain` (A8), without introducing another native connection. The private
+live probe keeps the helper process independent and meters the private null
+sink reached by its playback stream; it is not a UI feature or persisted config.
+
+
 The phase-1 matrix derives immutable layouts per page after graph deltas. `ViewOptions` supplies pairs, swap, monitors, optional MIDI 1.0, independent From/To filters and folded group keys. Active Link globals alone count as connected; negotiating links display asked, and failed links display error with the PipeWire reason. The live and fixture EnumFormat summaries carry video raw/DSP families even without `format.dsp`; control type masks distinguish MIDI from UMP, and an ambiguous control mask stays unknown. Pending requests stay asked until observation; failed requests retain their reason. Sparse link and request states avoid allocating the row × column product.
 The matrix retains its tree key across layout changes, reconciling focus, hover, press and line cells by surviving port identity or clamping/clearing them when rows shrink. `PatchMatrix` and the app share a focus handle for page-labelled Table semantics; its focused Cell child advertises route state and activation through the normal toggle command path.
 Header dimensions are page-scoped view options saved alongside pairs/swap. A matrix layout carries its effective row and column header sizes; `PatchMatrix::view` clamps them to leave at least 240pt of body on both axes, and exports the body as an inspect part for the VM driver. A 12pt grip on the header's side of each header edge (never over the first cells) supports dragging and double-click fitting; Show Full Names computes the fit from current groups and labels. Stream subtitle bands are 16pt axis offsets and are excluded from cell hit testing.
