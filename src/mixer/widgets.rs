@@ -342,6 +342,44 @@ struct MeterState {
     shown: [f32; 8],
 }
 
+const METER_SEGMENTS: usize = 32;
+const METER_LABELS: [(f64, &str); 6] =
+    [(6., "+6"), (0., "0"), (-12., "−12"), (-24., "−24"), (-36., "−36"), (-60., "−60")];
+
+fn meter_boundary_y(height: f64, boundary: usize) -> f64 {
+    height - 4. - boundary as f64 * (height - 8.) / METER_SEGMENTS as f64
+}
+
+/// Labels use the very same quantised segment boundary as the meter bars.
+pub struct MeterScale;
+
+impl MeterScale {
+    fn label_y(height: f64, db: f64) -> f64 {
+        meter_boundary_y(height, LevelMeter::segment(db))
+    }
+}
+
+impl Widget for MeterScale {
+    fn name(&self) -> &'static str {
+        "mixer-meter-scale"
+    }
+    fn layout(&mut self, _cx: &mut LayoutCx, bc: Constraints) -> Size {
+        bc.constrain(Size::new(32., 150.))
+    }
+    fn paint(&self, cx: &mut PaintCx) {
+        let size = cx.size();
+        let spec = TextSpec::new(FontSpec::ui(10.5), cx.theme().text2());
+        for (db, label) in METER_LABELS {
+            let y = Self::label_y(size.height, db).clamp(7., size.height - 7.);
+            let x = if db == 0. { 18. } else { 0. };
+            cx.draw_text_in(label, &spec, Rect::new(x, y - 7., size.width, y + 7.), Align::Start);
+        }
+    }
+    fn hash(&self, h: &mut PaintHasher) {
+        h.add(&METER_LABELS.len());
+    }
+}
+
 /// One segmented bar per channel. `peaks` are linear audio amplitudes (not fader values).
 pub struct LevelMeter {
     peaks: [f32; 8],
@@ -370,7 +408,7 @@ impl LevelMeter {
         if peak <= 0. { f64::NEG_INFINITY } else { 20. * f64::from(peak).log10() }
     }
     fn segment(db: f64) -> usize {
-        (((db.max(-60.) + 60.) / 66.) * 32.).ceil().clamp(0., 32.) as usize
+        (((db.max(-60.) + 60.) / 66.) * METER_SEGMENTS as f64).ceil().clamp(0., METER_SEGMENTS as f64) as usize
     }
 }
 
@@ -399,13 +437,13 @@ impl Widget for LevelMeter {
         let t = cx.theme();
         let st = cx.state::<MeterState>();
         let size = cx.size();
-        let step = (size.height - 8.) / 32.;
+        let step = (size.height - 8.) / METER_SEGMENTS as f64;
         let width = ((size.width - 3.) / self.channels as f64).min(if size.height <= 150. { 24. } else { 12. });
         for channel in 0..self.channels {
             let count = if self.paused { 0 } else { Self::segment(Self::db(st.map_or(0., |s| s.shown[channel]))) };
             let held = if self.paused { 0 } else { Self::segment(Self::db(st.map_or(0., |s| s.held[channel]))) };
-            for index in 0..32 {
-                let db = -60. + 66. * index as f64 / 32.;
+            for index in 0..METER_SEGMENTS {
+                let db = -60. + 66. * index as f64 / METER_SEGMENTS as f64;
                 let role = if db > 0. {
                     Role::Danger
                 } else if db > -9. {
@@ -421,7 +459,7 @@ impl Widget for LevelMeter {
                 } else {
                     t.line2()
                 };
-                let y = size.height - 4. - (index + 1) as f64 * step;
+                let y = meter_boundary_y(size.height, index + 1);
                 cx.canvas.fill_rect(
                     Rect::new(
                         2. + channel as f64 * width,
@@ -470,5 +508,19 @@ impl Widget for LevelMeter {
             disabled: self.paused,
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod meter_scale_tests {
+    use super::*;
+
+    #[test]
+    fn labels_follow_meter_segment_boundaries() {
+        for db in [0., -12.] {
+            assert_eq!(MeterScale::label_y(150., db), meter_boundary_y(150., LevelMeter::segment(db)));
+        }
+        assert!(MeterScale::label_y(150., -9.) < MeterScale::label_y(150., -12.));
+        assert!(MeterScale::label_y(150., 0.) - MeterScale::label_y(150., 6.) >= 8.);
     }
 }

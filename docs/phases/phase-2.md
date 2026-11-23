@@ -58,7 +58,7 @@ VM check extended: Mixer page lowers the test sink's volume with real input and 
   5. Mixer fixture: input devices get input routes, and subtitles come from their own route/description (or fix the rendering if it isn't the fixture).
   6. Devices node rows carry direction ("Output"/"Input"), with distinct names.
   - Minors as budget allows: menu items with a check mark on the current one and no button borders; one pop-up style; chain-link icon; −∞ spacing; stream/device row alignment; "1 device(s)" wording; "-" subtitle.
-  - S7b implementation: target labels retain distinguishing suffixes and expose full-name tooltips; Devices uses kit sidebar rows and directional node names; inspector meters show wider channel columns, a scale and peak readout; paused/off states use separate captions and dimmed columns; the Mixer fixture uses direction-appropriate routes. The one-device wording is singular.
+  - S7b implementation: target labels retain distinguishing suffixes and expose full-name tooltips; Devices uses kit sidebar rows and directional node names; the inspector shows the selected port's mono meter, with a scale sharing the meter's dB-to-segment mapping and a matching peak readout; paused/off states use separate captions and dimmed columns; the Mixer fixture uses direction-appropriate routes. The one-device wording is singular.
   - Then a short sekka-visual confirmation of the majors.
 
 ## Acceptance

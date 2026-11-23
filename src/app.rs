@@ -1459,35 +1459,45 @@ impl Musubi {
                         self.backend.as_ref().and_then(|backend| backend.meters().into_iter().find(|r| r.node == node))
                     }
                 });
-                let channels = port
-                    .node_id
-                    .and_then(|id| self.graph.nodes.get(&id))
-                    .and_then(|n| n.props.get("audio.channels"))
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1);
-                let channels = channels.max(reading.as_ref().map_or(0, |r| r.peaks.len()));
-                let peak = reading.as_ref().map_or(0., |r| r.peaks.iter().copied().fold(0_f32, f32::max));
+                let channel = port
+                    .props
+                    .get("port.id")
+                    .and_then(|id| id.parse::<usize>().ok())
+                    .or_else(|| {
+                        port.props.get("audio.channel").and_then(|name| {
+                            name.strip_prefix("AUX").and_then(|index| index.parse::<usize>().ok()).or_else(
+                                || match name.as_str() {
+                                    "FL" | "MONO" => Some(0),
+                                    "FR" => Some(1),
+                                    _ => None,
+                                },
+                            )
+                        })
+                    })
+                    .unwrap_or(0);
+                let peaks: &[f32] =
+                    reading.as_ref().and_then(|r| r.peaks.get(channel)).map(std::slice::from_ref).unwrap_or(&[]);
+                let peak = peaks.first().copied().unwrap_or(0.);
                 let peak_text =
                     if peak > 0. { format!("{:.1} dB", 20. * peak.log10()) } else { "−∞ dB".to_owned() };
                 body.push(text("LEVEL").mono().size(10.5).role(Role::Text3).into());
                 body.push(
                     row![
-                        column![text("+6"), text("0"), text("−12"), text("−24"), text("−36"), text("−60"), text("−∞")]
-                            .spacing(2.)
-                            .width(32.),
+                        Element::new(mixer::MeterScale, vec![]).width(32.).height(150.),
                         mixer::LevelMeter::with_state::<Msg>(
-                            reading.as_ref().map_or(&[], |r| r.peaks.as_slice()),
-                            channels,
+                            peaks,
+                            1,
                             Instant::now(),
                             reading.as_ref().is_some_and(|r| r.paused).then_some("paused"),
                         )
                         .id("inspector-meter")
-                        .width(80.)
-                        .height(140.),
+                        .width(32.)
+                        .height(150.),
                     ]
                     .spacing(8.)
                     .into(),
                 );
+                body.push(text("−∞").mono().size(10.5).role(Role::Text3).into());
                 body.push(text(format!("Peak {peak_text}")).mono().size(11.).role(Role::Text2).into());
             }
             body.push(text("FACTS").mono().size(10.5).letter_spacing(1.2).role(Role::Text3).into());
