@@ -20,6 +20,8 @@ pub enum Command {
     Disconnect { link: Handle, request: RequestId },
     SetNodeVolume { node: Handle, channel_volumes: Vec<f32>, request: RequestId },
     SetNodeMute { node: Handle, muted: bool, request: RequestId },
+    /// Filter-chain's keyed controls, addressed on its capture node.
+    SetEffectGain { node: Handle, left: f32, right: f32, request: RequestId },
     StartMeters(Vec<Handle>),
     StopMeters,
     Shutdown,

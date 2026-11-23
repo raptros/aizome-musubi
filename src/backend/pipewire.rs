@@ -659,6 +659,35 @@ fn execute(
             };
             (request, result)
         }
+        Command::SetEffectGain { node, left, right, request } => {
+            let result = if node.epoch != pending.borrow().epoch {
+                Err("stale connection epoch".into())
+            } else if !left.is_finite() || !right.is_finite() {
+                Err("non-finite filter gain".into())
+            } else {
+                let borrowed = session.borrow();
+                let active = borrowed.as_ref().ok_or("PipeWire unavailable".to_owned());
+                active.and_then(|active| {
+                    let objects = active.objects.borrow();
+                    let Some(Bound::Node(_, proxy)) = objects.get(&node.id) else {
+                        return Err("effect node proxy not found".into());
+                    };
+                    write_props(
+                        proxy,
+                        Property::new(
+                            spa::sys::SPA_PROP_params,
+                            Value::Struct(vec![
+                                Value::String("left:Gain".into()),
+                                Value::Float(left),
+                                Value::String("right:Gain".into()),
+                                Value::Float(right),
+                            ]),
+                        ),
+                    )
+                })
+            };
+            (request, result)
+        }
         Command::SetNodeVolume { node, channel_volumes, request } => {
             let result = if node.epoch != pending.borrow().epoch {
                 Err("stale connection epoch".into())

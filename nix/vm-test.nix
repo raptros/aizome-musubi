@@ -7,6 +7,9 @@ pkgs.testers.runNixOSTest {
     imports = [ sekka.nixosModules.aizome musubiModule ];
     programs.aizome.enable = true;
     programs.musubi.enable = true;
+    environment.etc."musubi-effects-spike.conf".text = builtins.replaceStrings
+      [ "musubi_test_speakers" ] [ "musubi-vm-default" ]
+      (builtins.readFile ../tests/fixtures/effects-spike.conf);
     users.users.alice = {
       isNormalUser = true;
       uid = 1000;

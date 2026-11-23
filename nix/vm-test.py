@@ -183,6 +183,32 @@ default_sink = until("null sink appears", lambda: user(
 user("wpctl set-default " + default_sink)
 observations.append({"default_sink": default_sink, "wpctl": user("wpctl status")})
 try:
+    with subtest("effect template D-Bus supervision"):
+        unit = "aizome-musubi-effect@spike.service"
+        user("mkdir -p ~/.config/aizome-musubi/effects && "
+             "cp /etc/musubi-effects-spike.conf ~/.config/aizome-musubi/effects/spike.conf")
+        manager = "org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
+        start_reply = user(f"busctl --user call {manager} StartUnit ss {unit} replace")
+        unit_reply = user(f"busctl --user call {manager} GetUnit s {unit}")
+        unit_path = unit_reply.split('"')[1]
+        def active():
+            return user(f"busctl --user get-property org.freedesktop.systemd1 {unit_path} "
+                        "org.freedesktop.systemd1.Unit ActiveState")
+        until("effect unit active", lambda: "active" in active())
+        def chain_nodes():
+            return json.loads(user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+                                   "and (.info.props[\"node.name\"] == \"musubi_spike_capture\" "
+                                   "or .info.props[\"node.name\"] == \"musubi_spike_playback\")) "
+                                   "| {id, name: .info.props[\"node.name\"]}]'"))
+        visible = until("effect nodes visible", lambda: (
+            nodes if len(nodes) == 2 else None
+        ) if (nodes := chain_nodes()) else None)
+        stop_reply = user(f"busctl --user call {manager} StopUnit ss {unit} replace")
+        until("effect unit inactive", lambda: "inactive" in active())
+        until("effect nodes removed", lambda: not chain_nodes())
+        observations.append({"effect_supervision": {
+            "start": start_reply, "get_unit": unit_reply, "nodes": visible,
+            "stop": stop_reply, "state": active()}})
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
             p.get("port.direction") == "out" and "musubi_vm_player" in n.get("node.name", "")

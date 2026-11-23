@@ -61,6 +61,16 @@
         options.programs.musubi.enable = lib.mkEnableOption "Musubi, the PipeWire patchbay for Aizome";
         config = lib.mkIf config.programs.musubi.enable {
           environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.musubi ];
+          systemd.user.services."aizome-musubi-effect@" = {
+            description = "Musubi EQ effect %i";
+            after = [ "pipewire.service" ];
+            requires = [ "pipewire.service" ];
+            unitConfig.StartLimitBurst = 3;
+            serviceConfig = {
+              ExecStart = "${pkgs.pipewire}/bin/pipewire -c %h/.config/aizome-musubi/effects/%i.conf";
+              Restart = "on-failure";
+            };
+          };
         };
       };
     };

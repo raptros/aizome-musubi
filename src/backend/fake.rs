@@ -215,6 +215,7 @@ impl Backend for FakeBackend {
                 };
                 (request, result)
             }
+            Command::SetEffectGain { request, .. } => (request, Err("effect DSP is not simulated by the fake backend".into())),
             Command::StartMeters(nodes) => {
                 self.meters.clear();
                 self.meter_slots.clear();
