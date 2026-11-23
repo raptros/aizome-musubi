@@ -19,7 +19,7 @@ fn setup(day: bool) -> (Harness<Musubi>, Rc<FakeAudio>, Rc<RefCell<FakeBackend>>
     let mut dump: serde_json::Value = serde_json::from_str(include_str!("fixtures/studio.json")).unwrap();
     dump.as_array_mut().unwrap().retain(|v| [10, 13, 12, 14, 17, 18, 26, 24].contains(&v["id"].as_u64().unwrap_or(0)));
     let fake = Rc::new(RefCell::new(FakeBackend::from_dump(&dump.to_string(), 1).unwrap()));
-    let device = |index, name: &str, description: &str, default| AudioDevice {
+    let device = |index, name: &str, description: &str, default, input: bool| AudioDevice {
         index,
         name: name.into(),
         description: description.into(),
@@ -27,10 +27,15 @@ fn setup(day: bool) -> (Harness<Musubi>, Rc<FakeAudio>, Rc<RefCell<FakeBackend>>
         channel_volumes: vec![0.8, 0.8],
         is_default: default,
         ports: vec![
-            Port { name: "analog".into(), description: "Speakers".into(), available: Some(true), ..Port::default() },
+            Port {
+                name: "analog".into(),
+                description: if input { "Mic input" } else { "Speakers" }.into(),
+                available: Some(true),
+                ..Port::default()
+            },
             Port {
                 name: "headphones".into(),
-                description: "Headphones".into(),
+                description: if input { "Headset mic" } else { "Headphones" }.into(),
                 available: Some(true),
                 ..Port::default()
             },
@@ -54,12 +59,12 @@ fn setup(day: bool) -> (Harness<Musubi>, Rc<FakeAudio>, Rc<RefCell<FakeBackend>>
             default_sink: Some("alsa_output.usb_studio".into()),
             default_source: Some("alsa_input.usb_studio".into()),
             sinks: vec![
-                device(10010, "alsa_output.usb_studio", "Studio Output", true),
-                device(10013, "alsa_output.analog", "Speakers", false),
+                device(10010, "alsa_output.usb_studio", "Studio Output", true, false),
+                device(10013, "alsa_output.analog", "Speakers", false, false),
             ],
             sources: vec![
-                device(10012, "alsa_input.usb_studio", "Studio Input", true),
-                device(10014, "alsa_input.analog", "Microphone", false),
+                device(10012, "alsa_input.usb_studio", "Studio Input", true, true),
+                device(10014, "alsa_input.analog", "Microphone", false, true),
             ],
             playback: vec![
                 stream(10017, "Firefox", "Video", 10010),
@@ -175,6 +180,24 @@ fn populated_mixer_goldens() {
         assert_golden(&mut h, w, format!("tests/snapshots/mixer-page-{theme}.png"), 1.);
         h.resize(w, Size::new(900., 560.));
         assert_golden(&mut h, w, format!("tests/snapshots/mixer-page-narrow-{theme}.png"), 1.);
+    }
+}
+
+#[test]
+fn long_target_names_remain_distinguishable_goldens() {
+    for (day, theme) in [(false, "night"), (true, "day")] {
+        let (mut h, audio, _) = setup(day);
+        {
+            let mut state = audio.state.borrow_mut();
+            state.sinks[0].description = "musubi-vm-default".into();
+            state.sinks[1].description = "musubi-vm-patch".into();
+            state.sources[0].description = "Built-in Audio Stereo Input".into();
+            state.sources[1].description = "Built-in Audio Stereo Microphone".into();
+            state.playback[0].device = state.sinks[1].index;
+        }
+        h.send(Msg::AudioWake);
+        let w = h.window();
+        assert_golden(&mut h, w, format!("tests/snapshots/mixer-long-targets-{theme}.png"), 1.);
     }
 }
 

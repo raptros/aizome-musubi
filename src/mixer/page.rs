@@ -86,6 +86,19 @@ impl Widget for DefaultToggle {
 fn control_hover(control: Element<Msg>, label: String) -> Element<Msg> {
     mouse_area(control).on_hover(move |over| Msg::MixerHover(over.then(|| label.clone()))).into()
 }
+/// Preserve the identifying suffix in narrow strip controls instead of hiding it behind an end ellipsis.
+fn strip_label(name: &str, limit: usize) -> String {
+    let count = name.chars().count();
+    if count <= limit {
+        return name.to_owned();
+    }
+    let tail = limit.saturating_sub(1).min(8);
+    let head = limit - tail - 1;
+    let prefix_end = name.char_indices().nth(head).map_or(name.len(), |(index, _)| index);
+    let suffix_start = name.char_indices().nth(count - tail).map_or(name.len(), |(index, _)| index);
+    format!("{}…{}", &name[..prefix_end], &name[suffix_start..])
+}
+
 fn strip_view(
     strip: &Strip,
     audio: &AudioState,
@@ -127,7 +140,12 @@ fn strip_view(
         })
     };
     let target: Element<Msg> = if main || matches!(strip.kind, StripKind::Playback | StripKind::Recording) {
-        let options: Vec<_> = targets.iter().map(|d| d.description.clone()).collect();
+        let options: Vec<_> = targets
+            .iter()
+            .map(|d| {
+                if d.description.chars().count() > 14 { strip_label(&d.description, 9) } else { d.description.clone() }
+            })
+            .collect();
         let selected = targets.iter().position(|d| Some(d.index) == current);
         let indices: Vec<_> = targets.iter().map(|d| d.index).collect();
         let names: Vec<_> = targets.iter().map(|d| d.name.clone()).collect();
@@ -143,6 +161,11 @@ fn strip_view(
             .enabled(reason.is_none() && !targets.is_empty())
             .width(112.)
             .id(if main { "main-target" } else { "strip-target" })
+            .tooltip(
+                current
+                    .and_then(|i| targets.iter().find(|d| d.index == i))
+                    .map_or("No target", |d| d.description.as_str()),
+            )
             .into()
     } else if matches!(strip.kind, StripKind::Output | StripKind::Input)
         && let Some(device) = index.and_then(|i| targets.iter().find(|d| d.index == i))
@@ -294,8 +317,8 @@ fn strip_view(
                 .fill(Tone::Chrome)
                 .border(Edge::Line)
                 .height(22.),
-                text(title).semibold().size(12.).tooltip(title),
-                text(subtitle.as_str()).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
+                text(strip_label(title, 18)).semibold().size(12.).tooltip(title),
+                text(strip_label(subtitle, 19)).size(10.).role(Role::Text3).tooltip(subtitle.as_str()),
                 control_hover(target, format!("{title} · route or target — choose from available devices")),
                 control_hover(balance_control, format!("{title} · left/right balance")),
                 control_hover(buttons.into(), format!("{title} · mute, default and channel link")),
@@ -306,6 +329,16 @@ fn strip_view(
                     ]
                     .spacing(1.)
                     .height(Fill),
+                    text(if !meters {
+                        "METERS OFF"
+                    } else if paused {
+                        "PAUSED"
+                    } else {
+                        ""
+                    })
+                    .mono()
+                    .size(10.5)
+                    .role(Role::Text3),
                     text(match channels {
                         1 => "MONO".to_owned(),
                         2 => "FL·FR".to_owned(),
@@ -434,5 +467,11 @@ mod tests {
         let graph = crate::graph::Graph::default();
         let strips = crate::mixer::model::strips(&audio, &graph);
         assert_eq!(main_output(&strips, &audio).unwrap().pulse_name.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn long_targets_keep_distinct_suffixes() {
+        assert_eq!(strip_label("musubi-vm-default", 9), "…-default");
+        assert_eq!(strip_label("musubi-vm-patch", 9), "…vm-patch");
     }
 }

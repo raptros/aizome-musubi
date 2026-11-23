@@ -52,7 +52,7 @@ impl Program for Demo {
         }
     }
     fn view(&self, _window: WindowKey) -> Element<Msg> {
-        aizome_kit::column![
+        let mut content = aizome_kit::column![
             text("OUTPUT · TEST STEREO").role(Role::Accent),
             row![
                 Fader::with_reason(self.value, false, self.reason.clone(), Msg::Volume).id("fader"),
@@ -60,9 +60,11 @@ impl Program for Demo {
                     .width(if self.paused { 34. } else { 24. })
                     .id("meter"),
             ],
-        ]
-        .padding(20.)
-        .into()
+        ];
+        if self.paused {
+            content = content.push(text("PAUSED").mono().size(10.5).role(Role::Text3));
+        }
+        content.padding(20.).into()
     }
 }
 fn harness(value: f64, peaks: [f32; 2], disabled: bool, day: bool) -> Harness<Demo> {

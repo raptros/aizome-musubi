@@ -400,7 +400,7 @@ impl Widget for LevelMeter {
         let st = cx.state::<MeterState>();
         let size = cx.size();
         let step = (size.height - 8.) / 32.;
-        let width = ((size.width - 3.) / self.channels as f64).min(12.);
+        let width = ((size.width - 3.) / self.channels as f64).min(if size.height <= 150. { 24. } else { 12. });
         for channel in 0..self.channels {
             let count = if self.paused { 0 } else { Self::segment(Self::db(st.map_or(0., |s| s.shown[channel]))) };
             let held = if self.paused { 0 } else { Self::segment(Self::db(st.map_or(0., |s| s.held[channel]))) };
@@ -414,7 +414,13 @@ impl Widget for LevelMeter {
                     Role::Success
                 };
                 let active = index < count || index + 1 == held;
-                let color = if active { t.role(role) } else { t.line2() };
+                let color = if self.paused {
+                    t.line2().with_alpha(0.35)
+                } else if active {
+                    t.role(role)
+                } else {
+                    t.line2()
+                };
                 let y = size.height - 4. - (index + 1) as f64 * step;
                 cx.canvas.fill_rect(
                     Rect::new(
@@ -427,15 +433,7 @@ impl Widget for LevelMeter {
                 );
             }
         }
-        if let Some(label) = self.state {
-            let spec = TextSpec::new(FontSpec::ui(8.), t.text());
-            if label == "Meters off" {
-                cx.draw_text_in("Meters", &spec, Rect::new(0., 2., size.width, 13.), Align::Center);
-                cx.draw_text_in("off", &spec, Rect::new(0., 13., size.width, 24.), Align::Center);
-            } else {
-                cx.draw_text_in(label, &spec, Rect::new(0., 2., size.width, 18.), Align::Center);
-            }
-        }
+        // State is rendered by the parent at caption size, outside the narrow meter columns.
     }
     fn hash(&self, h: &mut PaintHasher) {
         h.add(&(self.channels, self.state));

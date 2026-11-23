@@ -99,12 +99,11 @@ pub fn view(
             let active = entry.active_profile.as_deref() != Some("off") && entry.active_profile.is_some();
             let label = if entry.description.is_empty() { &entry.name } else { &entry.description };
             column![
-                button(format!("{}  {}", if active { "●" } else { "○" }, label))
-                    .icon(icon(entry))
-                    .selected(entry.name == card.name)
-                    .width(Fill)
+                sidebar_item(icon(entry), label.as_str(), entry.name == card.name)
                     .on_press(Msg::DeviceSelect(entry.name.clone()))
-                    .id(format!("device-{}", entry.index)),
+                    .detail(if active { "●" } else { "○" })
+                    .id(format!("device-{}", entry.index))
+                    .width(Fill),
                 text(format!("{} · {}", if entry.bus.is_empty() { "device" } else { &entry.bus }, profile_name(entry)))
                     .size(11.)
                     .role(Role::Text2)
@@ -200,7 +199,16 @@ pub fn view(
         detail.push(
             row![
                 column![
-                    text(name).semibold().size(13.),
+                    text(format!(
+                        "{} · {name}",
+                        if node.props.get("media.class").is_some_and(|class| class.contains("Source")) {
+                            "Input"
+                        } else {
+                            "Output"
+                        }
+                    ))
+                    .semibold()
+                    .size(13.),
                     text(format!("{channels} channels")).size(11.).role(Role::Text3)
                 ]
                 .spacing(2.)

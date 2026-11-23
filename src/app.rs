@@ -1465,18 +1465,30 @@ impl Musubi {
                     .and_then(|n| n.props.get("audio.channels"))
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(1);
+                let channels = channels.max(reading.as_ref().map_or(0, |r| r.peaks.len()));
+                let peak = reading.as_ref().map_or(0., |r| r.peaks.iter().copied().fold(0_f32, f32::max));
+                let peak_text =
+                    if peak > 0. { format!("{:.1} dB", 20. * peak.log10()) } else { "−∞ dB".to_owned() };
                 body.push(text("LEVEL").mono().size(10.5).role(Role::Text3).into());
                 body.push(
-                    mixer::LevelMeter::with_state::<Msg>(
-                        reading.as_ref().map_or(&[], |r| r.peaks.as_slice()),
-                        channels,
-                        Instant::now(),
-                        reading.as_ref().is_some_and(|r| r.paused).then_some("paused"),
-                    )
-                    .id("inspector-meter")
-                    .width(80.)
-                    .height(110.),
+                    row![
+                        column![text("+6"), text("0"), text("−12"), text("−24"), text("−36"), text("−60"), text("−∞")]
+                            .spacing(2.)
+                            .width(32.),
+                        mixer::LevelMeter::with_state::<Msg>(
+                            reading.as_ref().map_or(&[], |r| r.peaks.as_slice()),
+                            channels,
+                            Instant::now(),
+                            reading.as_ref().is_some_and(|r| r.paused).then_some("paused"),
+                        )
+                        .id("inspector-meter")
+                        .width(80.)
+                        .height(140.),
+                    ]
+                    .spacing(8.)
+                    .into(),
                 );
+                body.push(text(format!("Peak {peak_text}")).mono().size(11.).role(Role::Text2).into());
             }
             body.push(text("FACTS").mono().size(10.5).letter_spacing(1.2).role(Role::Text3).into());
             let node = port.node_id.and_then(|id| self.graph.nodes.get(&id));
@@ -2462,7 +2474,7 @@ impl Program for Musubi {
                 title: if self.page == Page::Mixer {
                     format!("Mixer · {strip_count} strips")
                 } else if self.page == Page::Devices {
-                    format!("Devices · {cards} cards")
+                    format!("Devices · {cards} {}", if cards == 1 { "device" } else { "devices" })
                 } else {
                     title
                 },
@@ -2523,7 +2535,7 @@ impl Program for Musubi {
                 format!("{} strips · default output {default}", strips.len())
             }
         } else if self.page == Page::Devices {
-            format!("{cards} devices")
+            format!("{cards} {}", if cards == 1 { "device" } else { "devices" })
         } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
