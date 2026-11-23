@@ -1,13 +1,15 @@
 # Musubi 結び — Patchbay
 
-See what is connected in PipeWire and make the next connection yourself. Musubi puts sources on one axis and destinations on the other: click a cell to connect or disconnect a port. A line drag applies several connections together; Undo reverses the action. Audio, MIDI 1.0, MIDI 2.0 and video each have their own page. Switch to List to inspect, filter and change routes without using the grid.
+See what is connected in PipeWire, make the next connection yourself, and set levels. Musubi puts sources on one axis and destinations on the other: click a cell to connect or disconnect a port. A line drag applies several connections together; Undo reverses the action. Audio, MIDI 1.0, MIDI 2.0 and video each have their own page. Switch to List to inspect, filter and change routes without using the grid. The Mixer page has a fader, meter, mute and balance per device and app stream; the Devices page switches profiles and routes.
 
-**Status:** early and unpolished; phase 1 of a larger plan (mixer, effects and saved setups come later). Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
+**Status:** early and unpolished; phases 1 (patchbay) and 2 (mixer, meters, devices) of a larger plan (effects and saved setups come later). Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
 
 | Night | Day |
 | --- | --- |
 | ![Audio patch matrix in Night theme](docs/screenshots/audio-studio-night.png) | ![Audio patch matrix in Day theme](docs/screenshots/audio-studio-day.png) |
 | ![Filtered route list in Night theme](docs/screenshots/list-filtered-night.png) | ![Filtered route list in Day theme](docs/screenshots/list-filtered-day.png) |
+| ![Mixer in Night theme](docs/screenshots/mixer-page-night.png) | ![Mixer in Day theme](docs/screenshots/mixer-page-day.png) |
+| ![Devices in Night theme](docs/screenshots/devices-page-night.png) | ![Devices in Day theme](docs/screenshots/devices-page-day.png) |
 
 These are headless Aizome Harness goldens with fixture ports, not screenshots of a live session.
 
@@ -55,7 +57,7 @@ The View, Edit and Routing menus expose commands without needing the grid. In Li
 
 ## Limits
 
-Phase 1 is a patchbay, not a mixer: no levels, meters, effects, device controls, clock controls or saved setups yet. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
+Musubi has no effects, clock controls or saved setups yet. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
 
 ## License
 
