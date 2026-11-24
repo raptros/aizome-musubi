@@ -197,7 +197,19 @@ try:
         visible = until("effect nodes visible", lambda: (
             nodes if len(nodes) == 2 else None
         ) if (nodes := chain_nodes()) else None)
-        user("aizome-musubi effects boost vm 12")
+        capture_id = next(n["id"] for n in visible if n["name"] == "musubi_eq.vm")
+        print("capture before info:", user(f"pw-cli info {capture_id}"))
+        print("capture before Props:", user(f"pw-cli enum-params {capture_id} Props"))
+        print("chain before dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+                    "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
+        status, debug = machine.execute("su - alice -c " + shlex.quote(
+            "export XDG_RUNTIME_DIR=/run/user/1000; aizome-musubi effects boost vm 12"))
+        print("boost status and debug:", status, debug)
+        print("capture after info:", user(f"pw-cli info {capture_id}"))
+        print("capture after Props:", user(f"pw-cli enum-params {capture_id} Props"))
+        print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+                    "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
+        assert status == 0, debug
         gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
         assert gain["bands"][0]["gain"] == 12, gain
         user("aizome-musubi effects disable vm")

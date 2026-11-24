@@ -58,6 +58,12 @@ fn effects(args: &[String]) -> io::Result<()> {
                 }
                 thread::sleep(Duration::from_millis(15));
             };
+            eprintln!(
+                "effect capture id={} epoch={} initial={:?}",
+                capture.id,
+                capture.epoch,
+                graph.nodes.get(&capture.id).map(|n| &n.native.effect_params)
+            );
             let mut chain = service.load(id)?;
             let band = chain
                 .bands
@@ -65,14 +71,36 @@ fn effects(args: &[String]) -> io::Result<()> {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "chain has no band"))?;
             band.gain = gain;
             let candidate = service.edit_band(&mut backend, capture, 42, id, 0, band.clone())?;
+            eprintln!(
+                "effect write request=42 node={} params={:?}",
+                capture.id,
+                [
+                    (format!("left0:Freq"), candidate.bands[0].freq),
+                    (format!("left0:Q"), candidate.bands[0].q),
+                    (format!("left0:Gain"), candidate.bands[0].gain)
+                ]
+            );
             let mut acknowledged = false;
             loop {
                 while let Some(event) = backend.next_event() {
                     match event {
-                        Event::Delta(delta) => graph.apply(delta),
+                        Event::Delta(delta) => {
+                            for change in &delta.upserts {
+                                if let aizome_musubi::graph::Upsert::Node(node) = change {
+                                    if node.id == capture.id {
+                                        eprintln!(
+                                            "effect Props delta node={} values={:?} writable={}",
+                                            node.id, node.native.effect_params, node.native.writable
+                                        );
+                                    }
+                                }
+                            }
+                            graph.apply(delta);
+                        }
                         Event::CommandResult { request: 42, result } => {
                             result.map_err(io::Error::other)?;
                             acknowledged = true;
+                            eprintln!("effect request=42 acknowledged");
                         }
                         _ => {}
                     }
@@ -87,6 +115,12 @@ fn effects(args: &[String]) -> io::Result<()> {
                     }
                 }
                 if Instant::now() >= deadline {
+                    eprintln!(
+                        "effect timeout node={} acknowledged={} last={:?}",
+                        capture.id,
+                        acknowledged,
+                        graph.nodes.get(&capture.id).map(|n| &n.native.effect_params)
+                    );
                     return Err(io::Error::new(io::ErrorKind::TimedOut, "EQ Props read-back not observed"));
                 }
                 thread::sleep(Duration::from_millis(15));
