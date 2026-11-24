@@ -57,6 +57,13 @@ pkgs.testers.runNixOSTest {
         RestartSec = 2;
       };
     };
+    # Independent player for the EQ subtest; started only while the chain exists.
+    systemd.user.services.musubi-vm-eq-tone = {
+      description = "440 Hz through Musubi's virtual output";
+      after = [ "pipewire.service" ];
+      serviceConfig.ExecStart =
+        "${pkgs.bash}/bin/bash -o pipefail -c '${pkgs.sox}/bin/sox -n -t raw -b 16 -e signed-integer -c 2 -r 48000 - synth 120 sine 440 vol 0.08 | ${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --target=musubi_eq.vm -'";
+    };
     systemd.user.settings.Manager.DefaultEnvironment = "AIZOME_KIT_INSPECT=/run/user/1000/musubi-inspect";
     systemd.user.tmpfiles.rules = [ "d %t/musubi-inspect 0700 - - -" ];
     virtualisation = {

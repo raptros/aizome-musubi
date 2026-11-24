@@ -696,6 +696,9 @@ fn execute(
                     )
                 })
             };
+            if result.is_ok() {
+                results.borrow_mut().push((request, Ok(())));
+            }
             (request, result)
         }
         Command::SetEffectParams { node, params, request } => {
@@ -734,6 +737,9 @@ fn execute(
                     Ok(())
                 })
             };
+            if result.is_ok() {
+                results.borrow_mut().push((request, Ok(())));
+            }
             (request, result)
         }
         Command::SetNodeVolume { node, channel_volumes, request } => {

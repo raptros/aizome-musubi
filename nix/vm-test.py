@@ -197,6 +197,11 @@ try:
         visible = until("effect nodes visible", lambda: (
             nodes if len(nodes) == 2 else None
         ) if (nodes := chain_nodes()) else None)
+        user("systemctl --user stop musubi-vm-player.service")
+        user("systemctl --user start musubi-vm-eq-tone.service")
+        until("EQ player routes through capture", lambda: user(
+            "pw-link -l | grep -F 'musubi_eq.vm' | head -1"))
+        flat_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
         capture_id = next(n["id"] for n in visible if n["name"] == "musubi_eq.vm")
         print("capture before info:", user(f"pw-cli info {capture_id}"))
         print("capture before Props:", user(f"pw-cli enum-params {capture_id} Props"))
@@ -210,8 +215,16 @@ try:
         print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
                     "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
         assert boost_status == 0, boost_output
+        boosted_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
+        effect_db = 20 * __import__("math").log10(boosted_peak / flat_peak)
+        assert 9 < effect_db < 15, (flat_peak, boosted_peak, effect_db)
+        user("systemctl --user stop musubi-vm-eq-tone.service")
+        user("systemctl --user start musubi-vm-player.service")
         gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
         assert gain["bands"][0]["gain"] == 12, gain
+        observations.append({"effect_supervision": {"nodes": visible, "gain": gain["bands"][0]["gain"],
+                                                     "meter_flat": flat_peak, "meter_boosted": boosted_peak,
+                                                     "meter_db": effect_db}})
         user("aizome-musubi effects disable vm")
         until("effect unit inactive", lambda: not active())
         until("effect nodes removed", lambda: not chain_nodes())
@@ -223,7 +236,6 @@ try:
         user("aizome-musubi effects remove-all")
         assert user("test ! -e ~/.config/aizome-musubi/effects && echo clean").strip() == "clean"
         assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
-        observations.append({"effect_supervision": {"nodes": visible, "gain": gain["bands"][0]["gain"]}})
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
             p.get("port.direction") == "out" and "musubi_vm_player" in n.get("node.name", "")

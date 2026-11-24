@@ -126,6 +126,48 @@ fn effects(args: &[String]) -> io::Result<()> {
                 thread::sleep(Duration::from_millis(15));
             }
         }
+        // VM audio probe: removed when the Effects page can drive an EQ through real input (P3-S3).
+        [action, name] if action == "meter" => {
+            let mut backend = PipeWireBackend::channel().map_err(io::Error::other)?;
+            let mut graph = Graph::default();
+            let deadline = Instant::now() + Duration::from_secs(12);
+            let started = Instant::now();
+            let mut metered = None;
+            let mut peak = 0.0_f32;
+            loop {
+                while let Some(event) = backend.next_event() {
+                    if let Event::Delta(delta) = event {
+                        graph.apply(delta);
+                    }
+                }
+                if metered.is_none() {
+                    if let Some(node) = graph.nodes.values().find(|n| n.props.get("node.name") == Some(name)) {
+                        let handle = Handle { epoch: graph.epoch, id: node.id };
+                        backend.command(aizome_musubi::backend::Command::StartMeters(vec![handle]));
+                        metered = Some(handle);
+                    }
+                }
+                if let Some(handle) = metered {
+                    for meter in
+                        backend.meters().iter().filter(|m| m.node == handle && !m.paused && m.last_update.is_some())
+                    {
+                        peak = peak.max(meter.peaks.iter().copied().fold(0.0_f32, f32::max));
+                    }
+                }
+                if peak > 0.0 && started.elapsed() >= Duration::from_secs(2) {
+                    println!("{peak}");
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    if peak > 0.0 {
+                        println!("{peak}");
+                        return Ok(());
+                    }
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "no observed meter samples"));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "effects: create <id> <target> | enable/disable/delete <id> | boost <id> <dB> | remove-all",
