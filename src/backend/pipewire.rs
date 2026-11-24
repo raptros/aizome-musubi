@@ -166,8 +166,12 @@ fn observed_props(pod: &Pod, previous: &NativeProps) -> NativeProps {
             (spa::sys::SPA_PROP_mute, Value::Bool(v)) => observed.muted = Some(v),
             (spa::sys::SPA_PROP_params, Value::Struct(values)) => {
                 let mut values = values.into_iter();
-                while let (Some(Value::String(key)), Some(Value::Float(value))) = (values.next(), values.next()) {
-                    observed.effect_params.push((key, value));
+                while let (Some(key), Some(value)) = (values.next(), values.next()) {
+                    if let (Value::String(key), Value::Float(value)) = (key, value) {
+                        if key.starts_with("left") || key.starts_with("right") {
+                            observed.effect_params.push((key, value));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -725,7 +729,9 @@ fn execute(
                         controls.push(Value::String(key));
                         controls.push(Value::Float(value));
                     }
-                    write_props(proxy, Property::new(spa::sys::SPA_PROP_params, Value::Struct(controls)))
+                    write_props(proxy, Property::new(spa::sys::SPA_PROP_params, Value::Struct(controls)))?;
+                    proxy.enum_params(0, Some(ParamType::Props), 0, u32::MAX);
+                    Ok(())
                 })
             };
             (request, result)
