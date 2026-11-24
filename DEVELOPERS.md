@@ -32,8 +32,9 @@ artifacts belong under `runs/`, never in source control.
 With `../sekka` beside this checkout, from `../sekka`:
 
 ```sh
-nix build .#aizome-fonts --out-link /tmp/aizome-fonts
-nix develop .#aizome -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/tmp/aizome-fonts cargo test --locked'
+nix build ../aizome-musubi#test-fonts --out-link /tmp/aizome-fonts
+nix build ../aizome-musubi#test-fonts-conf --out-link /tmp/aizome-fonts.conf
+nix develop .#aizome -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/tmp/aizome-fonts FONTCONFIG_FILE=/tmp/aizome-fonts.conf cargo test --locked'
 ```
 
 (In the Sekka contribution workspace the same command runs under `tools/heavy … tools/nix-env`.) Use Sekka's pinned Aizome fonts rather than
