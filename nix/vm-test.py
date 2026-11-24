@@ -186,6 +186,9 @@ try:
     with subtest("effect service end-to-end from packaged Rust code"):
         unit = "aizome-musubi-effect@vm.service"
         user("aizome-musubi effects create vm musubi-vm-default")
+        created_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
+        print("effect unit after enable:", created_enablement)
+        assert created_enablement == "enabled", created_enablement
         def active():
             return user(f"systemctl --user is-active {unit} || true").strip() == "active"
         until("effect unit active", active)
@@ -229,7 +232,9 @@ try:
         user("aizome-musubi effects disable vm")
         until("effect unit inactive", lambda: not active())
         until("effect nodes removed", lambda: not chain_nodes())
-        assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
+        disabled_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
+        print("effect unit after disable:", disabled_enablement)
+        assert disabled_enablement == "disabled", disabled_enablement
         user("aizome-musubi effects delete vm")
         assert user("test ! -e ~/.config/aizome-musubi/effects/vm.json && "
                     "test ! -e ~/.config/aizome-musubi/effects/vm.conf && echo clean").strip() == "clean"

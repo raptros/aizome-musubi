@@ -63,6 +63,7 @@
           environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.musubi ];
           systemd.user.services."aizome-musubi-effect@" = {
             description = "Musubi EQ effect %i";
+            wantedBy = [ "default.target" ];
             after = [ "pipewire.service" ];
             requires = [ "pipewire.service" ];
             unitConfig.StartLimitBurst = 3;
