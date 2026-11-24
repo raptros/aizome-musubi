@@ -164,6 +164,12 @@ fn observed_props(pod: &Pod, previous: &NativeProps) -> NativeProps {
                 observed.channel_volumes = Some(v);
             }
             (spa::sys::SPA_PROP_mute, Value::Bool(v)) => observed.muted = Some(v),
+            (spa::sys::SPA_PROP_params, Value::Struct(values)) => {
+                let mut values = values.into_iter();
+                while let (Some(Value::String(key)), Some(Value::Float(value))) = (values.next(), values.next()) {
+                    observed.effect_params.push((key, value));
+                }
+            }
             _ => {}
         }
     }
@@ -684,6 +690,42 @@ fn execute(
                             ]),
                         ),
                     )
+                })
+            };
+            (request, result)
+        }
+        Command::SetEffectParams { node, params, request } => {
+            let result = if node.epoch != pending.borrow().epoch {
+                Err("stale connection epoch".into())
+            } else if params.is_empty()
+                || params.iter().any(|(key, value)| {
+                    !value.is_finite()
+                        || !["Freq", "Q", "Gain"].iter().any(|suffix| {
+                            key.strip_suffix(suffix).is_some_and(|prefix| {
+                                let Some(indexed) = prefix.strip_suffix(':') else { return false };
+                                ["left", "right"].iter().any(|side| {
+                                    indexed.strip_prefix(side).is_some_and(|index| {
+                                        !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit())
+                                    })
+                                })
+                            })
+                        })
+                })
+            {
+                Err("invalid effect control".into())
+            } else {
+                let borrowed = session.borrow();
+                borrowed.as_ref().ok_or("PipeWire unavailable".to_owned()).and_then(|active| {
+                    let objects = active.objects.borrow();
+                    let Some(Bound::Node(_, proxy)) = objects.get(&node.id) else {
+                        return Err("effect node proxy not found".into());
+                    };
+                    let mut controls = Vec::with_capacity(params.len() * 2);
+                    for (key, value) in params {
+                        controls.push(Value::String(key));
+                        controls.push(Value::Float(value));
+                    }
+                    write_props(proxy, Property::new(spa::sys::SPA_PROP_params, Value::Struct(controls)))
                 })
             };
             (request, result)

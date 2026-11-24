@@ -1,6 +1,11 @@
 //! Filter-chain spike, confined to scripts/private-pipewire's instance.
 use aizome_musubi::{
     backend::{Backend, Command as BackendCommand, Event, Handle, pipewire::PipeWireBackend},
+    effects::{
+        Band, BandKind, Chain, Target,
+        paths::Paths,
+        service::{EffectsService, UnitState, Units},
+    },
     graph::Graph,
 };
 use serde_json::Value;
@@ -11,8 +16,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CONF: &str = include_str!("fixtures/effects-spike.conf");
-
 fn output(program: &str, args: &[&str]) -> String {
     let result = Command::new(program).args(args).output().unwrap();
     assert!(result.status.success(), "{program} {args:?}: {}", String::from_utf8_lossy(&result.stderr));
@@ -22,6 +25,11 @@ fn dump() -> Vec<Value> {
     serde_json::from_str(&output("pw-dump", &[])).unwrap()
 }
 fn node(name: &str) -> Option<u32> {
+    let name = match name {
+        "musubi_spike_capture" => "musubi_eq.spike",
+        "musubi_spike_playback" => "musubi_eq.spike.playback",
+        other => other,
+    };
     dump()
         .into_iter()
         .find(|v| v["type"] == "PipeWire:Interface:Node" && v["info"]["props"]["node.name"] == name)
@@ -94,6 +102,28 @@ fn peak(backend: &PipeWireBackend, handle: Handle) -> Option<f32> {
         .find(|m| m.node == handle && !m.paused && m.last_update.is_some())
         .map(|m| m.peaks.iter().copied().fold(0.0, f32::max))
 }
+struct NoUnits;
+impl Units for NoUnits {
+    fn enable(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn start(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn stop(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn disable(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn listed(&self) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    fn state(&self, _: &str) -> Result<UnitState, String> {
+        Ok(UnitState::default())
+    }
+}
+
 #[test]
 fn chain_control_and_lifetime() {
     if std::env::var("MUSUBI_LIVE").as_deref() != Ok("1") {
@@ -101,9 +131,18 @@ fn chain_control_and_lifetime() {
     }
     let root = std::env::var("MUSUBI_PRIVATE_PIPEWIRE_ROOT").unwrap();
     assert_eq!(std::env::var("PIPEWIRE_RUNTIME_DIR").unwrap(), format!("{root}/runtime"));
-    let config = format!("{root}/effects.conf");
+    let service = EffectsService { paths: Paths::from_environment().unwrap(), units: NoUnits };
+    let chain = Chain {
+        id: "spike".into(),
+        name: "Spike".into(),
+        target: Target::Output("musubi_test_speakers".into()),
+        bands: vec![Band { kind: BandKind::Peaking, freq: 1000.0, gain: 0.0, q: 1.0 }],
+        bypass: false,
+        enabled: true,
+    };
+    service.save(&chain).unwrap();
+    let config = service.paths.conf("spike").unwrap().to_string_lossy().into_owned();
     let log = format!("{root}/effects.log");
-    fs::write(&config, CONF).unwrap();
     let mut helper = start(&config, &log);
     until("chain nodes", || node("musubi_spike_capture").is_some() && node("musubi_spike_playback").is_some());
     for name in ["musubi_spike_capture", "musubi_spike_playback"] {
@@ -116,7 +155,7 @@ fn chain_control_and_lifetime() {
     let mut graph = Graph::default();
     until("backend sees chain", || {
         drain(&mut backend, &mut graph);
-        graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|v| v == "musubi_spike_capture"))
+        graph.nodes.values().any(|n| n.props.get("node.name").is_some_and(|v| v == "musubi_eq.spike"))
     });
     drop(backend);
     assert!(node("musubi_spike_capture").is_some(), "helper must outlive Musubi's backend");
@@ -163,12 +202,16 @@ fn chain_control_and_lifetime() {
     until("tone ports", || link(player_id, capture));
     until("flat effect tone peak", || peak(&backend, sink_handle).is_some_and(|p| p > 0.02));
     let flat = peak(&backend, sink_handle).unwrap();
-    backend.command(BackendCommand::SetEffectGain { node: handle, left: 12., right: 12., request: 1 });
+    backend.command(BackendCommand::SetEffectParams {
+        node: handle,
+        params: vec![("left0:Gain".into(), 12.), ("right0:Gain".into(), 12.)],
+        request: 1,
+    });
     until("gain readback", || {
         drain(&mut backend, &mut graph);
         let props = output("pw-cli", &["enum-params", &capture.to_string(), "Props"]);
-        props.contains("String \"left:Gain\"\n        Float 12.000000")
-            && props.contains("String \"right:Gain\"\n        Float 12.000000")
+        props.contains("String \"left0:Gain\"\n        Float 12.000000")
+            && props.contains("String \"right0:Gain\"\n        Float 12.000000")
     });
     let readback = output("pw-cli", &["enum-params", &capture.to_string(), "Props"]);
     fs::write(format!("{root}/capture-after-props.txt"), &readback).unwrap();
@@ -193,5 +236,8 @@ fn chain_control_and_lifetime() {
     helper.kill().unwrap();
     helper.wait().unwrap();
     until("restarted chain removed", || node("musubi_spike_capture").is_none());
+    service.delete("spike").unwrap();
+    assert!(!service.paths.conf("spike").unwrap().exists());
+    assert!(!service.paths.json("spike").unwrap().exists());
     println!("helper log: {}", fs::read_to_string(log).unwrap());
 }

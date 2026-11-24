@@ -71,6 +71,7 @@ pub fn parse(json: &str, epoch: u64) -> Result<GraphDelta, serde_json::Error> {
                         .as_array()
                         .map(|a| a.iter().filter_map(|v| v.as_f64().map(|x| x as f32)).collect()),
                     muted: value["info"]["params"]["Props"][0]["mute"].as_bool(),
+                    effect_params: Vec::new(),
                     writable: value["info"]["params"]["Props"].as_array().is_some_and(|v| !v.is_empty()),
                 },
             }),

@@ -53,8 +53,9 @@ flowchart LR
 | `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in sunk wells in a modal Add Route sheet | changes graph data without app transactions |
 | `undo` | stable port identities and observed intents; retains pending undo/redo entries until the request and its observation settle | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
+| `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`, user-systemd D-Bus control and observed status | edits another application's config or assumes unit startup from request success |
 
-Later phases add: `effects` (config generation + unit control), `clock` (settings metadata + profiler), `setups` + `keeper` (user service binary mode). Each gets a row here when it lands.
+Later phases add `clock` (settings metadata + profiler) and `setups` + `keeper` (user service binary mode). The Effects page is P3-S3; P3-S2 has no UI.
 
 P3-S1 establishes a filter-chain helper independently owned by a template user
 service, not by the GUI's PipeWire connection. The module installs
@@ -65,6 +66,20 @@ capture-node `Props.params` struct (`String "<filter>:<control>"`, `Float`) via
 `SetEffectGain` (A8), without introducing another native connection. The private
 live probe keeps the helper process independent and meters the private null
 sink reached by its playback stream; it is not a UI feature or persisted config.
+P3-S2 stores `<id>.json` and its derived `<id>.conf` under
+`$XDG_CONFIG_HOME/aizome-musubi/effects/`. Capture nodes are
+`musubi_eq.<id>` (`Audio/Sink`), playback nodes target the chosen output or
+follow the current default. Each band is a left/right builtin pair; per-channel
+links connect successive bands. The same backend thread writes all keyed band
+controls with `SetEffectParams`, observes the capture node's `Props.params`
+read-back in `NodeRecord.native.effect_params`, and only then saves the edited
+JSON/conf. The service calls `EnableUnitFiles` before `StartUnit`, and `StopUnit`
+before `DisableUnitFiles`. D22's `delete` and `remove_all` stop/disable first,
+remove only chain definitions and generated confs, and optionally remove the
+single clock drop-in. `effects::paths` lists every effect/clock write target.
+The packaged binary's headless `effects` commands exercise the same Rust
+service and PipeWire edit path in the VM.
+
 
 
 The phase-1 matrix derives immutable layouts per page after graph deltas. `ViewOptions` supplies pairs, swap, monitors, optional MIDI 1.0, independent From/To filters and folded group keys. Active Link globals alone count as connected; negotiating links display asked, and failed links display error with the PipeWire reason. The live and fixture EnumFormat summaries carry video raw/DSP families even without `format.dsp`; control type masks distinguish MIDI from UMP, and an ambiguous control mask stays unknown. Pending requests stay asked until observation; failed requests retain their reason. Sparse link and request states avoid allocating the row × column product.

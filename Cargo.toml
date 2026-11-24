@@ -19,6 +19,8 @@ aizome-sys = { path = "../sekka/desktop/aizome/crates/aizome-sys" }
 pipewire = { version = "0.10.1", features = ["v1_2_0"] }
 libc = "0.2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+zbus = { version = "5.19.0", features = ["blocking"] }
 
 [profile.dev]
 debug = "line-tables-only"

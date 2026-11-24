@@ -46,6 +46,7 @@ pub struct NodeRecord {
 pub struct NativeProps {
     pub channel_volumes: Option<Vec<f32>>,
     pub muted: Option<bool>,
+    pub effect_params: Vec<(String, f32)>,
     pub writable: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

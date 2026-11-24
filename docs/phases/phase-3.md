@@ -36,6 +36,17 @@ reproducible config in `tests/fixtures/effects-spike.conf`.
 - **Status** is observed and never assumed: running, the expected nodes present, the target missing, failed (with the unit's last log line), or the start limit hit.
 - **Tests:** unit tests for config generation (golden text), JSON round trip and status derivation. A live test in the private PipeWire runs the helper directly, without systemd, and checks the chain's nodes and EQ effect by meter.
 
+**P3-S2 implementation (2026-11-24).** `effects::Chain` stores up to eight stereo
+peaking/shelf bands in atomic JSON, and generates the filter-chain conf in the
+same directory. `effects::service` uses A9's user-manager D-Bus API; its
+`edit_band` sends keyed A8 `Props.params` through the existing backend and
+`save_observed_edit` persists only after the capture node's Props read-back.
+The headless `aizome-musubi effects` commands exercise this path in the VM;
+the Effects page remains P3-S3. D22 cleanup: `delete` stops/disables the unit
+before removing both files; `remove_all` discovers enabled units and local
+chain files, removes the effects directory and only Musubi's clock drop-in.
+README includes the three-command manual recovery path.
+
 ### P3-S3 — Effects page
 - **Sidebar.** MIXER ▸ Effects. The Mixer's Show… menu gets EFFECTS, and chain sinks appear as an EFFECTS section in the Mixer.
 - **Page layout:**

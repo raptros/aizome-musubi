@@ -43,6 +43,12 @@ pub enum Command {
         right: f32,
         request: RequestId,
     },
+    /// A8: keyed filter-chain controls on the capture node, in a single Props.params write.
+    SetEffectParams {
+        node: Handle,
+        params: Vec<(String, f32)>,
+        request: RequestId,
+    },
     StartMeters(Vec<Handle>),
     StopMeters,
     Shutdown,

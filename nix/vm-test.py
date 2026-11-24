@@ -183,32 +183,35 @@ default_sink = until("null sink appears", lambda: user(
 user("wpctl set-default " + default_sink)
 observations.append({"default_sink": default_sink, "wpctl": user("wpctl status")})
 try:
-    with subtest("effect template D-Bus supervision"):
-        unit = "aizome-musubi-effect@spike.service"
-        user("mkdir -p ~/.config/aizome-musubi/effects && "
-             "cp /etc/musubi-effects-spike.conf ~/.config/aizome-musubi/effects/spike.conf")
-        manager = "org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager"
-        start_reply = user(f"busctl --user call {manager} StartUnit ss {unit} replace")
-        unit_reply = user(f"busctl --user call {manager} GetUnit s {unit}")
-        unit_path = unit_reply.split('"')[1]
+    with subtest("effect service end-to-end from packaged Rust code"):
+        unit = "aizome-musubi-effect@vm.service"
+        user("aizome-musubi effects create vm musubi-vm-default")
         def active():
-            return user(f"busctl --user get-property org.freedesktop.systemd1 {unit_path} "
-                        "org.freedesktop.systemd1.Unit ActiveState")
-        until("effect unit active", lambda: "active" in active())
+            return user(f"systemctl --user is-active {unit}").strip() == "active"
+        until("effect unit active", active)
         def chain_nodes():
             return json.loads(user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                                   "and (.info.props[\"node.name\"] == \"musubi_spike_capture\" "
-                                   "or .info.props[\"node.name\"] == \"musubi_spike_playback\")) "
+                                   "and (.info.props[\"node.name\"] == \"musubi_eq.vm\" "
+                                   "or .info.props[\"node.name\"] == \"musubi_eq.vm.playback\")) "
                                    "| {id, name: .info.props[\"node.name\"]}]'"))
         visible = until("effect nodes visible", lambda: (
             nodes if len(nodes) == 2 else None
         ) if (nodes := chain_nodes()) else None)
-        stop_reply = user(f"busctl --user call {manager} StopUnit ss {unit} replace")
-        until("effect unit inactive", lambda: "inactive" in active())
+        user("aizome-musubi effects boost vm 12")
+        gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
+        assert gain["bands"][0]["gain"] == 12, gain
+        user("aizome-musubi effects disable vm")
+        until("effect unit inactive", lambda: not active())
         until("effect nodes removed", lambda: not chain_nodes())
-        observations.append({"effect_supervision": {
-            "start": start_reply, "get_unit": unit_reply, "nodes": visible,
-            "stop": stop_reply, "state": active()}})
+        assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
+        user("aizome-musubi effects delete vm")
+        assert user("test ! -e ~/.config/aizome-musubi/effects/vm.json && "
+                    "test ! -e ~/.config/aizome-musubi/effects/vm.conf && echo clean").strip() == "clean"
+        user("aizome-musubi effects create vm musubi-vm-default")
+        user("aizome-musubi effects remove-all")
+        assert user("test ! -e ~/.config/aizome-musubi/effects && echo clean").strip() == "clean"
+        assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
+        observations.append({"effect_supervision": {"nodes": visible, "gain": gain["bands"][0]["gain"]}})
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
             p.get("port.direction") == "out" and "musubi_vm_player" in n.get("node.name", "")

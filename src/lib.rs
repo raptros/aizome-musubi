@@ -1,6 +1,7 @@
 pub mod app;
 pub mod backend;
 pub mod devices;
+pub mod effects;
 pub mod graph;
 pub mod instance;
 pub mod matrix;

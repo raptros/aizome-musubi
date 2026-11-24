@@ -60,6 +60,18 @@ The View, Edit and Routing menus expose commands without needing the grid. In Li
 
 Musubi has no effects, clock controls or saved setups yet. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
 
+## Manual effects recovery
+
+If Musubi cannot start, these three commands stop and disable its EQ units, remove only its effect definitions, and remove only its clock setting:
+
+```sh
+systemctl --user list-unit-files --no-legend 'aizome-musubi-effect@*.service' | awk '{print $1}' | xargs -r systemctl --user disable --now
+rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/aizome-musubi/effects"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d/90-aizome-musubi-clock.conf"
+```
+
+Do not remove other PipeWire configuration. Deleting a chain through Musubi likewise stops and disables its service before removing its `.json` and `.conf` files.
+
 ## License
 
 MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) (Aidan Coyne) and [LICENSE-APACHE](LICENSE-APACHE).
