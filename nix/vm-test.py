@@ -202,14 +202,14 @@ try:
         print("capture before Props:", user(f"pw-cli enum-params {capture_id} Props"))
         print("chain before dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
                     "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
-        status, debug = machine.execute("su - alice -c " + shlex.quote(
+        boost_status, boost_output = machine.execute("su - alice -c " + shlex.quote(
             "export XDG_RUNTIME_DIR=/run/user/1000; aizome-musubi effects boost vm 12"))
-        print("boost status and debug:", status, debug)
+        print("boost status and debug:", boost_status, boost_output)
         print("capture after info:", user(f"pw-cli info {capture_id}"))
         print("capture after Props:", user(f"pw-cli enum-params {capture_id} Props"))
         print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
                     "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
-        assert status == 0, debug
+        assert boost_status == 0, boost_output
         gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
         assert gain["bands"][0]["gain"] == 12, gain
         user("aizome-musubi effects disable vm")
