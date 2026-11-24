@@ -20,13 +20,25 @@
       fontsFor = pkgs.callPackage "${sekka}/desktop/aizome/nix/aizome-fonts.nix" {
         archivo = pkgs.callPackage "${sekka}/desktop/aizome/nix/fonts.nix" { };
       };
+      # Harness goldens are drawn with exactly these fonts, as Sekka's own tests
+      # are: the pinned Aizome faces plus the CJK fallback for 結び. Without it,
+      # fontconfig falls back to whatever the build machine has (a sandbox has
+      # none), and the brand's glyphs differ from the goldens.
+      fontsConfFor = pkgs.makeFontsConf { fontDirectories = [ fontsFor pkgs.noto-fonts-cjk-sans ]; };
       musubi = pkgs.callPackage ./nix/package.nix {
         src = pkgs.lib.cleanSource ./.;
         aizome = aizomeFor;
         fonts = fontsFor;
+        fontsConf = fontsConfFor;
       };
     in {
-      packages.${system} = { inherit musubi; default = musubi; };
+      packages.${system} = {
+        inherit musubi;
+        default = musubi;
+        # For running the Harness tests outside the package build (DEVELOPERS.md).
+        test-fonts = fontsFor;
+        test-fonts-conf = fontsConfFor;
+      };
       apps.${system}.default = {
         type = "app";
         program = "${musubi}/bin/aizome-musubi";
@@ -36,6 +48,7 @@
         LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.fontconfig pkgs.wayland pkgs.pipewire pkgs.libpulseaudio ];
         AIZOME_FONT_DIR = fontsFor;
+        FONTCONFIG_FILE = fontsConfFor;
       };
       checks.${system} = {
         inherit musubi;

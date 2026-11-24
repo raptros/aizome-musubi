@@ -1,4 +1,4 @@
-{ lib, rustPlatform, runCommand, makeWrapper, pkg-config, pipewire, clang, libclang, fontconfig, wayland, libpulseaudio, src, aizome, fonts }:
+{ lib, rustPlatform, runCommand, makeWrapper, pkg-config, pipewire, clang, libclang, fontconfig, wayland, libpulseaudio, src, aizome, fonts, fontsConf }:
 let
   source = runCommand "musubi-source" { } ''
     mkdir -p $out/sekka/desktop
@@ -15,6 +15,8 @@ in rustPlatform.buildRustPackage {
   buildInputs = [ pipewire libpulseaudio ];
   LIBCLANG_PATH = "${libclang.lib}/lib";
   AIZOME_FONT_DIR = fonts;
+  # The goldens' fonts and nothing else (flake.nix): a sandbox has no system fonts.
+  FONTCONFIG_FILE = fontsConf;
   LD_LIBRARY_PATH = lib.makeLibraryPath [ fontconfig wayland pipewire libpulseaudio ];
   # Headless Harness goldens use only pinned fonts; no running PipeWire is accessed.
   # Cargo's registry cache defaults to $HOME/.cargo; under an unsandboxed builder
