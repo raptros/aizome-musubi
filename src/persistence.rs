@@ -37,12 +37,12 @@ fn save(path: Option<PathBuf>, body: String) -> std::io::Result<()> {
 pub struct MixerOptions {
     pub percent: bool,
     pub meters: bool,
-    pub shown: [bool; 5],
+    pub shown: [bool; 6],
 }
 
 impl Default for MixerOptions {
     fn default() -> Self {
-        Self { percent: false, meters: true, shown: [true; 5] }
+        Self { percent: false, meters: true, shown: [true; 6] }
     }
 }
 
@@ -64,6 +64,7 @@ pub fn load_mixer(paths: Option<&Paths>) -> MixerOptions {
                     "playing" => result.shown[2] = enabled,
                     "recording" => result.shown[3] = enabled,
                     "monitors" => result.shown[4] = enabled,
+                    "effects" => result.shown[5] = enabled,
                     _ => {}
                 }
             }
@@ -121,8 +122,8 @@ pub fn save_options(paths: Option<&Paths>, options: &[ViewOptions; 4], mixer: &M
         ));
     }
     body.push_str(&format!(
-        "[mixer]\npercent = {}\nmeters = {}\noutputs = {}\ninputs = {}\nplaying = {}\nrecording = {}\nmonitors = {}\n",
-        mixer.percent, mixer.meters, mixer.shown[0], mixer.shown[1], mixer.shown[2], mixer.shown[3], mixer.shown[4]
+        "[mixer]\npercent = {}\nmeters = {}\noutputs = {}\ninputs = {}\nplaying = {}\nrecording = {}\nmonitors = {}\neffects = {}\n",
+        mixer.percent, mixer.meters, mixer.shown[0], mixer.shown[1], mixer.shown[2], mixer.shown[3], mixer.shown[4], mixer.shown[5]
     ));
     save(paths.map(|p| p.config.clone()), body)
 }
@@ -199,7 +200,7 @@ pub fn save_folds(
 
 pub fn page_index(page: Page) -> usize {
     match page {
-        Page::Audio | Page::Mixer | Page::Devices => 0,
+        Page::Audio | Page::Mixer | Page::Effects | Page::Devices => 0,
         Page::Midi => 1,
         Page::Midi2 => 2,
         Page::Video => 3,

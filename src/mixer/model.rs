@@ -9,6 +9,7 @@ use crate::graph::{Graph, NodeRecord};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StripKind {
+    Effect,
     Output,
     Input,
     Playback,
@@ -116,7 +117,9 @@ fn stream_strip(graph: &Graph, stream: &AudioStream, kind: StripKind) -> Strip {
 /// Immutable mixer projection; no proxy, command or UI state is stored here.
 pub fn strips(audio: &AudioState, graph: &Graph) -> Vec<Strip> {
     let mut result = Vec::new();
-    result.extend(audio.sinks.iter().map(|d| device_strip(graph, d, StripKind::Output)));
+    result.extend(audio.sinks.iter().map(|d| {
+        device_strip(graph, d, if d.name.starts_with("musubi_eq.") { StripKind::Effect } else { StripKind::Output })
+    }));
     result.extend(audio.sources.iter().map(|d| device_strip(graph, d, StripKind::Input)));
     result.extend(
         audio
@@ -227,7 +230,7 @@ mod tests {
                     StripKind::Recording => {
                         audio.recording.push(AudioStream { index, volume_writable: true, ..Default::default() })
                     }
-                    StripKind::Native => unreachable!(),
+                    StripKind::Native | StripKind::Effect => unreachable!(),
                 }
             }
         }

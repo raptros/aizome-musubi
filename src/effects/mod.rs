@@ -1,4 +1,6 @@
 //! Persistent EQ definition and deterministic PipeWire filter-chain configuration.
+pub mod curve;
+pub mod page;
 pub mod paths;
 pub mod service;
 

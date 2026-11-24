@@ -22,6 +22,27 @@ pub trait Units {
     fn state(&self, name: &str) -> Result<UnitState, String>;
 }
 
+impl Units for Box<dyn Units> {
+    fn enable(&self, name: &str) -> Result<(), String> {
+        (**self).enable(name)
+    }
+    fn start(&self, name: &str) -> Result<(), String> {
+        (**self).start(name)
+    }
+    fn stop(&self, name: &str) -> Result<(), String> {
+        (**self).stop(name)
+    }
+    fn disable(&self, name: &str) -> Result<(), String> {
+        (**self).disable(name)
+    }
+    fn listed(&self) -> Result<Vec<String>, String> {
+        (**self).listed()
+    }
+    fn state(&self, name: &str) -> Result<UnitState, String> {
+        (**self).state(name)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct UnitState {
     pub active: String,

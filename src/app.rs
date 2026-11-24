@@ -1,6 +1,10 @@
 use crate::{
     backend::{Backend, Command, Connection, Event, Handle, RequestId, fake::FakeBackend, pipewire::PipeWireBackend},
     devices,
+    effects::{
+        self, Band, BandKind, Chain, Target,
+        service::{EffectsService, Status, Systemd, Units, derive_status},
+    },
     graph::{
         GlobalId, Graph, LinkState,
         classify::PortKind,
@@ -43,16 +47,18 @@ pub enum Page {
     Midi2,
     Video,
     Mixer,
+    Effects,
     Devices,
 }
 
 impl Page {
-    const ALL: [(Page, Icon, &str); 6] = [
+    const ALL: [(Page, Icon, &str); 7] = [
         (Page::Audio, Icon::Volume2, "Audio"),
         (Page::Midi, Icon::Music, "MIDI"),
         (Page::Midi2, Icon::Keyboard, "MIDI 2.0"),
         (Page::Video, Icon::Video, "Video"),
         (Page::Mixer, Icon::SlidersHorizontal, "Mixer"),
+        (Page::Effects, Icon::Activity, "Effects"),
         (Page::Devices, Icon::Usb, "Devices"),
     ];
 
@@ -64,6 +70,7 @@ impl Page {
             Page::Video => "Video",
             Page::Mixer => "Mixer",
             Page::Devices => "Devices",
+            Page::Effects => "Effects",
         }
     }
     fn accepts(self, kind: PortKind) -> bool {
@@ -75,6 +82,7 @@ impl Page {
                 | (Page::Video, PortKind::Video)
                 | (Page::Mixer, PortKind::Audio)
                 | (Page::Devices, PortKind::Audio)
+                | (Page::Effects, PortKind::Audio)
         )
     }
 }
@@ -175,6 +183,26 @@ pub enum Msg {
     MixerFilter(String),
     MixerSettle(u64),
     MixerHover(Option<String>),
+    EffectSelect(String),
+    EffectNew,
+    EffectNameInput(String),
+    EffectNameCommit,
+    EffectTargetMenu,
+    EffectTarget(Target),
+    EffectPresetMenu,
+    EffectPreset(Option<String>),
+    EffectPageMenu,
+    EffectEnable(bool),
+    EffectBypass(bool),
+    EffectBand(usize, Band),
+    EffectBandType(usize, usize),
+    EffectValueInput(usize, usize, String),
+    EffectValueCommit(usize, usize),
+    EffectAddBand,
+    EffectDelete,
+    EffectDeleteConfirmed,
+    EffectRemoveAll,
+    EffectRemoveAllConfirmed,
     Activated,
     Matrix(MatrixMsg),
     Backend(Event),
@@ -250,6 +278,19 @@ pub struct Musubi {
     mixer_current: Option<usize>,
     mixer_replaying: Option<(usize, bool)>,
     mixer_generation: u64,
+    effects_service: Option<EffectsService<Box<dyn Units>>>,
+    effect_chains: Vec<Chain>,
+    effect_selected: Option<String>,
+    effect_statuses: Vec<(String, Status)>,
+    effect_name_input: String,
+    effect_values: [String; 3],
+    effect_value_band: usize,
+    effect_target_menu: bool,
+    effect_preset_menu: bool,
+    effect_page_menu: bool,
+    effect_undo: Vec<(Chain, Chain)>,
+    effect_redo: Vec<(Chain, Chain)>,
+    effect_pending: Option<(Chain, Chain, usize, RequestId)>,
     pub graph: Graph,
     connection: Option<Connection>,
     clock_defaults: Option<(u32, u32)>,
@@ -361,6 +402,7 @@ struct ToolbarConfig {
     mixer: persistence::MixerOptions,
     mixer_filter: String,
     mixer_show: bool,
+    effects_available: bool,
 }
 
 struct ResponsiveToolbar(ToolbarConfig);
@@ -404,8 +446,10 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
         }
         controls.push(meter_button.on_press(Msg::MixerMeters(!config.mixer.meters)).id("mixer-meters").into());
         let mut checkboxes: Vec<Element<Msg>> = Vec::new();
-        for (index, label) in
-            ["Outputs", "Inputs", "Playing", "Recording", "Monitors/virtual devices"].iter().enumerate()
+        for (index, label) in ["Outputs", "Inputs", "Playing", "Recording", "Monitors/virtual devices", "Effects"]
+            .iter()
+            .take(if config.effects_available { 6 } else { 5 })
+            .enumerate()
         {
             checkboxes.push(
                 checkbox(*label, config.mixer.shown[index])
@@ -440,6 +484,12 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
                 .width(180.)
                 .id("mixer-filter")
                 .into(),
+        );
+        return toolbar(controls).into();
+    }
+    if config.page == Page::Effects {
+        controls.push(
+            button("Undo").icon(Icon::Undo2).toolbar().enabled(config.can_undo).on_press(Msg::Undo).id("undo").into(),
         );
         return toolbar(controls).into();
     }
@@ -593,6 +643,156 @@ impl Musubi {
     pub fn with_fake_paths(fake: Rc<RefCell<FakeBackend>>, paths: persistence::Paths) -> Self {
         Self { fake: Some(fake), paths: Some(paths), ..Self::default() }
     }
+    pub fn with_fake_effects(
+        fake: Rc<RefCell<FakeBackend>>,
+        paths: effects::paths::Paths,
+        units: Box<dyn Units>,
+    ) -> Self {
+        Self { fake: Some(fake), effects_service: Some(EffectsService { paths, units }), ..Self::default() }
+    }
+    fn reload_effects(&mut self) {
+        let Some(service) = &self.effects_service else { return };
+        match service.list() {
+            Ok(chains) => {
+                self.effect_chains = chains;
+                if !self.effect_chains.iter().any(|c| Some(c.id.as_str()) == self.effect_selected.as_deref()) {
+                    self.effect_selected = self.effect_chains.first().map(|c| c.id.clone());
+                }
+                self.effect_name_input = self.selected_effect().map_or_else(String::new, |c| c.name.clone());
+                self.refresh_effect_statuses();
+            }
+            Err(error) => self.notice = Some(format!("Effects: {error}")),
+        }
+    }
+    fn selected_effect(&self) -> Option<&Chain> {
+        self.effect_chains.iter().find(|c| Some(c.id.as_str()) == self.effect_selected.as_deref())
+    }
+    fn refresh_effect_statuses(&mut self) {
+        let Some(service) = &self.effects_service else { return };
+        self.effect_statuses = self
+            .effect_chains
+            .iter()
+            .map(|chain| {
+                let unit = effects::service::unit(&chain.id).expect("validated chain ID");
+                let status = match service.units.state(&unit) {
+                    Ok(state) => {
+                        let capture = format!("musubi_eq.{}", chain.id);
+                        let playback = format!("{capture}.playback");
+                        let mut nodes = self.graph.nodes.values();
+                        let present = nodes.clone().any(|n| n.props.get("node.name") == Some(&capture))
+                            && nodes.any(|n| n.props.get("node.name") == Some(&playback));
+                        let target = match &chain.target {
+                            Target::FollowDefault => true,
+                            Target::Output(name) => {
+                                self.graph.nodes.values().any(|n| n.props.get("node.name") == Some(name))
+                            }
+                        };
+                        derive_status(&state, present, target)
+                    }
+                    Err(error) => Status::Failed(error),
+                };
+                (chain.id.clone(), status)
+            })
+            .collect();
+    }
+    fn effect_save(&mut self, before: Chain, after: Chain, record: bool) {
+        let Some(service) = &self.effects_service else { return };
+        let result = if before.enabled != after.enabled {
+            if after.enabled { service.enable(&after) } else { service.disable(&after.id) }
+        } else if after.enabled
+            && (before.target != after.target
+                || before.bypass != after.bypass
+                || before.bands.len() != after.bands.len()
+                || before.bands.iter().zip(&after.bands).any(|(a, b)| a.kind != b.kind))
+        {
+            service.disable(&after.id).and_then(|_| service.save(&after)).and_then(|_| service.enable(&after))
+        } else {
+            service.save(&after)
+        };
+        match result {
+            Ok(()) => {
+                // The service and its unit report the result; never display a requested value as observed.
+                self.reload_effects();
+                if self.selected_effect() == Some(&after) {
+                    if record {
+                        self.effect_undo.push((before, after));
+                        self.effect_redo.clear();
+                    }
+                } else {
+                    self.notice = Some("The effect change was not observed".into());
+                }
+            }
+            Err(error) => {
+                self.notice = Some(format!("Effects: {error}"));
+                self.reload_effects();
+            }
+        }
+    }
+    fn effect_band(&mut self, index: usize, band: Band) {
+        let Some(before) = self.selected_effect().cloned() else { return };
+        if before.bands.get(index) == Some(&band) || self.effect_pending.is_some() {
+            return;
+        }
+        let mut after = before.clone();
+        let Some(slot) = after.bands.get_mut(index) else { return };
+        *slot = band;
+        if let Err(error) = after.validate() {
+            self.notice = Some(error.to_string());
+            return;
+        }
+        let node_name = format!("musubi_eq.{}", before.id);
+        let capture = self
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.props.get("node.name") == Some(&node_name))
+            .map(|n| Handle { epoch: self.graph.epoch, id: n.id });
+        if before.enabled
+            && let Some(capture) = capture
+        {
+            let request = self.next_request;
+            self.next_request += 1;
+            let band = &after.bands[index];
+            let gain = if after.bypass { 0. } else { band.gain };
+            let mut params = Vec::with_capacity(6);
+            for side in ["left", "right"] {
+                for (key, value) in [("Freq", band.freq), ("Q", band.q), ("Gain", gain)] {
+                    params.push((format!("{side}{index}:{key}"), value));
+                }
+            }
+            self.effect_pending = Some((before, after, index, request));
+            self.send_command(Command::SetEffectParams { node: capture, params, request });
+        } else {
+            self.effect_save(before, after, true);
+        }
+    }
+    fn finish_effect_edit(&mut self) {
+        let Some((_, after, index, _)) = self.effect_pending.as_ref() else { return };
+        let name = format!("musubi_eq.{}", after.id);
+        let Some(observed) = self
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.props.get("node.name") == Some(&name))
+            .map(|n| &n.native.effect_params)
+        else {
+            return;
+        };
+        let Some(service) = &self.effects_service else { return };
+        match service.save_observed_edit(after, *index, observed) {
+            Ok(()) => {
+                let (before, after, _, _) = self.effect_pending.take().unwrap();
+                self.reload_effects();
+                self.effect_undo.push((before, after));
+                self.effect_redo.clear();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => {
+                self.effect_pending = None;
+                self.notice = Some(format!("Effects: {error}"));
+            }
+        }
+    }
     fn send_command(&mut self, command: Command) {
         if let Some(fake) = &self.fake {
             fake.borrow_mut().command(command);
@@ -627,6 +827,7 @@ impl Musubi {
                 .filter(|strip| {
                     let category = match strip.kind {
                         StripKind::Output => 0,
+                        StripKind::Effect => 5,
                         StripKind::Input => 1,
                         StripKind::Playback => 2,
                         StripKind::Recording => 3,
@@ -718,8 +919,12 @@ impl Musubi {
         snapshot: &aizome_sys::audio::AudioState,
     ) -> Option<MixerIdentity> {
         match kind {
-            StripKind::Output | StripKind::Input => {
-                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+            StripKind::Output | StripKind::Effect | StripKind::Input => {
+                let devices = if matches!(kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 devices.iter().find(|d| d.index == index).map(|d| MixerIdentity::Device(kind, d.name.clone()))
             }
             StripKind::Playback | StripKind::Recording => {
@@ -898,7 +1103,11 @@ impl Musubi {
                 }
             }
             MixerValue::Default(name) => {
-                let devices = if strip.kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let devices = if matches!(strip.kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 if devices.iter().filter(|d| &d.name == name).count() != 1 {
                     self.notice =
                         Some(format!("{} skipped: missing default device.", if undo { "Undo" } else { "Redo" }));
@@ -930,7 +1139,11 @@ impl Musubi {
                 }
             }
             MixerValue::Port(name) => {
-                let devices = if strip.kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let devices = if matches!(strip.kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 if !devices
                     .iter()
                     .any(|d| d.index == index && d.ports.iter().any(|p| &p.name == name && p.available != Some(false)))
@@ -1258,7 +1471,7 @@ impl Musubi {
     }
     fn kind(&self) -> PortKind {
         match self.page {
-            Page::Audio | Page::Mixer | Page::Devices => PortKind::Audio,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices => PortKind::Audio,
             Page::Midi => PortKind::Midi,
             Page::Midi2 => PortKind::Ump,
             Page::Video => PortKind::Video,
@@ -1266,7 +1479,7 @@ impl Musubi {
     }
     fn index(page: Page) -> usize {
         match page {
-            Page::Audio | Page::Mixer | Page::Devices => 0,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices => 0,
             Page::Midi => 1,
             Page::Midi2 => 2,
             Page::Video => 3,
@@ -1372,7 +1585,18 @@ impl Musubi {
     pub fn status_sentence(&self) -> Option<String> {
         self.notice
             .clone()
-            .or_else(|| if self.page == Page::Mixer { self.mixer_hover.clone() } else { self.hover_sentence() })
+            .or_else(|| {
+                if self.page == Page::Effects {
+                    self.effect_selected
+                        .as_ref()
+                        .and_then(|id| self.effect_statuses.iter().find(|(name, _)| name == id))
+                        .map(|(_, status)| format!("EQ chain · {}", effects::page::status_text(status)))
+                } else if self.page == Page::Mixer {
+                    self.mixer_hover.clone()
+                } else {
+                    self.hover_sentence()
+                }
+            })
             .map(|sentence| fit_status(&sentence))
     }
 
@@ -1591,6 +1815,14 @@ impl Program for Musubi {
                 }
             }))));
         }
+        if self.live {
+            match (effects::paths::Paths::from_environment(), Systemd::user()) {
+                (Ok(paths), Ok(units)) => self.effects_service = Some(EffectsService { paths, units: Box::new(units) }),
+                (Err(error), _) => self.notice = Some(format!("Effects: {error}")),
+                (_, Err(error)) => self.notice = Some(format!("Effects: {error}")),
+            }
+        }
+        self.reload_effects();
         if let Some(fake) = &self.fake {
             let events = std::iter::from_fn(|| fake.borrow_mut().next_event()).collect::<Vec<_>>();
             for event in events {
@@ -1607,6 +1839,188 @@ impl Program for Musubi {
             self.notice = None;
         }
         match msg {
+            Msg::EffectSelect(id) => {
+                self.effect_selected = Some(id);
+                self.effect_name_input = self.selected_effect().map_or_else(String::new, |c| c.name.clone());
+                self.effect_values = Default::default();
+            }
+            Msg::EffectNew => {
+                let Some(service) = &self.effects_service else { return };
+                let mut number = 1;
+                let id = loop {
+                    let id = format!("eq-{number}");
+                    if !self.effect_chains.iter().any(|c| c.id == id) {
+                        break id;
+                    }
+                    number += 1;
+                };
+                let chain = Chain {
+                    id: id.clone(),
+                    name: format!("EQ {number}"),
+                    target: Target::FollowDefault,
+                    bands: vec![Band { kind: BandKind::Peaking, freq: 1000., gain: 0., q: 1. }],
+                    bypass: false,
+                    enabled: false,
+                };
+                match service.save(&chain) {
+                    Ok(()) => {
+                        self.effect_selected = Some(id);
+                        self.reload_effects();
+                    }
+                    Err(error) => self.notice = Some(format!("Effects: {error}")),
+                }
+            }
+            Msg::EffectNameInput(value) => self.effect_name_input = value,
+            Msg::EffectNameCommit => {
+                if let Some(before) = self.selected_effect().cloned() {
+                    if before.name != self.effect_name_input {
+                        let mut after = before.clone();
+                        after.name = self.effect_name_input.clone();
+                        self.effect_save(before, after, true);
+                    }
+                }
+            }
+            Msg::EffectTargetMenu => self.effect_target_menu = !self.effect_target_menu,
+            Msg::EffectPresetMenu => self.effect_preset_menu = !self.effect_preset_menu,
+            Msg::EffectPageMenu => self.effect_page_menu = !self.effect_page_menu,
+            Msg::EffectTarget(target) => {
+                self.effect_target_menu = false;
+                if let Some(before) = self.selected_effect().cloned() {
+                    if before.target != target {
+                        let mut after = before.clone();
+                        after.target = target;
+                        self.effect_save(before, after, true);
+                    }
+                }
+            }
+            Msg::EffectPreset(preset) => {
+                self.effect_preset_menu = false;
+                if let Some(before) = self.selected_effect().cloned() {
+                    let mut after = before.clone();
+                    after.bands =
+                        preset.as_ref().and_then(|id| self.effect_chains.iter().find(|c| &c.id == id)).map_or_else(
+                            || vec![Band { kind: BandKind::Peaking, freq: 1000., gain: 0., q: 1. }],
+                            |c| c.bands.clone(),
+                        );
+                    if before != after {
+                        self.effect_save(before, after, true);
+                    }
+                }
+            }
+            Msg::EffectEnable(enabled) => {
+                if let Some(before) = self.selected_effect().cloned() {
+                    let mut after = before.clone();
+                    after.enabled = enabled;
+                    self.effect_save(before, after, true);
+                }
+            }
+            Msg::EffectBypass(bypass) => {
+                if let Some(before) = self.selected_effect().cloned() {
+                    let mut after = before.clone();
+                    after.bypass = bypass;
+                    self.effect_save(before, after, true);
+                }
+            }
+            Msg::EffectBand(index, band) => self.effect_band(index, band),
+            Msg::EffectBandType(index, kind) => {
+                if let Some(band) = self.selected_effect().and_then(|c| c.bands.get(index)).cloned() {
+                    let mut band = band;
+                    band.kind = match kind {
+                        1 => BandKind::LowShelf,
+                        2 => BandKind::HighShelf,
+                        _ => BandKind::Peaking,
+                    };
+                    self.effect_band(index, band);
+                }
+            }
+            Msg::EffectValueInput(index, field, value) => {
+                if field < 3 {
+                    self.effect_value_band = index;
+                    self.effect_values[field] = value;
+                }
+            }
+            Msg::EffectValueCommit(index, field) => {
+                if let Some(mut band) = self.selected_effect().and_then(|c| c.bands.get(index)).cloned() {
+                    let text = self.effect_values.get(field).map(String::as_str).unwrap_or("");
+                    if let Ok(value) = text.parse::<f32>() {
+                        match field {
+                            0 => band.freq = value,
+                            1 => band.gain = value,
+                            2 => band.q = value,
+                            _ => {}
+                        }
+                        self.effect_band(index, band);
+                    } else if !text.is_empty() {
+                        self.notice = Some("Enter a numeric EQ value".into());
+                    }
+                    if field < 3 {
+                        self.effect_values[field].clear();
+                    }
+                }
+            }
+            Msg::EffectAddBand => {
+                if let Some(before) = self.selected_effect().cloned() {
+                    if before.bands.len() < 8 {
+                        let mut after = before.clone();
+                        after.bands.push(Band { kind: BandKind::Peaking, freq: 1000., gain: 0., q: 1. });
+                        self.effect_save(before, after, true);
+                    }
+                }
+            }
+            Msg::EffectDelete => {
+                if let (Some(chain), Some(service)) = (self.selected_effect(), &self.effects_service) {
+                    cx.alert(
+                        self.window,
+                        Alert::new(
+                            "Delete EQ chain",
+                            format!(
+                                "Remove “{}”, its unit {}, and files {} and {}?",
+                                chain.name,
+                                effects::service::unit(&chain.id).unwrap_or_default(),
+                                service.paths.json(&chain.id).unwrap().display(),
+                                service.paths.conf(&chain.id).unwrap().display()
+                            ),
+                        )
+                        .default_button("Delete chain", Msg::EffectDeleteConfirmed)
+                        .cancel_button("Cancel"),
+                    );
+                }
+            }
+            Msg::EffectDeleteConfirmed => {
+                if let (Some(id), Some(service)) = (&self.effect_selected, &self.effects_service) {
+                    match service.delete(id) {
+                        Ok(()) => {
+                            self.effect_selected = None;
+                            self.effect_undo.clear();
+                            self.effect_redo.clear();
+                            self.reload_effects();
+                        }
+                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                    }
+                }
+            }
+            Msg::EffectRemoveAll => {
+                self.effect_page_menu = false;
+                if let Some(service) = &self.effects_service {
+                    cx.alert(self.window, Alert::new("Remove Musubi effects and clock settings", format!(
+                        "Stop and disable all Musubi effect units; remove {} and {}. Other applications' files are not touched.",
+                        service.paths.effects.display(), service.paths.clock.display()
+                    )).default_button("Remove all", Msg::EffectRemoveAllConfirmed).cancel_button("Cancel"));
+                }
+            }
+            Msg::EffectRemoveAllConfirmed => {
+                if let Some(service) = &self.effects_service {
+                    match service.remove_all() {
+                        Ok(()) => {
+                            self.effect_selected = None;
+                            self.effect_undo.clear();
+                            self.effect_redo.clear();
+                            self.reload_effects();
+                        }
+                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                    }
+                }
+            }
             Msg::AudioWake => {
                 self.finish_audio();
                 self.sync_meters(cx);
@@ -1694,7 +2108,11 @@ impl Program for Musubi {
             }
             Msg::MixerBalance(kind, index, value) => {
                 let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
-                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let devices = if matches!(kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 if let Some(device) = devices.iter().find(|d| d.index == index) {
                     if (device.balance - value).abs() > 1e-6 {
                         self.record_mixer(
@@ -1715,7 +2133,11 @@ impl Program for Musubi {
             }
             Msg::MixerDefault(kind, name) => {
                 let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
-                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let devices = if matches!(kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 let previous = devices.iter().find(|d| d.is_default);
                 if let Some(previous) = previous.filter(|d| d.name != name) {
                     if devices.iter().any(|d| d.name == name) {
@@ -1799,7 +2221,11 @@ impl Program for Musubi {
             Msg::MixerRoute(kind, index, port) => {
                 self.mixer_route_menu = None;
                 let snapshot = self.audio.as_ref().map(|a| a.snapshot()).unwrap_or_default();
-                let devices = if kind == StripKind::Output { &snapshot.sinks } else { &snapshot.sources };
+                let devices = if matches!(kind, StripKind::Output | StripKind::Effect) {
+                    &snapshot.sinks
+                } else {
+                    &snapshot.sources
+                };
                 if let Some(device) = devices.iter().find(|d| d.index == index)
                     && let Some(route) =
                         device.ports.iter().find(|route| route.name == port && route.available != Some(false))
@@ -1826,7 +2252,7 @@ impl Program for Musubi {
                 if !self.linked_channels.remove(&(kind, index)) {
                     self.linked_channels.insert((kind, index));
                     if let Some(audio) = &self.audio {
-                        if matches!(kind, StripKind::Output | StripKind::Input) {
+                        if matches!(kind, StripKind::Output | StripKind::Effect | StripKind::Input) {
                             let task = audio.balance(kind, index, 0.);
                             self.queue_audio(task);
                         }
@@ -2089,6 +2515,22 @@ impl Program for Musubi {
                 self.options[Self::index(self.page)].to = to;
                 self.refresh_layouts();
             }
+            Msg::Undo if self.page == Page::Effects => {
+                if let Some((before, after)) = self.effect_undo.pop() {
+                    self.effect_save(after.clone(), before.clone(), false);
+                    if self.selected_effect() == Some(&before) {
+                        self.effect_redo.push((before, after));
+                    }
+                }
+            }
+            Msg::Redo if self.page == Page::Effects => {
+                if let Some((before, after)) = self.effect_redo.pop() {
+                    self.effect_save(before.clone(), after.clone(), false);
+                    if self.selected_effect() == Some(&after) {
+                        self.effect_undo.push((before, after));
+                    }
+                }
+            }
             Msg::Undo => self.replay(true, cx),
             Msg::Redo => self.replay(false, cx),
             Msg::Inspector => {
@@ -2134,6 +2576,8 @@ impl Program for Musubi {
                     }
                 }
                 self.graph.apply(delta);
+                self.refresh_effect_statuses();
+                self.finish_effect_edit();
                 let snapshot = self.audio.as_ref().map(|audio| audio.snapshot()).unwrap_or_default();
                 let existing: HashSet<_> = mixer::model::strips(&snapshot, &self.graph)
                     .iter()
@@ -2285,7 +2729,7 @@ impl Program for Musubi {
         .spacing(8.)
         .width(Fill);
         for (page, icon, title) in
-            Page::ALL.into_iter().filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Devices))
+            Page::ALL.into_iter().filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices))
         {
             let count = self
                 .graph
@@ -2320,6 +2764,20 @@ impl Program for Musubi {
             .padding([0., 10.])
             .width(Fill),
         );
+        if self.effects_service.is_some() {
+            side = side.push(
+                row![
+                    sidebar_item(Icon::Activity, "Effects", self.page == Page::Effects)
+                        .on_press(Msg::Page(Page::Effects))
+                        .id("Effects")
+                        .width(Fill),
+                    text(self.effect_chains.len().to_string()).mono().size(11.).role(Role::Text3),
+                ]
+                .spacing(4.)
+                .padding([0., 10.])
+                .width(Fill),
+            );
+        }
         let cards = self.audio.as_ref().map_or(0, |audio| audio.snapshot().cards.len());
         side = side.push(caption("SYSTEM")).push(
             row![
@@ -2390,6 +2848,40 @@ impl Program for Musubi {
             } else {
                 self.unavailable()
             }
+        } else if self.page == Page::Effects {
+            let outputs = self
+                .audio
+                .as_ref()
+                .map(|a| a.snapshot().sinks.iter().map(|d| (d.name.clone(), d.description.clone())).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let external = self
+                .graph
+                .nodes
+                .values()
+                .filter(|node| {
+                    node.props.get("media.class").is_some_and(|class| class == "Audio/Filter")
+                        && !node.props.get("node.name").is_some_and(|name| name.starts_with("musubi_eq."))
+                })
+                .map(|node| {
+                    node.props
+                        .get("node.description")
+                        .or_else(|| node.props.get("node.name"))
+                        .cloned()
+                        .unwrap_or_else(|| format!("Node {}", node.id))
+                })
+                .collect::<Vec<_>>();
+            effects::page::view(
+                &self.effect_chains,
+                self.effect_selected.as_deref(),
+                &self.effect_statuses,
+                &outputs,
+                &external,
+                self.effect_target_menu,
+                self.effect_preset_menu,
+                self.effect_page_menu,
+                &self.effect_name_input,
+                &self.effect_values,
+            )
         } else if self.page == Page::Devices {
             self.audio.as_ref().map_or_else(
                 || self.unavailable(),
@@ -2409,7 +2901,7 @@ impl Program for Musubi {
                 Page::Audio => "No audio ports. Audio devices and applications appear here when PipeWire finds them.",
                 Page::Midi => "No MIDI ports. MIDI devices and applications appear here when PipeWire finds them.",
                 Page::Midi2 => "No MIDI 2.0 ports. UMP devices and applications appear here when PipeWire finds them.",
-                Page::Mixer | Page::Devices => unreachable!("content handled above"),
+                Page::Mixer | Page::Effects | Page::Devices => unreachable!("content handled above"),
             };
             container(text(explanation).size(20.).role(Role::Text2).wrap())
                 .align_x(Align::Center)
@@ -2483,6 +2975,8 @@ impl Program for Musubi {
             ResponsiveToolbar(ToolbarConfig {
                 title: if self.page == Page::Mixer {
                     format!("Mixer · {strip_count} strips")
+                } else if self.page == Page::Effects {
+                    format!("Effects · {} chains", self.effect_chains.len())
                 } else if self.page == Page::Devices {
                     format!("Devices · {cards} {}", if cards == 1 { "device" } else { "devices" })
                 } else {
@@ -2490,6 +2984,8 @@ impl Program for Musubi {
                 },
                 short_title: if self.page == Page::Mixer {
                     format!("Mixer · {strip_count}")
+                } else if self.page == Page::Effects {
+                    format!("Effects · {}", self.effect_chains.len())
                 } else if self.page == Page::Devices {
                     format!("Devices · {cards}")
                 } else {
@@ -2505,10 +3001,15 @@ impl Program for Musubi {
                 from: options.from.clone(),
                 to: options.to.clone(),
                 has_ports,
-                can_undo: self.history.undo_label(&self.transactions).is_some(),
+                can_undo: if self.page == Page::Effects {
+                    !self.effect_undo.is_empty()
+                } else {
+                    self.history.undo_label(&self.transactions).is_some()
+                },
                 mixer: self.mixer_options.clone(),
                 mixer_filter: self.mixer_filter.clone(),
                 mixer_show: self.mixer_show,
+                effects_available: self.effects_service.is_some(),
             }),
             vec![],
         )
@@ -2526,6 +3027,7 @@ impl Program for Musubi {
                 .filter(|strip| {
                     let category = match strip.kind {
                         StripKind::Output => 0,
+                        StripKind::Effect => 5,
                         StripKind::Input => 1,
                         StripKind::Playback => 2,
                         StripKind::Recording => 3,
@@ -2546,6 +3048,8 @@ impl Program for Musubi {
             }
         } else if self.page == Page::Devices {
             format!("{cards} {}", if cards == 1 { "device" } else { "devices" })
+        } else if self.page == Page::Effects {
+            format!("{} chains", self.effect_chains.len())
         } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
@@ -2553,7 +3057,8 @@ impl Program for Musubi {
         } else {
             format!("{ports} ports")
         };
-        let body: Element<Msg> = if self.inspector && !matches!(self.page, Page::Mixer | Page::Devices) {
+        let body: Element<Msg> = if self.inspector && !matches!(self.page, Page::Mixer | Page::Effects | Page::Devices)
+        {
             row![content, self.inspector_view()].height(Fill).into()
         } else {
             content

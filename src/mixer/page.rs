@@ -124,8 +124,11 @@ fn strip_view(
         }
         StripControl::ReadOnly(_) => (0., false, None),
     };
-    let targets =
-        if matches!(strip.kind, StripKind::Output | StripKind::Playback) { &audio.sinks } else { &audio.sources };
+    let targets = if matches!(strip.kind, StripKind::Output | StripKind::Effect | StripKind::Playback) {
+        &audio.sinks
+    } else {
+        &audio.sources
+    };
     let current = index.and_then(|i| match strip.kind {
         StripKind::Playback => audio.playback.iter().find(|s| s.index == i).map(|s| s.device),
         StripKind::Recording => audio.recording.iter().find(|s| s.index == i).map(|s| s.device),
@@ -152,7 +155,7 @@ fn strip_view(
                     .map_or("No target", |d| d.description.as_str()),
             )
             .into()
-    } else if matches!(strip.kind, StripKind::Output | StripKind::Input)
+    } else if matches!(strip.kind, StripKind::Output | StripKind::Effect | StripKind::Input)
         && let Some(device) = index.and_then(|i| targets.iter().find(|d| d.index == i))
     {
         let active = device.ports.iter().find(|port| Some(port.name.as_str()) == device.active_port.as_deref());
@@ -240,8 +243,8 @@ fn strip_view(
             .id(format!("mute-{kind:?}-{}", index.unwrap_or_default())),
     ]
     .spacing(2.);
-    if matches!(kind, StripKind::Output | StripKind::Input) {
-        let device = if kind == StripKind::Output { &audio.sinks } else { &audio.sources };
+    if matches!(kind, StripKind::Output | StripKind::Effect | StripKind::Input) {
+        let device = if matches!(kind, StripKind::Output | StripKind::Effect) { &audio.sinks } else { &audio.sources };
         if let Some(d) = index.and_then(|i| device.iter().find(|d| d.index == i)) {
             buttons = buttons.push(
                 Element::new(
@@ -253,7 +256,7 @@ fn strip_view(
             );
         }
     }
-    if matches!(kind, StripKind::Output | StripKind::Input | StripKind::Native) {
+    if matches!(kind, StripKind::Output | StripKind::Effect | StripKind::Input | StripKind::Native) {
         if let Some(id) = index.or_else(|| node.map(|n| n.id)) {
             let mut link_button = button("↔").width(32.).selected(linked);
             if linked {
@@ -291,6 +294,7 @@ fn strip_view(
                 container(
                     aizome_kit::icon(match kind {
                         StripKind::Output => Icon::Speaker,
+                        StripKind::Effect => Icon::SlidersHorizontal,
                         StripKind::Input | StripKind::Recording => Icon::Mic,
                         StripKind::Playback => Icon::Headphones,
                         StripKind::Native => Icon::Volume2,
@@ -358,13 +362,14 @@ pub fn view(
     route_menu: Option<(StripKind, u32)>,
     percent: bool,
     meters: bool,
-    shown: &[bool; 5],
+    shown: &[bool; 6],
     filter: &str,
 ) -> Element<Msg> {
     let filter = filter.to_lowercase();
     let visible = |s: &&Strip| {
         let category = match s.kind {
             StripKind::Output => 0,
+            StripKind::Effect => 5,
             StripKind::Input => 1,
             StripKind::Playback => 2,
             StripKind::Recording => 3,
@@ -382,6 +387,7 @@ pub fn view(
         (StripKind::Playback, "PLAYING"),
         (StripKind::Recording, "RECORDING"),
         (StripKind::Native, "NATIVE"),
+        (StripKind::Effect, "EFFECTS"),
     ] {
         let group: Vec<_> = strips.iter().filter(|s| s.kind == kind).filter(&visible).collect();
         if group.is_empty() {

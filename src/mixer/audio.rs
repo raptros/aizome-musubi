@@ -38,7 +38,7 @@ impl AudioControl for Audio {
     }
     fn volume(&self, kind: StripKind, index: u32, value: f32) -> AudioTask {
         AudioTask::Unit(match kind {
-            StripKind::Output => self.set_sink_volume(index, value),
+            StripKind::Output | StripKind::Effect => self.set_sink_volume(index, value),
             StripKind::Input => self.set_source_volume(index, value),
             StripKind::Playback => self.set_playback_volume(index, value),
             StripKind::Recording => self.set_recording_volume(index, value),
@@ -47,7 +47,7 @@ impl AudioControl for Audio {
     }
     fn mute(&self, kind: StripKind, index: u32, value: bool) -> AudioTask {
         AudioTask::Bool(match kind {
-            StripKind::Output => self.set_sink_mute(index, value),
+            StripKind::Output | StripKind::Effect => self.set_sink_mute(index, value),
             StripKind::Input => self.set_source_mute(index, value),
             StripKind::Playback => self.set_playback_mute(index, value),
             StripKind::Recording => self.set_recording_mute(index, value),
@@ -56,21 +56,21 @@ impl AudioControl for Audio {
     }
     fn balance(&self, kind: StripKind, index: u32, value: f32) -> AudioTask {
         AudioTask::Unit(match kind {
-            StripKind::Output => self.set_sink_balance(index, value),
+            StripKind::Output | StripKind::Effect => self.set_sink_balance(index, value),
             StripKind::Input => self.set_source_balance(index, value),
             _ => return AudioTask::ok(),
         })
     }
     fn default_device(&self, kind: StripKind, name: &str) -> AudioTask {
         AudioTask::Unit(match kind {
-            StripKind::Output => self.set_default_sink(name),
+            StripKind::Output | StripKind::Effect => self.set_default_sink(name),
             StripKind::Input => self.set_default_source(name),
             _ => return AudioTask::ok(),
         })
     }
     fn port(&self, kind: StripKind, index: u32, port: &str) -> AudioTask {
         AudioTask::Unit(match kind {
-            StripKind::Output => self.set_sink_port(index, port),
+            StripKind::Output | StripKind::Effect => self.set_sink_port(index, port),
             StripKind::Input => self.set_source_port(index, port),
             _ => return AudioTask::ok(),
         })
@@ -105,7 +105,9 @@ impl AudioControl for FakeAudio {
         }
         let mut state = self.state.borrow_mut();
         match kind {
-            StripKind::Output => state.sinks.iter_mut().find(|d| d.index == index).map(|d| d.volume = value),
+            StripKind::Output | StripKind::Effect => {
+                state.sinks.iter_mut().find(|d| d.index == index).map(|d| d.volume = value)
+            }
             StripKind::Input => state.sources.iter_mut().find(|d| d.index == index).map(|d| d.volume = value),
             StripKind::Playback => state.playback.iter_mut().find(|s| s.index == index).map(|s| s.volume = value),
             StripKind::Recording => state.recording.iter_mut().find(|s| s.index == index).map(|s| s.volume = value),
@@ -117,7 +119,9 @@ impl AudioControl for FakeAudio {
         self.commands.borrow_mut().push(format!("mute {kind:?} {index} {value}"));
         let mut state = self.state.borrow_mut();
         match kind {
-            StripKind::Output => state.sinks.iter_mut().find(|d| d.index == index).map(|d| d.muted = value),
+            StripKind::Output | StripKind::Effect => {
+                state.sinks.iter_mut().find(|d| d.index == index).map(|d| d.muted = value)
+            }
             StripKind::Input => state.sources.iter_mut().find(|d| d.index == index).map(|d| d.muted = value),
             StripKind::Playback => state.playback.iter_mut().find(|s| s.index == index).map(|s| s.muted = value),
             StripKind::Recording => state.recording.iter_mut().find(|s| s.index == index).map(|s| s.muted = value),
@@ -128,7 +132,8 @@ impl AudioControl for FakeAudio {
     fn balance(&self, kind: StripKind, index: u32, value: f32) -> AudioTask {
         self.commands.borrow_mut().push(format!("balance {kind:?} {index} {value}"));
         let mut state = self.state.borrow_mut();
-        let devices = if kind == StripKind::Output { &mut state.sinks } else { &mut state.sources };
+        let devices =
+            if matches!(kind, StripKind::Output | StripKind::Effect) { &mut state.sinks } else { &mut state.sources };
         if let Some(device) = devices.iter_mut().find(|d| d.index == index) {
             device.balance = value;
         }
@@ -137,7 +142,7 @@ impl AudioControl for FakeAudio {
     fn default_device(&self, kind: StripKind, name: &str) -> AudioTask {
         self.commands.borrow_mut().push(format!("default {kind:?} {name}"));
         let mut state = self.state.borrow_mut();
-        let devices = if kind == StripKind::Output {
+        let devices = if matches!(kind, StripKind::Output | StripKind::Effect) {
             state.default_sink = Some(name.into());
             &mut state.sinks
         } else {
@@ -152,7 +157,8 @@ impl AudioControl for FakeAudio {
     fn port(&self, kind: StripKind, index: u32, port: &str) -> AudioTask {
         self.commands.borrow_mut().push(format!("port {kind:?} {index} {port}"));
         let mut state = self.state.borrow_mut();
-        let devices = if kind == StripKind::Output { &mut state.sinks } else { &mut state.sources };
+        let devices =
+            if matches!(kind, StripKind::Output | StripKind::Effect) { &mut state.sinks } else { &mut state.sources };
         if let Some(device) = devices.iter_mut().find(|device| device.index == index)
             && device.ports.iter().any(|candidate| candidate.name == port && candidate.available != Some(false))
         {
