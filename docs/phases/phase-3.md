@@ -42,14 +42,14 @@ same directory. `effects::service` uses A9's user-manager D-Bus API; its
 `edit_band` sends keyed A8 `Props.params` through the existing backend and
 `save_observed_edit` persists only after the capture node's Props read-back.
 The headless VM exercises the app's code path; its 440 Hz output meter rose
-0.0800 → 0.3185 (+12.00 dB) after a live Props edit. The template is
+0.0800 → 0.3184 (+12.00 dB) after a live Props edit. The template is
 enableable (`WantedBy=default.target`), and the VM checks both unit states,
 nodes and file removal. The Effects page remains P3-S3. D22 cleanup: `remove`
 stops/disables before removing both files; `remove-all` discovers enabled units
 and local chain files, removes the effects directory and only Musubi's clock
 drop-in. The documented `effects list | remove | remove-all` recovery commands
 work without a GUI; README also includes the three-command manual recovery.
-Evidence: `runs/2026-11-24/patchbay/phase3/s2/{unit-full,live,vm-enable}.log`.
+Evidence: `runs/2026-11-24/patchbay/phase3/s2/{unit-full,live,vm-recovery}.log`.
 
 ### P3-S3 — Effects page
 - **Sidebar.** MIXER ▸ Effects. The Mixer's Show… menu gets EFFECTS, and chain sinks appear as an EFFECTS section in the Mixer.
