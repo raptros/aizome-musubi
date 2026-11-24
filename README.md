@@ -58,11 +58,13 @@ The View, Edit and Routing menus expose commands without needing the grid. In Li
 
 ## Limits
 
-Musubi has no effects, clock controls or saved setups yet. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
+Musubi has no Effects page, clock controls or saved setups yet; the headless EQ service and its cleanup commands are available. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
 
-## Manual effects recovery
+## Effects recovery
 
-If Musubi cannot start, these three commands stop and disable its EQ units, remove only its effect definitions, and remove only its clock setting:
+If the GUI cannot start, `aizome-musubi effects list` shows saved chains, `aizome-musubi effects remove <chain>` stops/disables one unit and removes its JSON and conf, and `aizome-musubi effects remove-all` stops/disables all Musubi effect units and removes only Musubi's effects directory and clock drop-in. These commands use the user systemd manager; they do not require the GUI.
+
+If that command cannot run, these three manual commands perform the same recovery:
 
 ```sh
 systemctl --user list-unit-files --no-legend 'aizome-musubi-effect@*.service' | awk '{print $1}' | xargs -r systemctl --user disable --now

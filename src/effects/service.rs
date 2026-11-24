@@ -143,6 +143,27 @@ impl<U: Units> EffectsService<U> {
         }
         Ok(chain)
     }
+    /// Enumerate only chain JSON files from Musubi's effects directory.
+    pub fn list(&self) -> io::Result<Vec<Chain>> {
+        let entries = match fs::read_dir(&self.paths.effects) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut chains = Vec::new();
+        for entry in entries {
+            let name = entry?.file_name();
+            if std::path::Path::new(&name).extension().is_some_and(|ext| ext == "json") {
+                let name = name
+                    .into_string()
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "non-UTF-8 chain filename"))?;
+                let id = name.strip_suffix(".json").expect("JSON suffix");
+                chains.push(self.load(id)?);
+            }
+        }
+        chains.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(chains)
+    }
     /// Submit a band change to the existing backend; persist only after Props read-back.
     pub fn edit_band(
         &self,
@@ -337,11 +358,14 @@ mod tests {
             bypass: false,
             enabled: true,
         };
+        assert!(service.list().unwrap().is_empty());
         service.enable(&chain).unwrap();
         assert!(service.paths.conf("one").unwrap().exists());
+        assert_eq!(service.list().unwrap()[0].id, "one");
         service.delete("one").unwrap();
         assert!(!service.paths.json("one").unwrap().exists());
         assert!(!service.paths.conf("one").unwrap().exists());
+        assert!(service.list().unwrap().is_empty());
         service.enable(&chain).unwrap();
         fs::write(service.paths.effects.join(".musubi-123-0.tmp"), "incomplete").unwrap();
         fs::create_dir_all(service.paths.clock.parent().unwrap()).unwrap();
@@ -349,6 +373,7 @@ mod tests {
         fs::write(root.join("other.conf"), "keep").unwrap();
         service.remove_all().unwrap();
         assert!(!service.paths.effects.exists());
+        assert!(service.list().unwrap().is_empty());
         assert!(!service.paths.clock.exists());
         assert_eq!(fs::read_to_string(root.join("other.conf")).unwrap(), "keep");
         assert!(service.units.units.borrow().is_empty());

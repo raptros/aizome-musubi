@@ -185,7 +185,9 @@ observations.append({"default_sink": default_sink, "wpctl": user("wpctl status")
 try:
     with subtest("effect service end-to-end from packaged Rust code"):
         unit = "aizome-musubi-effect@vm.service"
+        assert user("aizome-musubi effects list").strip() == ""
         user("aizome-musubi effects create vm musubi-vm-default")
+        assert user("aizome-musubi effects list").strip().startswith("vm\tenabled\tvm")
         created_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
         print("effect unit after enable:", created_enablement)
         assert created_enablement == "enabled", created_enablement
@@ -206,18 +208,22 @@ try:
             "pw-link -l | grep -F 'musubi_eq.vm' | head -1"))
         flat_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
         capture_id = next(n["id"] for n in visible if n["name"] == "musubi_eq.vm")
-        print("capture before info:", user(f"pw-cli info {capture_id}"))
-        print("capture before Props:", user(f"pw-cli enum-params {capture_id} Props"))
-        print("chain before dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                    "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
+        before_info = user(f"pw-cli info {capture_id}")
+        before_props = user(f"pw-cli enum-params {capture_id} Props")
+        before_dump = user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+                           "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'")
         boost_status, boost_output = machine.execute("su - alice -c " + shlex.quote(
             "export XDG_RUNTIME_DIR=/run/user/1000; aizome-musubi effects boost vm 12"))
-        print("boost status and debug:", boost_status, boost_output)
-        print("capture after info:", user(f"pw-cli info {capture_id}"))
-        print("capture after Props:", user(f"pw-cli enum-params {capture_id} Props"))
-        print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                    "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
-        assert boost_status == 0, boost_output
+        if boost_status != 0:
+            print("boost status and debug:", boost_status, boost_output)
+            print("capture before info:", before_info)
+            print("capture before Props:", before_props)
+            print("chain before dump:", before_dump)
+            print("capture after info:", user(f"pw-cli info {capture_id}"))
+            print("capture after Props:", user(f"pw-cli enum-params {capture_id} Props"))
+            print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
+                        "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
+            raise AssertionError(boost_output)
         boosted_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
         effect_db = 20 * __import__("math").log10(boosted_peak / flat_peak)
         assert 9 < effect_db < 15, (flat_peak, boosted_peak, effect_db)
@@ -235,9 +241,10 @@ try:
         disabled_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
         print("effect unit after disable:", disabled_enablement)
         assert disabled_enablement == "disabled", disabled_enablement
-        user("aizome-musubi effects delete vm")
+        user("aizome-musubi effects remove vm")
         assert user("test ! -e ~/.config/aizome-musubi/effects/vm.json && "
                     "test ! -e ~/.config/aizome-musubi/effects/vm.conf && echo clean").strip() == "clean"
+        assert user("aizome-musubi effects list").strip() == ""
         user("aizome-musubi effects create vm musubi-vm-default")
         user("aizome-musubi effects remove-all")
         assert user("test ! -e ~/.config/aizome-musubi/effects && echo clean").strip() == "clean"

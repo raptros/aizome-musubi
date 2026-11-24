@@ -20,6 +20,13 @@ fn effects(args: &[String]) -> io::Result<()> {
     let service =
         EffectsService { paths: Paths::from_environment()?, units: Systemd::user().map_err(io::Error::other)? };
     match args {
+        [action] if action == "list" => {
+            for chain in service.list()? {
+                println!("{}\t{}\t{}", chain.id, if chain.enabled { "enabled" } else { "disabled" }, chain.name);
+            }
+            Ok(())
+        }
+        // Temporary VM creation/editing probes; P3-S3 replaces them with Effects-page input.
         [action, id, target] if action == "create" => {
             let chain = Chain {
                 id: id.clone(),
@@ -33,7 +40,7 @@ fn effects(args: &[String]) -> io::Result<()> {
         }
         [action, id] if action == "enable" => service.enable(&service.load(id)?),
         [action, id] if action == "disable" => service.disable(id),
-        [action, id] if action == "delete" => service.delete(id),
+        [action, id] if action == "remove" => service.delete(id),
         [action] if action == "remove-all" => service.remove_all(),
         [action, id, value] if action == "boost" => {
             let gain: f32 = value.parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid gain"))?;
@@ -168,10 +175,7 @@ fn effects(args: &[String]) -> io::Result<()> {
                 thread::sleep(Duration::from_millis(20));
             }
         }
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "effects: create <id> <target> | enable/disable/delete <id> | boost <id> <dB> | remove-all",
-        )),
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "effects: list | remove <chain> | remove-all")),
     }
 }
 
@@ -191,7 +195,9 @@ fn main() {
             return;
         }
         (Some("--help" | "-h"), None) => {
-            println!("Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version]");
+            println!(
+                "Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version | effects list | effects remove <chain> | effects remove-all]"
+            );
             return;
         }
         (None, None) => {}

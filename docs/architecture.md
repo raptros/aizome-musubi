@@ -73,12 +73,14 @@ follow the current default. Each band is a left/right builtin pair; per-channel
 links connect successive bands. The same backend thread writes all keyed band
 controls with `SetEffectParams`, observes the capture node's `Props.params`
 read-back in `NodeRecord.native.effect_params`, and only then saves the edited
-JSON/conf. The service calls `EnableUnitFiles` before `StartUnit`, and `StopUnit`
-before `DisableUnitFiles`. D22's `delete` and `remove_all` stop/disable first,
-remove only chain definitions and generated confs, and optionally remove the
-single clock drop-in. `effects::paths` lists every effect/clock write target.
-The packaged binary's headless `effects` commands exercise the same Rust
-service and PipeWire edit path in the VM.
+JSON/conf. The enableable template has `WantedBy=default.target`; the service
+calls `EnableUnitFiles` before `StartUnit`, and `StopUnit` before
+`DisableUnitFiles`. D22's `delete` and `remove_all` stop/disable first, remove
+only chain definitions and generated confs, and optionally remove the single
+clock drop-in. `effects::paths` lists every effect/clock write target. The
+packaged headless `effects list | remove | remove-all` recovery commands do not
+need the GUI; VM-only creation, edit and meter commands exercise the same
+service/backend path until the Effects page owns creation.
 
 
 
