@@ -63,7 +63,9 @@ dependencies = [
  "aizome-sys",
  "libc",
  "pipewire",
+ "serde",
  "serde_json",
+ "zbus",
 ]
 
 [[package]]
