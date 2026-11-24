@@ -243,12 +243,15 @@ try:
 
     with subtest("Mixer fader writes via WirePlumber and live sink meter"):
         click_element("Mixer")
-        until("Mixer output fader", lambda: any(
-            (e.get("name") or "").startswith("fader-Output-") for e in elements()))
-        faders = [e for e in elements() if (e.get("name") or "").startswith("fader-Output-")
-                  and e["role"] == "slider"]
-        assert faders, elements()
-        fader = max(faders, key=lambda e: e["rect"][0])
+        # The default output's strip: its fader id carries the Pulse index,
+        # which pipewire-pulse sets to the node's object.serial.
+        dump = json.loads(user("pw-dump"))
+        default_name = user("pactl get-default-sink").strip()
+        default_serial = next(
+            o["info"]["props"]["object.serial"] for o in dump
+            if o.get("type") == "PipeWire:Interface:Node"
+            and o["info"]["props"].get("node.name") == default_name)
+        fader = until("default output fader", lambda: element(f"fader-Output-{default_serial}"))
         assert not fader.get("disabled"), fader
         initial = default_volume()
         x, y, width, height = fader["rect"]
