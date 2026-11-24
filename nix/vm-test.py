@@ -187,7 +187,7 @@ try:
         unit = "aizome-musubi-effect@vm.service"
         user("aizome-musubi effects create vm musubi-vm-default")
         def active():
-            return user(f"systemctl --user is-active {unit}").strip() == "active"
+            return user(f"systemctl --user is-active {unit} || true").strip() == "active"
         until("effect unit active", active)
         def chain_nodes():
             return json.loads(user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
@@ -218,6 +218,7 @@ try:
         boosted_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
         effect_db = 20 * __import__("math").log10(boosted_peak / flat_peak)
         assert 9 < effect_db < 15, (flat_peak, boosted_peak, effect_db)
+        print("effect meter levels:", flat_peak, boosted_peak, effect_db)
         user("systemctl --user stop musubi-vm-eq-tone.service")
         user("systemctl --user start musubi-vm-player.service")
         gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
