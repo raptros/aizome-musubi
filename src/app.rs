@@ -195,14 +195,16 @@ pub enum Msg {
     EffectEnable(bool),
     EffectBypass(bool),
     EffectBand(usize, Band),
+    EffectBandEnd,
+    EffectSettle(u64),
     EffectBandType(usize, usize),
     EffectValueInput(usize, usize, String),
     EffectValueCommit(usize, usize),
     EffectAddBand,
     EffectDelete,
-    EffectDeleteConfirmed,
+    EffectDeleteConfirmed(String),
     EffectRemoveAll,
-    EffectRemoveAllConfirmed,
+    EffectRemoveAllConfirmed(Vec<String>),
     Activated,
     Matrix(MatrixMsg),
     Backend(Event),
@@ -291,6 +293,11 @@ pub struct Musubi {
     effect_undo: Vec<(Chain, Chain)>,
     effect_redo: Vec<(Chain, Chain)>,
     effect_pending: Option<(Chain, Chain, usize, RequestId)>,
+    effect_observing: Option<(Chain, Chain, bool)>,
+    effect_queued: Option<(usize, Band)>,
+    effect_burst: Option<(Chain, Chain)>,
+    effect_replay: Option<(Chain, Chain, bool)>,
+    effect_generation: u64,
     pub graph: Graph,
     connection: Option<Connection>,
     clock_defaults: Option<(u32, u32)>,
@@ -689,11 +696,35 @@ impl Musubi {
                         };
                         derive_status(&state, present, target)
                     }
+                    Err(_) if !chain.enabled => Status::Stopped,
                     Err(error) => Status::Failed(error),
                 };
                 (chain.id.clone(), status)
             })
             .collect();
+        self.finish_effect_save();
+    }
+    fn finish_effect_save(&mut self) {
+        let Some((_, after, _)) = &self.effect_observing else { return };
+        let observed = self.effect_chains.iter().any(|chain| chain == after)
+            && self.effect_statuses.iter().any(|(id, status)| {
+                id == &after.id && matches!((after.enabled, status), (true, Status::Running) | (false, Status::Stopped))
+            });
+        if observed {
+            let (before, after, record) = self.effect_observing.take().unwrap();
+            if record {
+                self.effect_undo.push((before, after));
+                self.effect_redo.clear();
+            }
+            self.notice = Some("EQ change observed.".into());
+            if let Some((first, last, undo)) = self.effect_replay.take() {
+                if undo {
+                    self.effect_redo.push((first, last));
+                } else {
+                    self.effect_undo.push((first, last));
+                }
+            }
+        }
     }
     fn effect_save(&mut self, before: Chain, after: Chain, record: bool) {
         let Some(service) = &self.effects_service else { return };
@@ -711,10 +742,13 @@ impl Musubi {
         };
         match result {
             Ok(()) => {
-                // The service and its unit report the result; never display a requested value as observed.
                 self.reload_effects();
                 if self.selected_effect() == Some(&after) {
-                    if record {
+                    if before.enabled || after.enabled {
+                        self.effect_observing = Some((before, after, record));
+                        self.notice = Some("Applying… waiting for the EQ chain to report its state.".into());
+                        self.finish_effect_save();
+                    } else if record {
                         self.effect_undo.push((before, after));
                         self.effect_redo.clear();
                     }
@@ -728,16 +762,80 @@ impl Musubi {
             }
         }
     }
-    fn effect_band(&mut self, index: usize, band: Band) {
+    fn replay_effect(&mut self, undo: bool) {
+        self.settle_effect_band();
+        if self.effect_pending.is_some() || self.effect_observing.is_some() {
+            self.notice = Some("EQ undo waiting for the observed change.".into());
+            return;
+        }
+        let transaction = if undo { self.effect_undo.pop() } else { self.effect_redo.pop() };
+        let Some((before, after)) = transaction else { return };
+        let (current, desired) = if undo { (&after, &before) } else { (&before, &after) };
+        if self.selected_effect() != Some(current) {
+            self.notice = Some("EQ chain changed since this undo entry.".into());
+            if undo {
+                self.effect_undo.push((before, after));
+            } else {
+                self.effect_redo.push((before, after));
+            }
+            return;
+        }
+        let changed_bands: Vec<_> = current
+            .bands
+            .iter()
+            .zip(&desired.bands)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(index, _)| index)
+            .collect();
+        self.effect_replay = Some((before.clone(), after.clone(), undo));
+        if current.enabled
+            && changed_bands.len() == 1
+            && current.bands.len() == desired.bands.len()
+            && current.bands[changed_bands[0]].kind == desired.bands[changed_bands[0]].kind
+            && current.target == desired.target
+            && current.bypass == desired.bypass
+        {
+            let index = changed_bands[0];
+            self.effect_band_queued(index, desired.bands[index].clone());
+        } else {
+            self.effect_save(current.clone(), desired.clone(), false);
+            if self.effect_observing.is_none() && self.selected_effect() == Some(desired) {
+                let (first, last, undo) = self.effect_replay.take().unwrap();
+                if undo {
+                    self.effect_redo.push((first, last));
+                } else {
+                    self.effect_undo.push((first, last));
+                }
+            } else if self.effect_observing.is_none() {
+                self.effect_replay = None;
+                if undo {
+                    self.effect_undo.push((before, after));
+                } else {
+                    self.effect_redo.push((before, after));
+                }
+            }
+        }
+    }
+    fn effect_band(&mut self, index: usize, band: Band, cx: &mut Cx<Msg>) {
+        self.effect_generation += 1;
+        cx.after(Duration::from_millis(500), Msg::EffectSettle(self.effect_generation));
+        self.effect_band_queued(index, band);
+    }
+    fn effect_band_queued(&mut self, index: usize, band: Band) {
+        if self.effect_pending.is_some() {
+            self.effect_queued = Some((index, band));
+            return;
+        }
         let Some(before) = self.selected_effect().cloned() else { return };
-        if before.bands.get(index) == Some(&band) || self.effect_pending.is_some() {
+        if before.bands.get(index) == Some(&band) {
             return;
         }
         let mut after = before.clone();
         let Some(slot) = after.bands.get_mut(index) else { return };
         *slot = band;
         if let Err(error) = after.validate() {
-            self.notice = Some(error.to_string());
+            self.notice = Some(format!("Effects: {error}"));
             return;
         }
         let node_name = format!("musubi_eq.{}", before.id);
@@ -762,8 +860,51 @@ impl Musubi {
             }
             self.effect_pending = Some((before, after, index, request));
             self.send_command(Command::SetEffectParams { node: capture, params, request });
+            self.pump_effect_fake();
         } else {
-            self.effect_save(before, after, true);
+            self.effect_save(before.clone(), after.clone(), false);
+            if self.selected_effect() == Some(&after) {
+                self.record_effect_band(before, after);
+            }
+        }
+    }
+    fn pump_effect_fake(&mut self) {
+        if let Some(fake) = &self.fake {
+            let events = std::iter::from_fn(|| fake.borrow_mut().next_event()).collect::<Vec<_>>();
+            for event in events {
+                match event {
+                    Event::Delta(delta) => {
+                        self.graph.apply(delta);
+                        self.finish_effect_edit();
+                    }
+                    Event::CommandResult { request, result: Err(reason) }
+                        if self.effect_pending.as_ref().is_some_and(|pending| pending.3 == request) =>
+                    {
+                        self.effect_pending = None;
+                        self.effect_queued = None;
+                        self.effect_replay = None;
+                        self.notice = Some(format!("EQ edit failed: {reason}"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    fn record_effect_band(&mut self, before: Chain, after: Chain) {
+        match &mut self.effect_burst {
+            Some((first, last)) if first.id == before.id => *last = after,
+            _ => {
+                self.settle_effect_band();
+                self.effect_burst = Some((before, after));
+            }
+        }
+    }
+    fn settle_effect_band(&mut self) {
+        if let Some((before, after)) = self.effect_burst.take() {
+            if before != after {
+                self.effect_undo.push((before, after));
+                self.effect_redo.clear();
+            }
         }
     }
     fn finish_effect_edit(&mut self) {
@@ -783,12 +924,27 @@ impl Musubi {
             Ok(()) => {
                 let (before, after, _, _) = self.effect_pending.take().unwrap();
                 self.reload_effects();
-                self.effect_undo.push((before, after));
-                self.effect_redo.clear();
+                if let Some((first, last, undo)) = self.effect_replay.take() {
+                    if self.selected_effect() == Some(&after) {
+                        if undo {
+                            self.effect_redo.push((first, last));
+                        } else {
+                            self.effect_undo.push((first, last));
+                        }
+                    } else {
+                        self.notice = Some("EQ undo read-back did not match.".into());
+                    }
+                } else if self.selected_effect() == Some(&after) {
+                    self.record_effect_band(before, after);
+                }
+                if let Some((index, band)) = self.effect_queued.take() {
+                    self.effect_band_queued(index, band);
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => {
                 self.effect_pending = None;
+                self.effect_queued = None;
                 self.notice = Some(format!("Effects: {error}"));
             }
         }
@@ -1583,21 +1739,37 @@ impl Musubi {
         Some(format!("{from_name} · {} → {to_name} · {} · {state}", describe(source), describe(target)))
     }
     pub fn status_sentence(&self) -> Option<String> {
-        self.notice
-            .clone()
-            .or_else(|| {
+        let chain_status =
+            self.effect_selected.as_ref().and_then(|id| self.effect_statuses.iter().find(|(name, _)| name == id)).map(
+                |(_, status)| {
+                    format!(
+                        "{} EQ chain · {}",
+                        self.selected_effect().map_or("EQ", |c| c.name.as_str()),
+                        effects::page::status_text(status)
+                    )
+                },
+            );
+        let error = self
+            .effect_selected
+            .as_ref()
+            .and_then(|id| self.effect_statuses.iter().find(|(name, _)| name == id))
+            .is_some_and(|(_, status)| {
+                matches!(status, Status::Failed(_) | Status::StartLimit | Status::TargetMissing | Status::NodesMissing)
+            });
+        let sentence = if self.page == Page::Effects && error {
+            chain_status
+        } else {
+            self.notice.clone().or_else(|| {
                 if self.page == Page::Effects {
-                    self.effect_selected
-                        .as_ref()
-                        .and_then(|id| self.effect_statuses.iter().find(|(name, _)| name == id))
-                        .map(|(_, status)| format!("EQ chain · {}", effects::page::status_text(status)))
+                    chain_status
                 } else if self.page == Page::Mixer {
                     self.mixer_hover.clone()
                 } else {
                     self.hover_sentence()
                 }
             })
-            .map(|sentence| fit_status(&sentence))
+        };
+        sentence.map(|sentence| fit_status(&sentence))
     }
 
     fn unavailable(&self) -> Element<Msg> {
@@ -1838,8 +2010,12 @@ impl Program for Musubi {
         ) {
             self.notice = None;
         }
+        if self.effect_observing.is_some() {
+            self.refresh_effect_statuses();
+        }
         match msg {
             Msg::EffectSelect(id) => {
+                self.settle_effect_band();
                 self.effect_selected = Some(id);
                 self.effect_name_input = self.selected_effect().map_or_else(String::new, |c| c.name.clone());
                 self.effect_values = Default::default();
@@ -1921,7 +2097,19 @@ impl Program for Musubi {
                     self.effect_save(before, after, true);
                 }
             }
-            Msg::EffectBand(index, band) => self.effect_band(index, band),
+            Msg::EffectBand(index, band) => self.effect_band(index, band, cx),
+            Msg::EffectBandEnd => {
+                self.effect_generation += 1;
+                cx.after(Duration::from_millis(50), Msg::EffectSettle(self.effect_generation));
+            }
+            Msg::EffectSettle(generation) if generation == self.effect_generation => {
+                if self.effect_pending.is_some() || self.effect_queued.is_some() {
+                    cx.after(Duration::from_millis(50), Msg::EffectSettle(generation));
+                } else {
+                    self.settle_effect_band();
+                }
+            }
+            Msg::EffectSettle(_) => {}
             Msg::EffectBandType(index, kind) => {
                 if let Some(band) = self.selected_effect().and_then(|c| c.bands.get(index)).cloned() {
                     let mut band = band;
@@ -1930,7 +2118,7 @@ impl Program for Musubi {
                         2 => BandKind::HighShelf,
                         _ => BandKind::Peaking,
                     };
-                    self.effect_band(index, band);
+                    self.effect_band(index, band, cx);
                 }
             }
             Msg::EffectValueInput(index, field, value) => {
@@ -1949,7 +2137,7 @@ impl Program for Musubi {
                             2 => band.q = value,
                             _ => {}
                         }
-                        self.effect_band(index, band);
+                        self.effect_band(index, band, cx);
                     } else if !text.is_empty() {
                         self.notice = Some("Enter a numeric EQ value".into());
                     }
@@ -1981,18 +2169,21 @@ impl Program for Musubi {
                                 service.paths.conf(&chain.id).unwrap().display()
                             ),
                         )
-                        .default_button("Delete chain", Msg::EffectDeleteConfirmed)
+                        .default_button("Delete chain", Msg::EffectDeleteConfirmed(chain.id.clone()))
                         .cancel_button("Cancel"),
                     );
                 }
             }
-            Msg::EffectDeleteConfirmed => {
-                if let (Some(id), Some(service)) = (&self.effect_selected, &self.effects_service) {
-                    match service.delete(id) {
+            Msg::EffectDeleteConfirmed(id) => {
+                if let Some(service) = &self.effects_service {
+                    match service.delete(&id) {
                         Ok(()) => {
-                            self.effect_selected = None;
+                            if self.effect_selected.as_deref() == Some(&id) {
+                                self.effect_selected = None;
+                            }
                             self.effect_undo.clear();
                             self.effect_redo.clear();
+                            self.effect_burst = None;
                             self.reload_effects();
                         }
                         Err(error) => self.notice = Some(format!("Effects: {error}")),
@@ -2002,14 +2193,33 @@ impl Program for Musubi {
             Msg::EffectRemoveAll => {
                 self.effect_page_menu = false;
                 if let Some(service) = &self.effects_service {
-                    cx.alert(self.window, Alert::new("Remove Musubi effects and clock settings", format!(
-                        "Stop and disable all Musubi effect units; remove {} and {}. Other applications' files are not touched.",
-                        service.paths.effects.display(), service.paths.clock.display()
-                    )).default_button("Remove all", Msg::EffectRemoveAllConfirmed).cancel_button("Cancel"));
+                    match service.removal_manifest() {
+                        Ok(resources) => {
+                            let description = if resources.is_empty() {
+                                "No Musubi effects or clock settings found.".to_owned()
+                            } else {
+                                format!(
+                                    "Stop and disable these units and remove these paths:\n{}\nOther applications' files are not touched.",
+                                    resources.join("\n")
+                                )
+                            };
+                            cx.alert(
+                                self.window,
+                                Alert::new("Remove Musubi effects and clock settings", description)
+                                    .default_button("Remove all", Msg::EffectRemoveAllConfirmed(resources))
+                                    .cancel_button("Cancel"),
+                            );
+                        }
+                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                    }
                 }
             }
-            Msg::EffectRemoveAllConfirmed => {
+            Msg::EffectRemoveAllConfirmed(resources) => {
                 if let Some(service) = &self.effects_service {
+                    if !matches!(service.removal_manifest(), Ok(current) if current == resources) {
+                        self.notice = Some("Effects changed since confirmation; review the list again.".into());
+                        return;
+                    }
                     match service.remove_all() {
                         Ok(()) => {
                             self.effect_selected = None;
@@ -2515,22 +2725,8 @@ impl Program for Musubi {
                 self.options[Self::index(self.page)].to = to;
                 self.refresh_layouts();
             }
-            Msg::Undo if self.page == Page::Effects => {
-                if let Some((before, after)) = self.effect_undo.pop() {
-                    self.effect_save(after.clone(), before.clone(), false);
-                    if self.selected_effect() == Some(&before) {
-                        self.effect_redo.push((before, after));
-                    }
-                }
-            }
-            Msg::Redo if self.page == Page::Effects => {
-                if let Some((before, after)) = self.effect_redo.pop() {
-                    self.effect_save(before.clone(), after.clone(), false);
-                    if self.selected_effect() == Some(&after) {
-                        self.effect_undo.push((before, after));
-                    }
-                }
-            }
+            Msg::Undo if self.page == Page::Effects => self.replay_effect(true),
+            Msg::Redo if self.page == Page::Effects => self.replay_effect(false),
             Msg::Undo => self.replay(true, cx),
             Msg::Redo => self.replay(false, cx),
             Msg::Inspector => {
@@ -2628,6 +2824,14 @@ impl Program for Musubi {
                 self.sync_meters(cx);
             }
             Msg::Backend(Event::CommandResult { request, result }) => {
+                if self.effect_pending.as_ref().is_some_and(|pending| pending.3 == request) {
+                    if let Err(reason) = &result {
+                        self.effect_pending = None;
+                        self.effect_queued = None;
+                        self.effect_replay = None;
+                        self.notice = Some(format!("EQ edit failed: {reason}"));
+                    }
+                }
                 for intent in self.transactions.iter_mut().flat_map(|t| &mut t.intents) {
                     if intent.request == request {
                         intent.result = Some(result.clone());

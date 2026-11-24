@@ -255,6 +255,35 @@ impl<U: Units> EffectsService<U> {
         }
         Ok(())
     }
+    /// Exact managed resources the destructive action will touch. Keep this
+    /// discovery alongside remove_all so confirmation cannot omit orphan units.
+    pub fn removal_manifest(&self) -> io::Result<Vec<String>> {
+        let mut resources = BTreeSet::new();
+        for name in self.units.listed().map_err(system_error)? {
+            if let Some(id) = name.strip_prefix("aizome-musubi-effect@").and_then(|s| s.strip_suffix(".service"))
+                && paths::checked_id(id).is_ok()
+            {
+                resources.insert(name);
+            }
+        }
+        if self.paths.effects.exists() {
+            for entry in fs::read_dir(&self.paths.effects)? {
+                let entry = entry?;
+                if matches!(entry.path().extension().and_then(|s| s.to_str()), Some("json" | "conf"))
+                    && let Some(id) = entry.path().file_stem().and_then(|s| s.to_str())
+                    && paths::checked_id(id).is_ok()
+                {
+                    resources.insert(unit(id)?);
+                }
+                resources.insert(entry.path().display().to_string());
+            }
+            resources.insert(self.paths.effects.display().to_string());
+        }
+        if self.paths.clock.exists() {
+            resources.insert(self.paths.clock.display().to_string());
+        }
+        Ok(resources.into_iter().collect())
+    }
     /// Stops units discovered through systemd *and* local JSON/config files before removing our directory.
     pub fn remove_all(&self) -> io::Result<()> {
         let mut ids = BTreeSet::new();

@@ -72,13 +72,15 @@ struct CurveState {
 pub struct Curve {
     bands: Vec<Band>,
     change: MsgMap<(usize, Band)>,
+    end: MsgMap<()>,
 }
 impl Curve {
     pub fn new<Msg: Clone + Send + 'static>(
         bands: Vec<Band>,
         change: impl Fn((usize, Band)) -> Msg + 'static,
+        end: impl Fn(()) -> Msg + 'static,
     ) -> Element<Msg> {
-        Element::new(Self { bands, change: MsgMap::new(change) }, vec![])
+        Element::new(Self { bands, change: MsgMap::new(change), end: MsgMap::new(end) }, vec![])
     }
     fn plot(size: Size) -> Rect {
         Rect::new(LEFT, TOP, (size.width - RIGHT).max(LEFT + 1.), (size.height - BOTTOM).max(TOP + 1.))
@@ -207,6 +209,8 @@ impl Widget for Curve {
             Event::PointerUp { button: PointerButton::Left, .. } if cx.state::<CurveState>().dragging => {
                 cx.state::<CurveState>().dragging = false;
                 cx.release_pointer();
+                let end = self.end.clone();
+                cx.emit(&aizome_kit::element::MsgFn::from_fn(move || end.make(())));
                 Status::Handled
             }
             Event::Scroll { delta, .. } if !self.bands.is_empty() => {

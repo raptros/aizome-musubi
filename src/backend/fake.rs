@@ -215,9 +215,36 @@ impl Backend for FakeBackend {
                 };
                 (request, result)
             }
-            Command::SetEffectGain { request, .. } | Command::SetEffectParams { request, .. } => {
-                (request, Err("effect DSP is not simulated by the fake backend".into()))
+            Command::SetEffectParams { node, params, request } => {
+                let result = if node.epoch != self.graph.epoch {
+                    Err("stale connection epoch".into())
+                } else if let Some(current) = self.graph.nodes.get(&node.id) {
+                    if let Some(error) = self.next_failure.take() {
+                        Err(error)
+                    } else {
+                        let mut changed = current.clone();
+                        for (key, value) in params {
+                            if let Some((_, previous)) =
+                                changed.native.effect_params.iter_mut().find(|(name, _)| name == &key)
+                            {
+                                *previous = value;
+                            } else {
+                                changed.native.effect_params.push((key, value));
+                            }
+                        }
+                        self.publish(GraphDelta {
+                            epoch: node.epoch,
+                            upserts: vec![Upsert::Node(changed)],
+                            removals: vec![],
+                        });
+                        Ok(())
+                    }
+                } else {
+                    Err("node not found".into())
+                };
+                (request, result)
             }
+            Command::SetEffectGain { request, .. } => (request, Err("use keyed effect parameters".into())),
             Command::StartMeters(nodes) => {
                 self.meters.clear();
                 self.meter_slots.clear();

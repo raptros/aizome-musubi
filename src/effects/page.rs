@@ -38,11 +38,15 @@ pub fn view(
         };
         let id = chain.id.clone();
         list = list.push(
-            button(format!("● {} · {} · {destination}", chain.name, status_text(status)))
-                .selected(selected == Some(chain.id.as_str()))
-                .on_press(Msg::EffectSelect(id))
-                .id(format!("chain-{}", chain.id))
-                .width(Fill),
+            column![
+                button(format!("● {}", chain.name))
+                    .selected(selected == Some(chain.id.as_str()))
+                    .on_press(Msg::EffectSelect(id))
+                    .id(format!("chain-{}", chain.id))
+                    .width(Fill),
+                text(format!("{} · {destination}", status_text(status))).size(10.).role(Role::Text3).wrap()
+            ]
+            .spacing(2.),
         );
     }
     if chains.is_empty() {
@@ -143,7 +147,7 @@ pub fn view(
             .spacing(8.),
         );
         editor = editor.push(
-            Curve::new(chain.bands.clone(), |(index, band)| Msg::EffectBand(index, band))
+            Curve::new(chain.bands.clone(), |(index, band)| Msg::EffectBand(index, band), |()| Msg::EffectBandEnd)
                 .id("effect-curve")
                 .height(250.)
                 .width(Fill),
