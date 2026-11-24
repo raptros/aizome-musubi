@@ -1,4 +1,4 @@
-//! Snapshot-driven mixer layout. The MAIN strip is outside the horizontal scroller.
+//! Snapshot-driven mixer layout with horizontally scrolling device and stream strips.
 use super::{
     Fader, LevelMeter,
     model::{Strip, StripControl, StripKind},
@@ -104,7 +104,6 @@ fn strip_view(
     audio: &AudioState,
     readings: &[MeterReading],
     now: Instant,
-    main: bool,
     linked: bool,
     route_menu: Option<(StripKind, u32)>,
     percent: bool,
@@ -125,21 +124,14 @@ fn strip_view(
         }
         StripControl::ReadOnly(_) => (0., false, None),
     };
-    let targets = if main || matches!(strip.kind, StripKind::Output | StripKind::Playback) {
-        &audio.sinks
-    } else {
-        &audio.sources
-    };
-    let current = if main {
-        audio.sinks.iter().find(|d| d.is_default).map(|d| d.index)
-    } else {
-        index.and_then(|i| match strip.kind {
-            StripKind::Playback => audio.playback.iter().find(|s| s.index == i).map(|s| s.device),
-            StripKind::Recording => audio.recording.iter().find(|s| s.index == i).map(|s| s.device),
-            _ => None,
-        })
-    };
-    let target: Element<Msg> = if main || matches!(strip.kind, StripKind::Playback | StripKind::Recording) {
+    let targets =
+        if matches!(strip.kind, StripKind::Output | StripKind::Playback) { &audio.sinks } else { &audio.sources };
+    let current = index.and_then(|i| match strip.kind {
+        StripKind::Playback => audio.playback.iter().find(|s| s.index == i).map(|s| s.device),
+        StripKind::Recording => audio.recording.iter().find(|s| s.index == i).map(|s| s.device),
+        _ => None,
+    });
+    let target: Element<Msg> = if matches!(strip.kind, StripKind::Playback | StripKind::Recording) {
         let options: Vec<_> = targets
             .iter()
             .map(|d| {
@@ -148,19 +140,12 @@ fn strip_view(
             .collect();
         let selected = targets.iter().position(|d| Some(d.index) == current);
         let indices: Vec<_> = targets.iter().map(|d| d.index).collect();
-        let names: Vec<_> = targets.iter().map(|d| d.name.clone()).collect();
         let stream_kind = strip.kind;
         dropdown(options, selected)
-            .on_select(move |position| {
-                if main {
-                    Msg::MixerDefault(StripKind::Output, names[position].clone())
-                } else {
-                    Msg::MixerMove(stream_kind, index.unwrap_or_default(), indices[position])
-                }
-            })
+            .on_select(move |position| Msg::MixerMove(stream_kind, index.unwrap_or_default(), indices[position]))
             .enabled(reason.is_none() && !targets.is_empty())
             .width(112.)
-            .id(if main { "main-target" } else { "strip-target" })
+            .id("strip-target")
             .tooltip(
                 current
                     .and_then(|i| targets.iter().find(|d| d.index == i))
@@ -242,7 +227,7 @@ fn strip_view(
     )
     .width(34.)
     .height(Fill);
-    let title = if main { "MAIN" } else { &strip.name };
+    let title = strip.name.as_str();
     let mut mute_button = button("M").width(32.).selected(muted);
     if muted {
         mute_button = mute_button.primary().destructive();
@@ -255,7 +240,7 @@ fn strip_view(
             .id(format!("mute-{kind:?}-{}", index.unwrap_or_default())),
     ]
     .spacing(2.);
-    if matches!(kind, StripKind::Output | StripKind::Input) && !main {
+    if matches!(kind, StripKind::Output | StripKind::Input) {
         let device = if kind == StripKind::Output { &audio.sinks } else { &audio.sources };
         if let Some(d) = index.and_then(|i| device.iter().find(|d| d.index == i)) {
             buttons = buttons.push(
@@ -268,7 +253,7 @@ fn strip_view(
             );
         }
     }
-    if matches!(kind, StripKind::Output | StripKind::Input | StripKind::Native) && !main {
+    if matches!(kind, StripKind::Output | StripKind::Input | StripKind::Native) {
         if let Some(id) = index.or_else(|| node.map(|n| n.id)) {
             let mut link_button = button("↔").width(32.).selected(linked);
             if linked {
@@ -298,7 +283,7 @@ fn strip_view(
     } else {
         container(text(" ")).height(22.).into()
     };
-    let subtitle = if main { &strip.name } else { &strip.subtitle };
+    let subtitle = &strip.subtitle;
     let label = format!("{} · {} · {:?}", strip.name, subtitle, kind);
     mouse_area(
         container(
@@ -390,7 +375,6 @@ pub fn view(
                 || s.name.to_lowercase().contains(&filter)
                 || s.subtitle.to_lowercase().contains(&filter))
     };
-    let main = main_output(strips, audio);
     let mut content = row![].spacing(12.).height(Fill);
     for (kind, heading) in [
         (StripKind::Output, "OUTPUTS"),
@@ -414,7 +398,6 @@ pub fn view(
                 audio,
                 readings,
                 now,
-                false,
                 linked.contains(&(strip.kind, id)),
                 route_menu,
                 percent,
@@ -423,51 +406,12 @@ pub fn view(
         }
         content = content.push(column![text(heading).size(10.).role(Role::Text3), strips_row].spacing(5.).height(Fill));
     }
-    let scrolling = scroll(content).horizontal().height(Fill);
-    let main_strip: Element<Msg> = main.map_or_else(
-        || container(text("No default output")).width(120.).height(Fill).into(),
-        |s| strip_view(s, audio, readings, now, true, false, route_menu, percent, meters),
-    );
-    row![
-        scrolling,
-        container(column![text("MAIN").size(10.).role(Role::Text3), main_strip].spacing(5.))
-            .padding([0., 8.])
-            .width(136.)
-            .height(Fill)
-    ]
-    .spacing(4.)
-    .padding([8., 8., 8., 8.])
-    .height(Fill)
-    .width(Fill)
-    .into()
-}
-
-fn main_output<'a>(strips: &'a [Strip], audio: &AudioState) -> Option<&'a Strip> {
-    let name = &audio.sinks.iter().find(|d| d.is_default)?.name;
-    strips.iter().find(|s| s.kind == StripKind::Output && s.pulse_name.as_ref() == Some(name))
+    container(scroll(content).horizontal().height(Fill).id("mixer-strips")).padding(8.).height(Fill).width(Fill).into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aizome_sys::audio::AudioDevice;
-
-    #[test]
-    fn main_uses_pulse_name_when_descriptions_match() {
-        let mut audio = AudioState::default();
-        audio.sinks = vec![
-            AudioDevice { name: "first".into(), description: "Speakers".into(), ..Default::default() },
-            AudioDevice {
-                name: "second".into(),
-                description: "Speakers".into(),
-                is_default: true,
-                ..Default::default()
-            },
-        ];
-        let graph = crate::graph::Graph::default();
-        let strips = crate::mixer::model::strips(&audio, &graph);
-        assert_eq!(main_output(&strips, &audio).unwrap().pulse_name.as_deref(), Some("second"));
-    }
 
     #[test]
     fn long_targets_keep_distinct_suffixes() {

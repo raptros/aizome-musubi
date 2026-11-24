@@ -416,7 +416,7 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
         }
         controls.push(
             popover(
-                button("Show…").icon(Icon::Plus).toolbar().on_press(Msg::MixerShow).id("mixer-show"),
+                button("Sections").icon(Icon::ListFilter).toolbar().on_press(Msg::MixerShow).id("mixer-show"),
                 container(column(checkboxes).spacing(8.).padding(12.)).width(220.),
                 config.mixer_show,
             )

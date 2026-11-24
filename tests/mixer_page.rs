@@ -1,5 +1,5 @@
 use aizome_kit::{
-    Appearance, Point, Size,
+    Appearance, Point, Size, Vec2,
     sidestep_ui::{Modifiers, NamedKey},
     testing::{Harness, assert_golden},
     theme::ThemeChoice,
@@ -181,6 +181,34 @@ fn populated_mixer_goldens() {
         h.resize(w, Size::new(900., 560.));
         assert_golden(&mut h, w, format!("tests/snapshots/mixer-page-narrow-{theme}.png"), 1.);
     }
+}
+#[test]
+fn horizontal_scroll_and_keyboard_focus_reveal_hidden_strip() {
+    let (mut h, _, _) = setup(false);
+    let w = h.window();
+    h.resize(w, Size::new(900., 560.));
+    let viewport = h.find_id(w, "mixer-strips").unwrap();
+    let last = "fader-Recording-10024";
+    assert!(h.find_id(w, last).unwrap().x0 >= viewport.x1);
+
+    let wheel = Point::new(viewport.x0 + 20., viewport.y0 + 4.);
+    h.scroll(w, wheel, Vec2::new(3000., 0.));
+    let visible = h.find_id(w, last).unwrap();
+    assert!(visible.x0 >= viewport.x0 && visible.x1 <= viewport.x1);
+    assert_golden(&mut h, w, "tests/snapshots/mixer-page-scrolled-end-night.png", 1.);
+
+    h.scroll(w, wheel, Vec2::new(-3000., 0.));
+    assert!(h.find_id(w, last).unwrap().x0 >= viewport.x1);
+    h.click(w, h.find_id(w, "fader-Output-10010").unwrap().center());
+    for _ in 0..100 {
+        if h.focused_name(w).as_deref() == Some(last) {
+            break;
+        }
+        h.named(w, NamedKey::Tab, Modifiers::NONE);
+    }
+    assert_eq!(h.focused_name(w).as_deref(), Some(last));
+    let revealed = h.find_id(w, last).unwrap();
+    assert!(revealed.x0 >= viewport.x0 && revealed.x1 <= viewport.x1);
 }
 
 #[test]
