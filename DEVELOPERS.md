@@ -37,8 +37,7 @@ nix build ../aizome-musubi#test-fonts-conf --out-link /tmp/aizome-fonts.conf
 nix develop .#aizome -c bash -c 'cd ../aizome-musubi && cargo fmt && AIZOME_FONT_DIR=/tmp/aizome-fonts FONTCONFIG_FILE=/tmp/aizome-fonts.conf cargo test --locked'
 ```
 
-(In the Sekka contribution workspace the same command runs under `tools/heavy … tools/nix-env`.) Use Sekka's pinned Aizome fonts rather than
-an arbitrary system font. `tests/app.rs` exercises the app in the kit's
+(In the Sekka contribution workspace the same command runs under `tools/heavy … tools/nix-env`.) Use the flake's pinned Aizome fonts and its fonts.conf (pinned faces plus Noto Sans CJK for 結び): the package checks the goldens with exactly these, in a sandbox with no other fonts. Without `FONTCONFIG_FILE`, fontconfig picks whatever CJK font the machine has and every golden differs slightly. `tests/app.rs` exercises the app in the kit's
 headless Harness with fixture graph data; `tests/matrix.rs` checks layout,
 input and exact redraws; graph/backend unit tests use `tests/fixtures/`.
 `tests/snapshots/` holds the Night and Day Harness goldens. Run the tests
