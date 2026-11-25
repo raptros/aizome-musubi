@@ -206,6 +206,7 @@ pub enum Msg {
     EffectPreset(Option<String>),
     EffectPageMenu,
     EffectEnable(bool),
+    EffectRetry,
     EffectBypass(bool),
     EffectBand(usize, Band),
     EffectBandEnd,
@@ -1846,6 +1847,15 @@ impl Musubi {
                     chain_status
                 } else if self.page == Page::Mixer {
                     self.mixer_hover.clone()
+                } else if self.page == Page::Clock {
+                    Some(format!(
+                        "Forced clock: {} · {} · DSP {:.1}%",
+                        self.clock_settings.force_rate.map_or_else(|| "Automatic".into(), |rate| format!("{rate} Hz")),
+                        self.clock_settings
+                            .force_quantum
+                            .map_or_else(|| "Automatic".into(), |quantum| format!("{quantum} frames")),
+                        self.clock_load.current_percent()
+                    ))
                 } else {
                     self.hover_sentence()
                 }
@@ -2209,6 +2219,17 @@ impl Program for Musubi {
                     self.effect_save(before, after, true);
                 }
             }
+            Msg::EffectRetry => {
+                if let (Some(chain), Some(service)) = (self.selected_effect(), &self.effects_service) {
+                    let result = effects::service::unit(&chain.id)
+                        .map_err(|error| error.to_string())
+                        .and_then(|unit| service.units.start(&unit));
+                    if let Err(error) = result {
+                        self.notice = Some(format!("Retry failed: {error}"));
+                    }
+                    self.refresh_effect_statuses();
+                }
+            }
             Msg::EffectBypass(bypass) => {
                 if let Some(before) = self.selected_effect().cloned() {
                     let mut after = before.clone();
@@ -2279,16 +2300,16 @@ impl Program for Musubi {
                     cx.alert(
                         self.window,
                         Alert::new(
-                            "Delete EQ chain",
+                            "Delete EQ",
                             format!(
-                                "Remove “{}”, its unit {}, and files {} and {}?",
+                                "Remove “{}” and its unit?\n{}\nFiles:\n{}\n{}",
                                 chain.name,
                                 effects::service::unit(&chain.id).unwrap_or_default(),
                                 service.paths.json(&chain.id).unwrap().display(),
                                 service.paths.conf(&chain.id).unwrap().display()
                             ),
                         )
-                        .default_button("Delete chain", Msg::EffectDeleteConfirmed(chain.id.clone()))
+                        .destructive_button("Delete EQ", Msg::EffectDeleteConfirmed(chain.id.clone()))
                         .cancel_button("Cancel"),
                     );
                 }
@@ -3428,6 +3449,11 @@ impl Program for Musubi {
             format!("{cards} {}", if cards == 1 { "device" } else { "devices" })
         } else if self.page == Page::Effects {
             chains_label(self.effect_chains.len())
+        } else if self.page == Page::Clock {
+            let rate = self.clock_settings.force_rate.map_or_else(|| "Automatic".into(), |value| format!("{value} Hz"));
+            let quantum =
+                self.clock_settings.force_quantum.map_or_else(|| "Automatic".into(), |value| value.to_string());
+            format!("Forced {rate} · {quantum} frames · DSP {:.1}%", self.clock_load.current_percent())
         } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {

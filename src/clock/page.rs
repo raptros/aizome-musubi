@@ -1,11 +1,23 @@
 //! Clock controls and profiler diagnostics, rendered only from observed state.
-use super::{Load, Settings};
+use super::{Effective, Load, Settings};
 use crate::app::Msg;
 use aizome_kit::{Element, column, prelude::*, row};
 
 pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> {
     let read_only = settings.read_only.is_some();
-    let value = |n: Option<u32>, suffix: &str| n.map_or_else(|| "Unavailable".into(), |n| format!("{n} {suffix}"));
+    let value = |n: Effective<u32>, suffix: &str| match n {
+        Effective::Unavailable => "Unavailable".into(),
+        Effective::Varies => "varies".into(),
+        Effective::Value(n) => format!("{n} {suffix}"),
+    };
+    let (effective_rate, effective_quantum) = load.effective();
+    let period = match (effective_rate, effective_quantum) {
+        (Effective::Value(rate), Effective::Value(quantum)) if rate > 0 => {
+            format!("Graph period · {:.2} ms", quantum as f64 * 1000. / rate as f64)
+        }
+        (Effective::Varies, _) | (_, Effective::Varies) => "Graph period · varies".into(),
+        _ => "Graph period · unavailable".into(),
+    };
     let rates = settings.rates();
     let quanta = settings.quanta();
     let rate_index = settings.force_rate.and_then(|n| rates.iter().position(|&r| r == n)).map(|i| i + 1).unwrap_or(0);
@@ -21,13 +33,9 @@ pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> 
         caption("CLOCK"),
         text("Effective graph values").semibold(),
         row![
-            text(format!("Rate · {}", value(settings.rate, "Hz"))).width(175.),
-            text(format!("Quantum · {}", value(settings.quantum, "frames"))).width(210.),
-            text(
-                settings
-                    .period_ms()
-                    .map_or_else(|| "Graph period · unavailable".into(), |ms| format!("Graph period · {ms:.2} ms"))
-            )
+            text(format!("Rate · {}", value(effective_rate, "Hz"))).width(175.),
+            text(format!("Quantum · {}", value(effective_quantum, "frames"))).width(210.),
+            text(period)
         ]
         .spacing(12.),
         text("One graph period is not measured round-trip latency.").size(11.).role(Role::Text3),
@@ -66,10 +74,16 @@ pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> 
         checkbox("Use at every start", persistent).on_toggle(Msg::ClockPersist).enabled(!read_only && ((settings.force_rate.is_some() || settings.force_quantum.is_some()) || persistent)).id("clock-persist")
     ).push(text("Uses only the explicit forced numbers. Takes effect at the next PipeWire start. `aizome-musubi effects remove-all` removes this setting.").size(11.).role(Role::Text3).wrap());
 
-    let current = load.samples.back().map_or(0., |(_, sample)| *sample);
-    let mut bars = row![].spacing(2.).height(72.).align(Align::End);
-    for (_, sample) in load.samples.iter().rev().take(60).rev() {
-        bars = bars.push(container(spacer()).fill(Tone::Focus).width(5.).height((sample / 100. * 68.).max(2.)));
+    let current = load.current_percent();
+    let mut bars = row![].spacing(2.).height(110.).align(Align::End).width(Fill);
+    let now = load.samples.back().map(|(instant, _)| *instant);
+    for second in (0..60).rev() {
+        let sample = now
+            .and_then(|now| {
+                load.samples.iter().rev().find(|(at, _)| now.saturating_duration_since(*at).as_secs() == second)
+            })
+            .map_or(0., |(_, value)| *value);
+        bars = bars.push(container(spacer()).fill(Tone::Focus).width(Fill).height((sample / 100. * 106.).max(1.)));
     }
     let mut table = column![
         row![
@@ -103,7 +117,19 @@ pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> 
     column![
         container(clock).fill(Tone::Chrome).border(Edge::Line).padding(16.).width(Fill),
         container(
-            column![caption("DSP LOAD · LAST 60 S"), text(format!("{current:.1}% of graph cycle")), bars].spacing(8.)
+            column![
+                caption("DSP LOAD · LAST 60 S"),
+                text(format!("{current:.1}% of graph cycle")),
+                row![
+                    column![text("100%").size(10.).mono(), spacer(), text("0%").size(10.).mono()]
+                        .height(110.)
+                        .width(38.),
+                    bars
+                ]
+                .spacing(8.)
+                .width(Fill)
+            ]
+            .spacing(8.)
         )
         .fill(Tone::Chrome)
         .border(Edge::Line)

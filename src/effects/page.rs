@@ -8,8 +8,17 @@ pub fn status_text(status: &Status) -> String {
         Status::Running => "running".into(),
         Status::NodesMissing => "nodes missing".into(),
         Status::TargetMissing => "target missing".into(),
-        Status::Failed(reason) => format!("failed · {reason}"),
-        Status::StartLimit => "failed · start limit hit".into(),
+        Status::Failed(reason) => format!(
+            "failed · {}",
+            match reason.as_str() {
+                "exit-code" => "PipeWire filter-chain exited with an error",
+                "signal" => "PipeWire filter-chain was terminated by a signal",
+                "timeout" => "PipeWire filter-chain timed out",
+                "resources" => "Insufficient resources to start the filter-chain",
+                _ => reason,
+            }
+        ),
+        Status::StartLimit => "failed · too many start attempts".into(),
         Status::Stopped => "stopped".into(),
     }
 }
@@ -37,20 +46,31 @@ pub fn view(
             }
         };
         let id = chain.id.clone();
+        let (dot, role) = match status {
+            Status::Running => ("●", Role::Success),
+            Status::Failed(_) | Status::StartLimit => ("●", Role::Danger),
+            _ => ("○", Role::Text3),
+        };
         list = list.push(
             column![
-                button(format!("● {}", chain.name))
-                    .selected(selected == Some(chain.id.as_str()))
-                    .on_press(Msg::EffectSelect(id))
-                    .id(format!("chain-{}", chain.id))
-                    .width(Fill),
-                text(format!("{} · {destination}", status_text(status))).size(10.).role(Role::Text3).wrap()
+                row![
+                    sidebar_item(Icon::SlidersHorizontal, chain.name.as_str(), selected == Some(chain.id.as_str()))
+                        .on_press(Msg::EffectSelect(id))
+                        .id(format!("chain-{}", chain.id))
+                        .width(Fill),
+                    text(dot).role(role)
+                ]
+                .spacing(3.)
+                .width(Fill),
+                text(format!("{} · {destination}", status_text(status))).size(10.).role(role).wrap()
             ]
-            .spacing(2.),
+            .spacing(3.)
+            .padding([3., 4.])
+            .width(Fill),
         );
     }
     if chains.is_empty() {
-        list = list.push(text("No EQ chains. Create one to get started.").size(12.).role(Role::Text3));
+        list = list.push(text("No EQ chains yet").size(12.).role(Role::Text3));
     }
     list = list.push(caption("OTHER EFFECTS"));
     for name in external {
@@ -84,33 +104,38 @@ pub fn view(
                     Status::Running => Role::Success,
                     Status::Failed(_) | Status::StartLimit => Role::Danger,
                     _ => Role::Text3,
-                })
+                }),
+                if matches!(status, Status::Failed(_) | Status::StartLimit) {
+                    Element::from(button("Retry").on_press(Msg::EffectRetry).id("effect-retry"))
+                } else {
+                    Element::from(spacer().width(0.))
+                }
             ]
             .spacing(8.),
         );
-        let choices: Vec<Element<Msg>> = std::iter::once((Target::FollowDefault, "Follow default".to_owned()))
+        let targets: Vec<(Target, String)> = std::iter::once((Target::FollowDefault, "Follow default".to_owned()))
             .chain(
                 outputs
                     .iter()
                     .filter(|(name, _)| !name.starts_with("musubi_eq."))
                     .map(|(name, label)| (Target::Output(name.clone()), label.clone())),
             )
-            .map(|(target, label)| button(label).on_press(Msg::EffectTarget(target)).width(Fill).into())
             .collect();
-        let target_label = match &chain.target {
-            Target::FollowDefault => "Follow default".into(),
-            Target::Output(name) => {
-                outputs.iter().find(|(id, _)| id == name).map_or_else(|| name.clone(), |(_, label)| label.clone())
-            }
-        };
-        let preset_choices: Vec<Element<Msg>> =
-            std::iter::once(button("Flat").on_press(Msg::EffectPreset(None)).width(Fill).into())
-                .chain(
-                    chains.iter().filter(|c| c.id != chain.id).map(|c| {
-                        button(c.name.clone()).on_press(Msg::EffectPreset(Some(c.id.clone()))).width(Fill).into()
-                    }),
-                )
-                .collect();
+        let target_index = targets.iter().position(|(target, _)| *target == chain.target);
+        let target_values: Vec<Target> = targets.iter().map(|(target, _)| target.clone()).collect();
+        let preset_chains: Vec<&Chain> = chains.iter().filter(|candidate| candidate.id != chain.id).collect();
+        let preset_index = preset_chains
+            .iter()
+            .position(|candidate| candidate.bands == chain.bands)
+            .map(|index| index + 2)
+            .unwrap_or(if chain.bands.iter().all(|band| band.gain == 0.) { 1 } else { 0 });
+        let preset_ids: Vec<String> = preset_chains.iter().map(|candidate| candidate.id.clone()).collect();
+        let current_id = chain.id.clone();
+        let preset_labels: Vec<String> = std::iter::once("Custom".into())
+            .chain(std::iter::once("Flat".into()))
+            .chain(preset_chains.iter().map(|candidate| candidate.name.clone()))
+            .collect();
+        let _ = (target_menu, preset_menu);
         editor = editor.push(
             row![
                 text("Name").size(11.).role(Role::Text2),
@@ -121,19 +146,19 @@ pub fn view(
                     .width(170.)
                     .id("effect-name"),
                 text("Sends to").size(11.).role(Role::Text2),
-                popover(
-                    button(target_label).on_press(Msg::EffectTargetMenu).id("effect-target"),
-                    container(column(choices).spacing(3.).padding(8.)).width(210.),
-                    target_menu
-                )
-                .on_dismiss(Msg::EffectTargetMenu),
+                dropdown(targets.into_iter().map(|(_, label)| label).collect::<Vec<_>>(), target_index)
+                    .on_select(move |index| Msg::EffectTarget(target_values[index].clone()))
+                    .id("effect-target")
+                    .width(150.),
                 text("Preset").size(11.).role(Role::Text2),
-                popover(
-                    button("Flat / saved").on_press(Msg::EffectPresetMenu).id("effect-preset"),
-                    container(column(preset_choices).spacing(3.).padding(8.)).width(210.),
-                    preset_menu
-                )
-                .on_dismiss(Msg::EffectPresetMenu),
+                dropdown(preset_labels, Some(preset_index))
+                    .on_select(move |index| Msg::EffectPreset(match index {
+                        0 => Some(current_id.clone()),
+                        1 => None,
+                        _ => Some(preset_ids[index - 2].clone()),
+                    }))
+                    .id("effect-preset")
+                    .width(145.),
             ]
             .spacing(8.),
         );
@@ -142,7 +167,7 @@ pub fn view(
                 checkbox("Enable", chain.enabled).on_toggle(Msg::EffectEnable).id("effect-enable"),
                 checkbox("Bypass", chain.bypass).on_toggle(Msg::EffectBypass).id("effect-bypass"),
                 spacer(),
-                button("Delete chain…").icon(Icon::Trash).on_press(Msg::EffectDelete).id("effect-delete")
+                button("Delete EQ…").icon(Icon::Trash).on_press(Msg::EffectDelete).id("effect-delete")
             ]
             .spacing(8.),
         );
@@ -212,8 +237,13 @@ pub fn view(
         editor = editor.push(
             container(
                 column![
-                    text("No EQ chain selected").size(18.),
-                    text("Select a chain or create a new EQ.").role(Role::Text3)
+                    text(if chains.is_empty() { "No EQ chains yet" } else { "No EQ chain selected" }).size(18.),
+                    text(if chains.is_empty() {
+                        "Create a new EQ to get started."
+                    } else {
+                        "Select a chain or create a new EQ."
+                    })
+                    .role(Role::Text3)
                 ]
                 .spacing(8.),
             )
@@ -230,7 +260,7 @@ pub fn view(
                 row![
                     spacer(),
                     popover(
-                        button("Effects menu").icon(Icon::Ellipsis).on_press(Msg::EffectPageMenu).id("effects-menu"),
+                        button("⋯").tooltip("Effects menu").on_press(Msg::EffectPageMenu).id("effects-menu"),
                         container(column(menu).padding(8.)).width(360.),
                         page_menu
                     )

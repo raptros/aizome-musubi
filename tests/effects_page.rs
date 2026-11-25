@@ -162,7 +162,12 @@ fn create_edit_keys_pointer_undo_redo_and_failed_status() {
     units.state.borrow_mut().active = "failed".into();
     units.state.borrow_mut().result = "exit-code".into();
     h.send(Msg::Backend(Event::Delta(Default::default())));
-    assert!(h.program().status_sentence().unwrap().contains("exit-code"));
+    assert!(h.program().status_sentence().unwrap().contains("PipeWire filter-chain exited with an error"));
+    assert!(EffectsService { paths: paths.clone(), units: TestUnits(units.clone()) }.load("eq-1").unwrap().enabled);
+    let calls = units.calls.borrow().len();
+    click_id(&mut h, "effect-retry");
+    assert_eq!(units.calls.borrow().len(), calls + 1);
+    assert!(units.calls.borrow().last().unwrap().starts_with("start "));
 }
 #[test]
 fn goldens_and_confirmation() {
@@ -170,6 +175,8 @@ fn goldens_and_confirmation() {
         let (mut h, _, units, paths) = setup(theme, day, true);
         let w = h.window();
         assert_golden(&mut h, w, format!("tests/snapshots/effects-five-{theme}.png"), 1.);
+        click_id(&mut h, "effect-enable");
+        assert!(EffectsService { paths: paths.clone(), units: TestUnits(units.clone()) }.load("eq-1").unwrap().enabled);
         units.state.borrow_mut().active = "failed".into();
         units.state.borrow_mut().result = "exit-code".into();
         h.send(Msg::Backend(Event::Delta(Default::default())));

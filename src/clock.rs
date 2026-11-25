@@ -125,6 +125,27 @@ pub struct Load {
     pub samples: VecDeque<(Instant, f64)>,
     baseline: HashMap<u32, (u64, u64)>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effective<T> {
+    Unavailable,
+    Value(T),
+    Varies,
+}
+
+impl Load {
+    pub fn effective(&self) -> (Effective<u32>, Effective<u32>) {
+        fn drivers(rows: &[DriverRow], value: impl Fn(&DriverRow) -> u32) -> Effective<u32> {
+            let mut values = rows.iter().filter(|row| row.driver).map(value);
+            let Some(first) = values.next() else { return Effective::Unavailable };
+            if values.any(|next| next != first) { Effective::Varies } else { Effective::Value(first) }
+        }
+        (drivers(&self.rows, |row| row.rate), drivers(&self.rows, |row| row.quantum))
+    }
+    pub fn current_percent(&self) -> f64 {
+        self.samples.back().map_or(0., |(_, value)| *value)
+    }
+}
+
 impl Load {
     pub fn observe(&mut self, rows: Vec<DriverRow>, now: Instant) {
         for row in &rows {
@@ -208,5 +229,28 @@ mod tests {
         assert_eq!(load.delta(&later), (3, 4));
         assert_eq!(load.samples.len(), 1);
         assert_eq!(load.samples[0].1, 18.75);
+    }
+    #[test]
+    fn effective_values_follow_drivers_not_settings() {
+        let mut load = Load::default();
+        assert_eq!(load.effective(), (Effective::Unavailable, Effective::Unavailable));
+        let driver = DriverRow {
+            id: 1,
+            node: "driver".into(),
+            driver: true,
+            rate: 48000,
+            quantum: 4096,
+            busy: 0.,
+            wait: 0.,
+            errors: 0,
+            xruns: 0,
+        };
+        load.observe(
+            vec![driver.clone(), DriverRow { driver: false, rate: 96000, quantum: 128, ..driver.clone() }],
+            Instant::now(),
+        );
+        assert_eq!(load.effective(), (Effective::Value(48000), Effective::Value(4096)));
+        load.observe(vec![driver.clone(), DriverRow { id: 2, rate: 44100, quantum: 256, ..driver }], Instant::now());
+        assert_eq!(load.effective(), (Effective::Varies, Effective::Varies));
     }
 }

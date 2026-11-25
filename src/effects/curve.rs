@@ -4,6 +4,7 @@ use aizome_kit::element::MsgMap;
 use aizome_kit::hash::PaintHasher;
 use aizome_kit::layout::Constraints;
 use aizome_kit::sidestep_ui::{Cursor, Key, NamedKey, PointerButton};
+use aizome_kit::sidestep_ui::{StrokeStyle, kurbo::BezPath};
 use aizome_kit::text::TextSpec;
 use aizome_kit::widget::{Event, EventCx, Focusable, LayoutCx, PaintCx, SemanticRole, Semantics, Status, Widget};
 use aizome_kit::{Align, Element, FontSpec, Rect, Role, Size};
@@ -126,6 +127,7 @@ impl Widget for Curve {
             cx.canvas.fill_rect(Rect::new(r.x0, y, r.x1, y + 1.), t.line());
             cx.draw_text_in(label, &caption, Rect::new(0., y - 9., r.x0 - 5., y + 9.), Align::End);
         }
+        cx.draw_text_in("dB", &caption, Rect::new(0., r.y0 - 12., r.x0 - 5., r.y0 + 3.), Align::End);
         for (freq, label) in [
             (20., "20"),
             (50., "50"),
@@ -142,18 +144,20 @@ impl Widget for Curve {
             cx.canvas.fill_rect(Rect::new(x, r.y0, x + 1., r.y1), t.line());
             cx.draw_text_in(label, &caption, Rect::new(x - 16., r.y1 + 3., x + 16., r.y1 + 20.), Align::Center);
         }
-        let mut last: Option<(f64, f64)> = None;
+        cx.draw_text_in("Hz", &caption, Rect::new(r.x1 - 24., r.y0 - 12., r.x1, r.y0 + 3.), Align::End);
+        let mut path = BezPath::new();
         for pixel in 0..=r.width() as usize {
             let x = r.x0 + pixel as f64;
             let freq = 20. * 1000_f64.powf(pixel as f64 / r.width());
             let y = Self::y(response(&self.bands, freq).clamp(-15., 15.), r);
-            if let Some((prev_x, prev_y)) = last {
-                // Short axis-aligned spans connect successive samples without a new palette.
-                cx.canvas.fill_rect(Rect::new(prev_x, prev_y.min(y), x + 1., prev_y.max(y) + 1.), t.role(Role::Accent));
+            if pixel == 0 {
+                path.move_to((x, y));
+            } else {
+                path.line_to((x, y));
             }
-            last = Some((x, y));
         }
-        let selected = cx.state::<CurveState>().map_or(0, |s| s.selected);
+        cx.canvas.stroke(&path, &StrokeStyle::new(2.), t.role(Role::Accent));
+        let selected = cx.state::<CurveState>().map_or(0, |state| state.selected);
         for (index, band) in self.bands.iter().enumerate() {
             let x = Self::x(band.freq as f64, r);
             let y = Self::y(band.gain as f64, r);

@@ -98,6 +98,7 @@ fn clock_persistence_and_subscription() {
     flush(&mut h, &fake);
     h.send(Msg::ClockQuantum(256));
     flush(&mut h, &fake);
+    assert_eq!(h.program().status_sentence().as_deref(), Some("Forced clock: Automatic · 256 frames · DSP 11.2%"));
     assert_eq!(fake.borrow().clock.force_quantum, Some(256));
     click_id(&mut h, "clock-persist");
     assert_eq!(
