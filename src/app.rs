@@ -1,5 +1,8 @@
 use crate::{
-    backend::{Backend, Command, Connection, Event, Handle, RequestId, fake::FakeBackend, pipewire::PipeWireBackend},
+    backend::{
+        Backend, ClockKey, Command, Connection, Event, Handle, RequestId, fake::FakeBackend, pipewire::PipeWireBackend,
+    },
+    clock::{self, Load, Settings},
     devices,
     effects::{
         self, Band, BandKind, Chain, Target,
@@ -49,10 +52,11 @@ pub enum Page {
     Mixer,
     Effects,
     Devices,
+    Clock,
 }
 
 impl Page {
-    const ALL: [(Page, Icon, &str); 7] = [
+    const ALL: [(Page, Icon, &str); 8] = [
         (Page::Audio, Icon::Volume2, "Audio"),
         (Page::Midi, Icon::Music, "MIDI"),
         (Page::Midi2, Icon::Keyboard, "MIDI 2.0"),
@@ -60,6 +64,7 @@ impl Page {
         (Page::Mixer, Icon::SlidersHorizontal, "Mixer"),
         (Page::Effects, Icon::Activity, "Effects"),
         (Page::Devices, Icon::Usb, "Devices"),
+        (Page::Clock, Icon::Gauge, "Clock & Load"),
     ];
 
     pub fn title(self) -> &'static str {
@@ -71,6 +76,7 @@ impl Page {
             Page::Mixer => "Mixer",
             Page::Devices => "Devices",
             Page::Effects => "Effects",
+            Page::Clock => "Clock & Load",
         }
     }
     fn accepts(self, kind: PortKind) -> bool {
@@ -83,6 +89,7 @@ impl Page {
                 | (Page::Mixer, PortKind::Audio)
                 | (Page::Devices, PortKind::Audio)
                 | (Page::Effects, PortKind::Audio)
+                | (Page::Clock, PortKind::Audio)
         )
     }
 }
@@ -160,6 +167,12 @@ struct PendingAudio {
 
 #[derive(Clone, Debug)]
 pub enum Msg {
+    ClockRate(u32),
+    ClockQuantum(u32),
+    ClockClearRate,
+    ClockClearQuantum,
+    ClockAutomatic,
+    ClockPersist(bool),
     Page(Page),
     AudioWake,
     MeterTick,
@@ -301,6 +314,13 @@ pub struct Musubi {
     pub graph: Graph,
     connection: Option<Connection>,
     clock_defaults: Option<(u32, u32)>,
+    clock_settings: Settings,
+    clock_load: Load,
+    clock_paths: Option<effects::paths::Paths>,
+    clock_persistent: bool,
+    clock_pending: Option<ClockPending>,
+    clock_undo: Vec<ClockChange>,
+    clock_redo: Vec<ClockChange>,
     matrix_spike: Option<Rc<Layout>>,
     pub options: [ViewOptions; 4],
     route_selection: Vec<(GlobalId, GlobalId)>,
@@ -330,6 +350,16 @@ pub struct Musubi {
     window: WindowKey,
 }
 
+#[derive(Clone)]
+struct ClockChange {
+    before: (Option<u32>, Option<u32>),
+    after: (Option<u32>, Option<u32>),
+}
+struct ClockPending {
+    change: ClockChange,
+    requests: HashSet<RequestId>,
+    replay: Option<bool>,
+}
 fn fit_status(sentence: &str) -> String {
     const LIMIT: usize = 100;
     let Some((names, state)) = sentence.rsplit_once(" · ") else {
@@ -506,6 +536,12 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
         );
         return toolbar(controls).into();
     }
+    if config.page == Page::Clock {
+        controls.push(
+            button("Undo").icon(Icon::Undo2).toolbar().enabled(config.can_undo).on_press(Msg::Undo).id("undo").into(),
+        );
+        return toolbar(controls).into();
+    }
     controls.push(
         segmented(["Matrix", "List"], if options.list { 1 } else { 0 })
             .on_select(|index| Msg::List(index == 1))
@@ -655,7 +691,12 @@ impl Musubi {
         paths: effects::paths::Paths,
         units: Box<dyn Units>,
     ) -> Self {
-        Self { fake: Some(fake), effects_service: Some(EffectsService { paths, units }), ..Self::default() }
+        Self {
+            fake: Some(fake),
+            clock_paths: Some(paths.clone()),
+            effects_service: Some(EffectsService { paths, units }),
+            ..Self::default()
+        }
     }
     fn reload_effects(&mut self) {
         let Some(service) = &self.effects_service else { return };
@@ -946,6 +987,47 @@ impl Musubi {
                 self.effect_pending = None;
                 self.effect_queued = None;
                 self.notice = Some(format!("Effects: {error}"));
+            }
+        }
+    }
+    fn apply_clock(&mut self, after: (Option<u32>, Option<u32>), replay: Option<bool>) {
+        if self.clock_pending.is_some() || self.clock_settings.read_only.is_some() {
+            return;
+        }
+        let before = (self.clock_settings.force_rate, self.clock_settings.force_quantum);
+        if before == after {
+            return;
+        }
+        let mut requests = HashSet::new();
+        for (key, old, new) in [(ClockKey::Rate, before.0, after.0), (ClockKey::Quantum, before.1, after.1)] {
+            if old != new {
+                self.next_request += 1;
+                requests.insert(self.next_request);
+                self.send_command(Command::SetClock { key, value: new, request: self.next_request });
+            }
+        }
+        self.clock_pending = Some(ClockPending { change: ClockChange { before, after }, requests, replay });
+    }
+    fn finish_clock(&mut self) {
+        let Some(pending) = &self.clock_pending else { return };
+        if !pending.requests.is_empty()
+            || (self.clock_settings.force_rate, self.clock_settings.force_quantum) != pending.change.after
+        {
+            return;
+        }
+        let pending = self.clock_pending.take().unwrap();
+        match pending.replay {
+            Some(true) => {
+                self.clock_undo.pop();
+                self.clock_redo.push(pending.change);
+            }
+            Some(false) => {
+                self.clock_redo.pop();
+                self.clock_undo.push(pending.change);
+            }
+            None => {
+                self.clock_undo.push(pending.change);
+                self.clock_redo.clear();
             }
         }
     }
@@ -1627,7 +1709,7 @@ impl Musubi {
     }
     fn kind(&self) -> PortKind {
         match self.page {
-            Page::Audio | Page::Mixer | Page::Effects | Page::Devices => PortKind::Audio,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock => PortKind::Audio,
             Page::Midi => PortKind::Midi,
             Page::Midi2 => PortKind::Ump,
             Page::Video => PortKind::Video,
@@ -1635,7 +1717,7 @@ impl Musubi {
     }
     fn index(page: Page) -> usize {
         match page {
-            Page::Audio | Page::Mixer | Page::Effects | Page::Devices => 0,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock => 0,
             Page::Midi => 1,
             Page::Midi2 => 2,
             Page::Video => 3,
@@ -1959,12 +2041,14 @@ impl Program for Musubi {
         self.persist_enabled = self.live || self.paths.is_some();
         if self.live {
             self.paths = persistence::Paths::from_environment();
+            self.clock_paths = effects::paths::Paths::from_environment().ok();
         }
         if self.persist_enabled {
             self.options = persistence::load_options(self.paths.as_ref());
             self.mixer_options = persistence::load_mixer(self.paths.as_ref());
             self.persisted_folds = persistence::load_folds(self.paths.as_ref());
         }
+        self.clock_persistent = self.clock_paths.as_ref().is_some_and(|paths| paths.clock.exists());
         self.window = cx.open_window(WindowSpec::new("Musubi — Patchbay").size(1280., 800.).min_size(900., 560.));
         if let Some(instance) = &self.instance {
             let sender = cx.stream();
@@ -2014,6 +2098,41 @@ impl Program for Musubi {
             self.refresh_effect_statuses();
         }
         match msg {
+            Msg::ClockRate(rate) if self.clock_settings.valid_rate(rate) => {
+                self.apply_clock((Some(rate), self.clock_settings.force_quantum), None)
+            }
+            Msg::ClockQuantum(quantum) if self.clock_settings.valid_quantum(quantum) => {
+                self.apply_clock((self.clock_settings.force_rate, Some(quantum)), None)
+            }
+            Msg::ClockRate(_) | Msg::ClockQuantum(_) => {
+                self.notice = Some("Clock choice is not allowed by PipeWire settings.".into())
+            }
+            Msg::ClockClearRate => self.apply_clock((None, self.clock_settings.force_quantum), None),
+            Msg::ClockClearQuantum => self.apply_clock((self.clock_settings.force_rate, None), None),
+            Msg::ClockAutomatic => {
+                self.apply_clock((None, None), None);
+                if let Some(paths) = &self.clock_paths {
+                    if let Err(error) = clock::clear(paths) {
+                        self.notice = Some(format!("Clock drop-in: {error}"));
+                    } else {
+                        self.clock_persistent = false;
+                    }
+                }
+            }
+            Msg::ClockPersist(enabled) => {
+                if let Some(paths) = &self.clock_paths {
+                    let result = if enabled {
+                        clock::persist(paths, self.clock_settings.force_rate, self.clock_settings.force_quantum)
+                    } else {
+                        clock::clear(paths)
+                    };
+                    if let Err(error) = result {
+                        self.notice = Some(format!("Clock drop-in: {error}"));
+                    } else {
+                        self.clock_persistent = enabled;
+                    }
+                }
+            }
             Msg::EffectSelect(id) => {
                 self.settle_effect_band();
                 self.effect_selected = Some(id);
@@ -2496,6 +2615,12 @@ impl Program for Musubi {
                 }
             }
             Msg::Page(page) => {
+                if page == Page::Clock && self.page != Page::Clock {
+                    self.clock_load = Load::default();
+                    self.send_command(Command::StartProfiler);
+                } else if page != Page::Clock && self.page == Page::Clock {
+                    self.send_command(Command::StopProfiler);
+                }
                 self.page = page;
                 self.hovered = None;
                 self.mixer_hover = None;
@@ -2727,6 +2852,16 @@ impl Program for Musubi {
             }
             Msg::Undo if self.page == Page::Effects => self.replay_effect(true),
             Msg::Redo if self.page == Page::Effects => self.replay_effect(false),
+            Msg::Undo if self.page == Page::Clock => {
+                if let Some(change) = self.clock_undo.last().cloned() {
+                    self.apply_clock(change.before, Some(true));
+                }
+            }
+            Msg::Redo if self.page == Page::Clock => {
+                if let Some(change) = self.clock_redo.last().cloned() {
+                    self.apply_clock(change.after, Some(false));
+                }
+            }
             Msg::Undo => self.replay(true, cx),
             Msg::Redo => self.replay(false, cx),
             Msg::Inspector => {
@@ -2736,6 +2871,15 @@ impl Program for Musubi {
             Msg::Unlink(from, to) => {
                 if let Some(index) = self.submit_pairs(vec![(from, to, false)], cx) {
                     self.history.record(index);
+                }
+            }
+            Msg::Backend(Event::ClockSettings(settings)) => {
+                self.clock_settings = settings;
+                self.finish_clock();
+            }
+            Msg::Backend(Event::ProfilerRows(rows)) => {
+                if self.page == Page::Clock {
+                    self.clock_load.observe(rows, Instant::now());
                 }
             }
             Msg::Backend(Event::ClockDefaults { rate, quantum }) => {
@@ -2749,6 +2893,8 @@ impl Program for Musubi {
                     self.errors.clear();
                     self.removed.clear();
                     self.clock_defaults = None;
+                    self.clock_settings = Settings::default();
+                    self.clock_pending = None;
                     self.refresh_layouts();
                 }
                 self.connection = Some(connection);
@@ -2824,6 +2970,15 @@ impl Program for Musubi {
                 self.sync_meters(cx);
             }
             Msg::Backend(Event::CommandResult { request, result }) => {
+                if self.clock_pending.as_ref().is_some_and(|pending| pending.requests.contains(&request)) {
+                    if let Err(reason) = &result {
+                        self.clock_pending = None;
+                        self.notice = Some(format!("Clock change failed: {reason}"));
+                    } else if let Some(pending) = &mut self.clock_pending {
+                        pending.requests.remove(&request);
+                        self.finish_clock();
+                    }
+                }
                 if self.effect_pending.as_ref().is_some_and(|pending| pending.3 == request) {
                     if let Err(reason) = &result {
                         self.effect_pending = None;
@@ -2995,6 +3150,16 @@ impl Program for Musubi {
             .padding([0., 10.])
             .width(Fill),
         );
+        side = side.push(
+            container(
+                sidebar_item(Icon::Gauge, "Clock & Load", self.page == Page::Clock)
+                    .on_press(Msg::Page(Page::Clock))
+                    .id("Clock & Load")
+                    .width(Fill),
+            )
+            .padding([0., 10.])
+            .width(Fill),
+        );
         let version = match &self.connection {
             Some(Connection::Up(version)) => format!("PipeWire {version}"),
             _ => "PipeWire".to_owned(),
@@ -3052,6 +3217,8 @@ impl Program for Musubi {
             } else {
                 self.unavailable()
             }
+        } else if self.page == Page::Clock {
+            clock::page::view(&self.clock_settings, &self.clock_load, self.clock_persistent)
         } else if self.page == Page::Effects {
             let outputs = self
                 .audio
@@ -3105,7 +3272,7 @@ impl Program for Musubi {
                 Page::Audio => "No audio ports. Audio devices and applications appear here when PipeWire finds them.",
                 Page::Midi => "No MIDI ports. MIDI devices and applications appear here when PipeWire finds them.",
                 Page::Midi2 => "No MIDI 2.0 ports. UMP devices and applications appear here when PipeWire finds them.",
-                Page::Mixer | Page::Effects | Page::Devices => unreachable!("content handled above"),
+                Page::Mixer | Page::Effects | Page::Devices | Page::Clock => unreachable!("content handled above"),
             };
             container(text(explanation).size(20.).role(Role::Text2).wrap())
                 .align_x(Align::Center)
@@ -3183,6 +3350,8 @@ impl Program for Musubi {
                     format!("Effects · {}", chains_label(self.effect_chains.len()))
                 } else if self.page == Page::Devices {
                     format!("Devices · {cards} {}", if cards == 1 { "device" } else { "devices" })
+                } else if self.page == Page::Clock {
+                    "Clock & Load".into()
                 } else {
                     title
                 },
@@ -3192,6 +3361,8 @@ impl Program for Musubi {
                     format!("Effects · {}", self.effect_chains.len())
                 } else if self.page == Page::Devices {
                     format!("Devices · {cards}")
+                } else if self.page == Page::Clock {
+                    "Clock & Load".into()
                 } else {
                     short_title
                 },
@@ -3205,7 +3376,9 @@ impl Program for Musubi {
                 from: options.from.clone(),
                 to: options.to.clone(),
                 has_ports,
-                can_undo: if self.page == Page::Effects {
+                can_undo: if self.page == Page::Clock {
+                    !self.clock_undo.is_empty()
+                } else if self.page == Page::Effects {
                     !self.effect_undo.is_empty()
                 } else {
                     self.history.undo_label(&self.transactions).is_some()

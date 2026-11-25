@@ -7,6 +7,7 @@ use super::{
     Handle,
     meters::{MAX_METERS, MeterReading, MeterStore, Slot},
 };
+use crate::clock::{DriverRow, Settings};
 use crate::graph::{
     GlobalId, Graph, GraphDelta, LinkRecord, LinkState, Properties, Upsert, dump,
     legal::{LinkLegality, can_link},
@@ -21,6 +22,9 @@ pub struct FakeBackend {
     pending_connect: HashMap<GlobalId, u64>,
     pub commands: Vec<Command>,
     meters: MeterStore,
+    pub clock: Settings,
+    pub profiler_rows: Vec<DriverRow>,
+    profiling: bool,
     meter_slots: HashMap<Handle, Arc<Slot>>,
 }
 
@@ -35,6 +39,14 @@ impl FakeBackend {
             events: VecDeque::from([
                 Event::Connection(Connection::Up("1.6.9".into())),
                 Event::ClockDefaults { rate: 48_000, quantum: 1024 },
+                Event::ClockSettings(Settings {
+                    rate: Some(48_000),
+                    quantum: Some(1024),
+                    allowed_rates: vec![44_100, 48_000, 96_000],
+                    min_quantum: Some(64),
+                    max_quantum: Some(2048),
+                    ..Settings::default()
+                }),
                 Event::Delta(delta),
             ]),
             next_id,
@@ -43,6 +55,16 @@ impl FakeBackend {
             pending_connect: HashMap::new(),
             meters: MeterStore::default(),
             meter_slots: HashMap::new(),
+            clock: Settings {
+                rate: Some(48_000),
+                quantum: Some(1024),
+                allowed_rates: vec![44_100, 48_000, 96_000],
+                min_quantum: Some(64),
+                max_quantum: Some(2048),
+                ..Settings::default()
+            },
+            profiler_rows: Vec::new(),
+            profiling: false,
             commands: Vec::new(),
         })
     }
@@ -103,6 +125,12 @@ impl FakeBackend {
     fn script_meter_bytes(&self, node: Handle, bytes: &[u8]) {
         if let Some(slot) = self.meter_slots.get(&node) {
             slot.process(bytes, bytes.len(), self.meters.elapsed_ns());
+        }
+    }
+    pub fn publish_profiler(&mut self, rows: Vec<DriverRow>) {
+        self.profiler_rows = rows.clone();
+        if self.profiling {
+            self.events.push_back(Event::ProfilerRows(rows));
         }
     }
     /// Simulate a lost connection and discard all epoch-bound meter values.
@@ -243,6 +271,23 @@ impl Backend for FakeBackend {
                     Err("node not found".into())
                 };
                 (request, result)
+            }
+            Command::SetClock { key, value, request } => {
+                let result = self.next_failure.take().map_or(Ok(()), Err);
+                if result.is_ok() {
+                    self.clock.observe(0, Some(key.name()), Some(&crate::clock::force_value(value)));
+                    self.events.push_back(Event::ClockSettings(self.clock.clone()));
+                }
+                (request, result)
+            }
+            Command::StartProfiler => {
+                self.profiling = true;
+                self.events.push_back(Event::ProfilerRows(self.profiler_rows.clone()));
+                return;
+            }
+            Command::StopProfiler => {
+                self.profiling = false;
+                return;
             }
             Command::SetEffectGain { request, .. } => (request, Err("use keyed effect parameters".into())),
             Command::StartMeters(nodes) => {

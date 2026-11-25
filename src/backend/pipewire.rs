@@ -22,11 +22,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::ClockKey;
 use super::{Backend, Command, Connection, Event, RequestId};
 use super::{
     Handle,
     meters::{MAX_METERS, MeterReading, MeterStore, Slot},
 };
+use crate::clock::{self, Settings};
 use crate::graph::{
     ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NativeProps, NodeRecord,
     PortRecord, Properties, Upsert,
@@ -38,6 +40,9 @@ type Sink = Box<dyn Fn(Event) + Send>;
 type Objects = Rc<RefCell<HashMap<u32, Bound>>>;
 type Pending = Rc<RefCell<Batch>>;
 
+type ClockState = Rc<RefCell<Settings>>;
+type ClockEvents = Rc<RefCell<Vec<Event>>>;
+type ClockWrites = Rc<RefCell<HashMap<RequestId, (ClockKey, Option<u32>, Instant)>>>;
 type Actions = Rc<RefCell<HashMap<RequestId, Action>>>;
 enum Action {
     Connect { output: u32, input: u32, proxy: pw::link::Link, started: Instant },
@@ -112,6 +117,7 @@ enum Bound {
     Link(pw::link::LinkListener, pw::link::Link),
     Device(pw::device::DeviceListener, pw::device::Device),
     Client(pw::client::ClientListener, pw::client::Client),
+    Metadata(pw::metadata::MetadataListener, pw::metadata::Metadata, bool),
 }
 
 fn props(dict: Option<&DictRef>) -> Properties {
@@ -192,6 +198,12 @@ fn write_props(proxy: &pw::node::Node, property: Property) -> Result<(), String>
     Ok(())
 }
 
+fn state_value(settings: &Settings, key: ClockKey) -> Option<u32> {
+    match key {
+        ClockKey::Rate => settings.force_rate,
+        ClockKey::Quantum => settings.force_quantum,
+    }
+}
 fn bind(
     global: &pw::registry::GlobalObject<&DictRef>,
     registry: &pw::registry::RegistryRc,
@@ -199,10 +211,53 @@ fn bind(
     pending: &Pending,
     actions: &Actions,
     results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
+    clock: &ClockState,
+    clock_events: &ClockEvents,
+    clock_writes: &ClockWrites,
 ) {
     let id = global.id;
     let p = props(global.props);
     let result: Result<Bound, pw::Error> = match global.type_ {
+        pw::types::ObjectType::Metadata if p.get("metadata.name").is_some_and(|name| name == "settings") => {
+            registry.bind::<pw::metadata::Metadata, _>(global).map(|proxy| {
+                let writable = global
+                    .permissions
+                    .contains(pw::permissions::PermissionFlags::W | pw::permissions::PermissionFlags::X);
+                let observed = clock.clone();
+                let events = clock_events.clone();
+                let writes = clock_writes.clone();
+                let done = results.clone();
+                {
+                    let mut state = observed.borrow_mut();
+                    state.read_only = (!writable)
+                        .then(|| "PipeWire settings metadata is read-only (missing write permission)".into());
+                    events.borrow_mut().push(Event::ClockSettings(state.clone()));
+                }
+                let listener = proxy
+                    .add_listener_local()
+                    .property(move |subject, key, _, value| {
+                        if observed.borrow_mut().observe(subject, key, value) {
+                            let state = observed.borrow().clone();
+                            events.borrow_mut().push(Event::ClockSettings(state.clone()));
+                            let completed: Vec<_> = writes
+                                .borrow()
+                                .iter()
+                                .filter_map(|(&request, (force, expected, _))| {
+                                    (key == Some(force.name()) && state_value(&state, *force) == *expected)
+                                        .then_some(request)
+                                })
+                                .collect();
+                            for request in completed {
+                                writes.borrow_mut().remove(&request);
+                                done.borrow_mut().push((request, Ok(())));
+                            }
+                        }
+                        0
+                    })
+                    .register();
+                Bound::Metadata(listener, proxy, writable)
+            })
+        }
         pw::types::ObjectType::Node => registry.bind::<pw::node::Node, _>(global).map(|proxy| {
             let proxy = Rc::new(proxy);
             let can_write =
@@ -477,6 +532,9 @@ fn connect(
     clock_defaults: &Rc<RefCell<Option<(u32, u32)>>>,
     actions: &Actions,
     results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
+    clock: &ClockState,
+    clock_events: &ClockEvents,
+    clock_writes: &ClockWrites,
 ) -> Result<Session, String> {
     let context = pw::context::ContextRc::new(loop_, None).map_err(|e| e.to_string())?;
     let core = context
@@ -491,13 +549,28 @@ fn connect(
     let reg = registry.clone();
     let seen_actions = actions.clone();
     let seen_results = results.clone();
+    let seen_clock = clock.clone();
+    let seen_clock_events = clock_events.clone();
+    let seen_clock_writes = clock_writes.clone();
     let removed = objects.clone();
     let removed_batch = pending.clone();
     let removed_actions = actions.clone();
     let removed_results = results.clone();
     let registry_listener = registry
         .add_listener_local()
-        .global(move |global| bind(global, &reg, &items, &batch, &seen_actions, &seen_results))
+        .global(move |global| {
+            bind(
+                global,
+                &reg,
+                &items,
+                &batch,
+                &seen_actions,
+                &seen_results,
+                &seen_clock,
+                &seen_clock_events,
+                &seen_clock_writes,
+            )
+        })
         .global_remove(move |id| {
             removed.borrow_mut().remove(&id);
             removed_batch.borrow_mut().remove(id);
@@ -522,6 +595,10 @@ fn connect(
     let down = failure.clone();
     let error_actions = actions.clone();
     let error_results = results.clone();
+    let error_clock = clock.clone();
+    let error_clock_events = clock_events.clone();
+    let error_writes = clock_writes.clone();
+    let error_objects = objects.clone();
     let core_listener = core
         .add_listener_local()
         .info(move |info| {
@@ -556,6 +633,19 @@ fn connect(
             for request in &requests {
                 complete(&error_actions, &error_results, *request, Err(format!("PipeWire error {code}: {message}")));
             }
+            let metadata_error = error_objects
+                .borrow()
+                .values()
+                .any(|bound| matches!(bound, Bound::Metadata(_, proxy, _) if proxy.upcast_ref().id() == id));
+            if metadata_error {
+                let reason = format!("PipeWire settings metadata is read-only: {message} ({code})");
+                error_clock.borrow_mut().read_only = Some(reason.clone());
+                error_clock_events.borrow_mut().push(Event::ClockSettings(error_clock.borrow().clone()));
+                for request in error_writes.borrow().keys().copied().collect::<Vec<_>>() {
+                    error_writes.borrow_mut().remove(&request);
+                    error_results.borrow_mut().push((request, Err(reason.clone())));
+                }
+            }
             // The server also reports per-object protocol errors on the core
             // ("unknown resource N", -ENOENT, for a proxy whose global just went
             // away). Only a broken connection (-EPIPE) takes the session down.
@@ -584,6 +674,7 @@ fn execute(
     actions: &Actions,
     results: &Rc<RefCell<Vec<(RequestId, Result<(), String>)>>>,
     meter_store: &MeterStore,
+    clock_writes: &ClockWrites,
 ) {
     let (request, outcome) = match command {
         Command::Connect { out, input, confirmed, request } => {
@@ -815,6 +906,31 @@ fn execute(
             }
             (request, result)
         }
+        Command::SetClock { key, value, request } => {
+            let result = (|| {
+                if value.is_some_and(|n| n == 0) {
+                    return Err("clock value must be explicit".to_owned());
+                }
+                let borrowed = session.borrow();
+                let active = borrowed.as_ref().ok_or("PipeWire unavailable")?;
+                let objects = active.objects.borrow();
+                let Some((proxy, writable)) = objects.values().find_map(|bound| match bound {
+                    Bound::Metadata(_, proxy, writable) => Some((proxy, *writable)),
+                    _ => None,
+                }) else {
+                    return Err("settings metadata unavailable".to_owned());
+                };
+                if !writable {
+                    return Err("settings metadata is read-only (missing write permission)".to_owned());
+                }
+                clock_writes.borrow_mut().insert(request, (key, value, Instant::now()));
+                let number = clock::force_value(value);
+                proxy.set_property(0, key.name(), Some("Spa:String"), Some(&number));
+                Ok(())
+            })();
+            (request, result)
+        }
+        Command::StartProfiler | Command::StopProfiler => return,
         Command::StartMeters(nodes) => {
             let mut borrowed = session.borrow_mut();
             if let Some(active) = borrowed.as_mut() {
@@ -938,6 +1054,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let last_probe = Rc::new(RefCell::new(Instant::now()));
     let ready = Rc::new(RefCell::new(None));
     let clock_defaults: Rc<RefCell<Option<(u32, u32)>>> = Default::default();
+    let clock: ClockState = Default::default();
+    let clock_events: ClockEvents = Default::default();
+    let clock_writes: ClockWrites = Default::default();
     let failure = Rc::new(RefCell::new(None));
     let session: Rc<RefCell<Option<Session>>> = Default::default();
     let next_try = Rc::new(RefCell::new(Instant::now()));
@@ -946,6 +1065,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let ready_tick = ready.clone();
     let failure_tick = failure.clone();
     let clock_tick = clock_defaults.clone();
+    let clock_state_tick = clock.clone();
+    let clock_events_tick = clock_events.clone();
+    let clock_writes_tick = clock_writes.clone();
     let session_tick = session.clone();
     let next_tick = next_try.clone();
     let backoff_tick = backoff.clone();
@@ -962,6 +1084,10 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
             for request in actions_tick.borrow().keys().copied().collect::<Vec<_>>() {
                 complete(&actions_tick, &results_tick, request, Err(format!("PipeWire down: {reason}")));
             }
+            for request in clock_writes_tick.borrow().keys().copied().collect::<Vec<_>>() {
+                clock_writes_tick.borrow_mut().remove(&request);
+                results_tick.borrow_mut().push((request, Err(format!("PipeWire down: {reason}"))));
+            }
             session_tick.borrow_mut().take();
             meters_tick.clear();
             let mut batch = pending_tick.borrow_mut();
@@ -970,6 +1096,8 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
             batch.epoch += 1;
             graph_tick.borrow_mut().apply(GraphDelta { epoch: batch.epoch, ..GraphDelta::default() });
             tick_sink(Event::Connection(Connection::Down(reason)));
+            *clock_state_tick.borrow_mut() = Settings::default();
+            tick_sink(Event::ClockSettings(clock_state_tick.borrow().clone()));
             *clock_tick.borrow_mut() = None;
             *ready_tick.borrow_mut() = None;
             *next_tick.borrow_mut() = Instant::now() + *backoff_tick.borrow();
@@ -985,6 +1113,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
                 &clock_tick,
                 &actions_tick,
                 &results_tick,
+                &clock_state_tick,
+                &clock_events_tick,
+                &clock_writes_tick,
             ) {
                 Ok(connected) => {
                     *session_tick.borrow_mut() = Some(connected);
@@ -1012,6 +1143,18 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
         if let Some(delta) = pending_tick.borrow_mut().drain() {
             graph_tick.borrow_mut().apply(delta.clone());
             tick_sink(Event::Delta(delta));
+        }
+        for event in clock_events_tick.borrow_mut().drain(..) {
+            tick_sink(event);
+        }
+        for request in clock_writes_tick
+            .borrow()
+            .iter()
+            .filter_map(|(&id, (_, _, started))| (started.elapsed() >= Duration::from_secs(3)).then_some(id))
+            .collect::<Vec<_>>()
+        {
+            clock_writes_tick.borrow_mut().remove(&request);
+            results_tick.borrow_mut().push((request, Err("settings metadata did not confirm the change".into())));
         }
         let expired: Vec<_> = actions_tick
             .borrow()
@@ -1044,11 +1187,19 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let command_graph = graph.clone();
     let command_actions = actions.clone();
     let command_results = results.clone();
+    let command_clock_writes = clock_writes.clone();
     let _attached = rx.attach(mainloop.loop_(), move |cmd| match cmd {
         Command::Shutdown => stop.quit(),
-        command => {
-            execute(command, &command_session, &command_graph, &pending, &command_actions, &command_results, &meters)
-        }
+        command => execute(
+            command,
+            &command_session,
+            &command_graph,
+            &pending,
+            &command_actions,
+            &command_results,
+            &meters,
+            &command_clock_writes,
+        ),
     });
     mainloop.run();
     drop(timer);

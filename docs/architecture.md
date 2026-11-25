@@ -55,7 +55,15 @@ flowchart LR
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
 | `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`, user-systemd D-Bus control and observed status; response-curve keyboard/pointer widget and snapshot-only page | edits another application's config or assumes unit startup from request success |
 
-Later phases add `clock` (settings metadata + profiler) and `setups` + `keeper` (user service binary mode). The Effects page is available when user systemd and the effects paths are available.
+`clock` models subject-0 `settings` metadata separately from the core's advertised
+defaults: effective `clock.rate` and `clock.quantum` determine one graph period,
+while force keys are explicit runtime overrides. The PipeWire thread binds the
+settings proxy and reports observed property changes; clock writes complete only
+after matching metadata read-back, with permission errors surfaced as read-only.
+The Clock & Load page retains a per-opened profiler baseline and a rolling 60 s
+DSP load series. The only persistent clock setting is
+`effects::paths::Paths::clock`; its drop-in contains explicit numeric defaults and
+is removed by Automatic and `effects remove-all`.
 
 P3-S1 establishes a filter-chain helper independently owned by a template user
 service, not by the GUI's PipeWire connection. The module installs

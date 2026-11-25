@@ -3,6 +3,7 @@ pub mod fake;
 pub mod meters;
 pub mod pipewire;
 
+use crate::clock::{DriverRow, Settings};
 use crate::graph::{GlobalId, GraphDelta};
 use meters::MeterReading;
 
@@ -49,6 +50,13 @@ pub enum Command {
         params: Vec<(String, f32)>,
         request: RequestId,
     },
+    SetClock {
+        key: ClockKey,
+        value: Option<u32>,
+        request: RequestId,
+    },
+    StartProfiler,
+    StopProfiler,
     StartMeters(Vec<Handle>),
     StopMeters,
     Shutdown,
@@ -59,6 +67,8 @@ pub enum Event {
     Delta(GraphDelta),
     CommandResult { request: RequestId, result: Result<(), String> },
     ClockDefaults { rate: u32, quantum: u32 },
+    ClockSettings(Settings),
+    ProfilerRows(Vec<DriverRow>),
     Connection(Connection),
 }
 
@@ -66,6 +76,20 @@ pub enum Event {
 pub enum Connection {
     Up(String),
     Down(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockKey {
+    Rate,
+    Quantum,
+}
+impl ClockKey {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rate => "clock.force-rate",
+            Self::Quantum => "clock.force-quantum",
+        }
+    }
 }
 
 pub trait Backend {

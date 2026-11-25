@@ -1,5 +1,6 @@
 pub mod app;
 pub mod backend;
+pub mod clock;
 pub mod devices;
 pub mod effects;
 pub mod graph;
