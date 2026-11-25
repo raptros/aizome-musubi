@@ -77,6 +77,26 @@ Evidence: `runs/2026-11-24/patchbay/phase3/s2/{unit-full,live,vm-recovery}.log`.
   - Driver/follower table: node, rate, quantum, busy/wait, errors.
 - **Tests:** unit tests for metadata parse/write, the drop-in text and profiler delta maths. Live: force quantum 256 and back to Automatic, read back from the `settings` metadata; profiler rows appear. Night/Day goldens.
 
+### P3-S4b — Effects polish (from `docs/design/visual-review-phase3-effects-preview.md`)
+The blocker (Bypass state) and the wording ("1 chains", "Studio EQ EQ chain") are fixed in `03585b9`. Majors:
+- **Chain list rows** as on Devices: icon, name, subtitle inside a filled selection; a status dot whose colour *and* text differ by state.
+- **Failed chains:**
+  - a human reason (from the unit's `Result`, e.g. "exit-code" → "PipeWire filter-chain exited with an error"), plus the last journal line if cheap;
+  - a Retry button.
+- **Enable vs state:** Enable shows the user's intent; the state text shows what's running. A failed chain stays enabled.
+- **Pop-ups:** Sends to and Preset get chevrons. Preset reads "Flat" or the preset's name, not "Flat / saved".
+- **Response curve:** a smooth line (path through the samples, 2 px, anti-aliased) with axis units (dB, Hz).
+
+Minors:
+- **Band table:**
+  - right-aligned numbers, consistent decimals and "+" gains;
+  - the selected band highlighted in the table and named in the status bar;
+  - a per-band On toggle and remove control.
+- **Labels:** clearer wording ("Effects menu" → "⋯" with a tooltip). Consistent naming: New EQ / Delete EQ… / Delete EQ.
+- **Empty state:** "No EQ chains yet".
+- **Delete dialog:** paths on their own lines, never broken mid-token; a destructive-styled button.
+- **Day:** a stronger checkbox outline.
+
 ### P3-S5 — VM, docs, reviews
 - **VM check:**
   1. Create an EQ chain from the Effects page with real input. The unit runs and `musubi_eq.<chain>` appears.
