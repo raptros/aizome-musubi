@@ -265,17 +265,13 @@ try:
     with subtest("Clock & Load settings from compositor input and managed drop-in cleanup"):
         click_element("Clock & Load")
         until("clock quantum selector", lambda: element("clock-quantum"))
-        click_element("clock-quantum")
-        choices = until("256 offered in quantum popup", lambda: (
-            entries if any(e.get("text", "").strip() == "256" for e in entries) else None
-        ) if (entries := popover_elements()) else None)
-        for _ in range(len(choices) + 2):
-            if any(e.get("text", "").strip() == "256" and e.get("focused") for e in popover_elements()):
-                break
-            input_("key tab")
-        else:
-            raise AssertionError(("256 quantum not keyboard reachable", popover_elements()))
-        input_("key return")
+        # The kit's dropdown opens a menu, not a popover; typing filters its
+        # rows and Return picks the first match.
+        def choose_quantum(value):
+            click_element("clock-quantum")
+            input_("type " + shlex.quote(str(value)))
+            input_("key return")
+        choose_quantum(256)
         def metadata():
             return user("pw-metadata -n settings 0")
         def has_quantum(value):
@@ -296,17 +292,7 @@ try:
         observations.append({"clock_automatic": metadata()})
         capture("00-clock-automatic")
         # Persist once more to demonstrate the documented recovery command removes it.
-        click_element("clock-quantum")
-        choices = until("256 offered again", lambda: (
-            entries if any(e.get("text", "").strip() == "256" for e in entries) else None
-        ) if (entries := popover_elements()) else None)
-        for _ in range(len(choices) + 2):
-            if any(e.get("text", "").strip() == "256" and e.get("focused") for e in popover_elements()):
-                break
-            input_("key tab")
-        else:
-            raise AssertionError(("256 quantum not keyboard reachable", popover_elements()))
-        input_("key return")
+        choose_quantum(256)
         until("forced again", lambda: has_quantum(256))
         click_element("clock-persist")
         assert "default.clock.quantum = 256" in user(f"cat {drop_in}")
