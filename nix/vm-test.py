@@ -262,6 +262,59 @@ try:
         assert user("test ! -e ~/.config/aizome-musubi/effects && echo clean").strip() == "clean"
         click_element("Audio")
         until("Audio matrix", lambda: element("matrix"))
+    with subtest("Clock & Load settings from compositor input and managed drop-in cleanup"):
+        click_element("Clock & Load")
+        until("clock quantum selector", lambda: element("clock-quantum"))
+        click_element("clock-quantum")
+        choices = until("256 offered in quantum popup", lambda: (
+            entries if any(e.get("text", "").strip() == "256" for e in entries) else None
+        ) if (entries := popover_elements()) else None)
+        for _ in range(len(choices) + 2):
+            if any(e.get("text", "").strip() == "256" and e.get("focused") for e in popover_elements()):
+                break
+            input_("key tab")
+        else:
+            raise AssertionError(("256 quantum not keyboard reachable", popover_elements()))
+        input_("key return")
+        def metadata():
+            return user("pw-metadata -n settings 0")
+        def has_quantum(value):
+            return any("clock.force-quantum" in line and f"'{value}'" in line
+                       for line in metadata().splitlines())
+        until("forced quantum 256 in settings metadata", lambda: has_quantum(256))
+        observations.append({"clock_force_256": metadata()})
+        capture("00-clock-forced")
+        click_element("clock-persist")
+        drop_in = "~/.config/pipewire/pipewire.conf.d/90-aizome-musubi-clock.conf"
+        contents = user(f"cat {drop_in}")
+        assert "default.clock.quantum = 256" in contents, contents
+        assert "default.clock.rate" not in contents, contents
+        observations.append({"clock_drop_in": contents})
+        click_element("clock-automatic")
+        until("Automatic resets quantum in settings metadata", lambda: has_quantum(0))
+        assert user(f"test ! -e {drop_in} && echo clean").strip() == "clean"
+        observations.append({"clock_automatic": metadata()})
+        capture("00-clock-automatic")
+        # Persist once more to demonstrate the documented recovery command removes it.
+        click_element("clock-quantum")
+        choices = until("256 offered again", lambda: (
+            entries if any(e.get("text", "").strip() == "256" for e in entries) else None
+        ) if (entries := popover_elements()) else None)
+        for _ in range(len(choices) + 2):
+            if any(e.get("text", "").strip() == "256" and e.get("focused") for e in popover_elements()):
+                break
+            input_("key tab")
+        else:
+            raise AssertionError(("256 quantum not keyboard reachable", popover_elements()))
+        input_("key return")
+        until("forced again", lambda: has_quantum(256))
+        click_element("clock-persist")
+        assert "default.clock.quantum = 256" in user(f"cat {drop_in}")
+        user("aizome-musubi effects remove-all")
+        assert user(f"test ! -e {drop_in} && echo clean").strip() == "clean"
+        click_element("clock-automatic")
+        until("Automatic after cleanup", lambda: has_quantum(0))
+        click_element("Audio")
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
             p.get("port.direction") == "out" and "musubi_vm_player" in n.get("node.name", "")

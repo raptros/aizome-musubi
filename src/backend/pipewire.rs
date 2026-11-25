@@ -514,10 +514,16 @@ fn start_meter(
     Ok((MeterStream { _listener: listener, _stream: stream }, slot))
 }
 
+type Profiler = Rc<RefCell<Option<super::profiler::Subscription>>>;
+type ProfilerRows = Rc<RefCell<Vec<Vec<clock::DriverRow>>>>;
 struct Session {
     // Order matters: listener hooks and bound proxies are destroyed before registry/core.
     meters: HashMap<Handle, MeterStream>,
     objects: Objects,
+    profiler: Profiler,
+    profiler_rows: ProfilerRows,
+    profiler_global_id: Rc<RefCell<Option<u32>>>,
+    profiler_wanted: Rc<RefCell<bool>>,
     _registry_listener: pw::registry::Listener,
     _core_listener: pw::core::Listener,
     _registry: pw::registry::RegistryRc,
@@ -535,8 +541,25 @@ fn connect(
     clock: &ClockState,
     clock_events: &ClockEvents,
     clock_writes: &ClockWrites,
+    profiler: &Profiler,
+    profiler_rows: &ProfilerRows,
+    profiler_wanted: &Rc<RefCell<bool>>,
 ) -> Result<Session, String> {
     let context = pw::context::ContextRc::new(loop_, None).map_err(|e| e.to_string())?;
+    // The server advertises Profiler, but binding needs its client-side
+    // marshaller registered on this context (as pw-top and pw-profiler do).
+    // The module belongs to the context, not to a page subscription.
+    let module = unsafe {
+        pw::sys::pw_context_load_module(
+            context.as_raw_ptr(),
+            c"libpipewire-module-profiler".as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        )
+    };
+    if module.is_null() {
+        eprintln!("Musubi Profiler: could not load client-side marshaller");
+    }
     let core = context
         .connect_rc(Some(pw::properties::properties! {
             "application.name" => "Musubi", "application.id" => "org.aizome.Musubi", "media.category" => "Manager"
@@ -552,6 +575,16 @@ fn connect(
     let seen_clock = clock.clone();
     let seen_clock_events = clock_events.clone();
     let seen_clock_writes = clock_writes.clone();
+    let profiler = profiler.clone();
+    let profiler_rows = profiler_rows.clone();
+    let profiler_wanted = profiler_wanted.clone();
+    let global_profiler = profiler.clone();
+    let global_profiler_rows = profiler_rows.clone();
+    let global_profiler_wanted = profiler_wanted.clone();
+    let removed_profiler = profiler.clone();
+    let profiler_global_id = Rc::new(RefCell::new(None));
+    let seen_profiler_id = profiler_global_id.clone();
+    let removed_profiler_id = profiler_global_id.clone();
     let removed = objects.clone();
     let removed_batch = pending.clone();
     let removed_actions = actions.clone();
@@ -559,6 +592,17 @@ fn connect(
     let registry_listener = registry
         .add_listener_local()
         .global(move |global| {
+            if global.type_ == pw::types::ObjectType::Profiler {
+                if seen_profiler_id.borrow().is_none() {
+                    *seen_profiler_id.borrow_mut() = Some(global.id);
+                }
+                if *global_profiler_wanted.borrow() && global_profiler.borrow().is_none() {
+                    match super::profiler::Subscription::bind(&reg, global.id, global_profiler_rows.clone()) {
+                        Ok(subscription) => *global_profiler.borrow_mut() = Some(subscription),
+                        Err(reason) => eprintln!("Musubi Profiler: {reason}"),
+                    }
+                }
+            }
             bind(
                 global,
                 &reg,
@@ -572,6 +616,10 @@ fn connect(
             )
         })
         .global_remove(move |id| {
+            if *removed_profiler_id.borrow() == Some(id) {
+                removed_profiler.borrow_mut().take();
+                *removed_profiler_id.borrow_mut() = None;
+            }
             removed.borrow_mut().remove(&id);
             removed_batch.borrow_mut().remove(id);
             let requests: Vec<_> = removed_actions
@@ -658,6 +706,10 @@ fn connect(
     Ok(Session {
         meters: HashMap::new(),
         objects,
+        profiler,
+        profiler_rows,
+        profiler_global_id,
+        profiler_wanted,
         _registry_listener: registry_listener,
         _core_listener: core_listener,
         _registry: registry,
@@ -930,7 +982,28 @@ fn execute(
             })();
             (request, result)
         }
-        Command::StartProfiler | Command::StopProfiler => return,
+        Command::StartProfiler => {
+            if let Some(active) = session.borrow().as_ref() {
+                *active.profiler_wanted.borrow_mut() = true;
+                if let Some(id) = *active.profiler_global_id.borrow() {
+                    if active.profiler.borrow().is_none() {
+                        match super::profiler::Subscription::bind(&active._registry, id, active.profiler_rows.clone()) {
+                            Ok(subscription) => *active.profiler.borrow_mut() = Some(subscription),
+                            Err(reason) => eprintln!("Musubi Profiler bind failed: {reason}"),
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        Command::StopProfiler => {
+            if let Some(active) = session.borrow().as_ref() {
+                *active.profiler_wanted.borrow_mut() = false;
+                active.profiler.borrow_mut().take();
+                active.profiler_rows.borrow_mut().clear();
+            }
+            return;
+        }
         Command::StartMeters(nodes) => {
             let mut borrowed = session.borrow_mut();
             if let Some(active) = borrowed.as_mut() {
@@ -1057,6 +1130,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let clock: ClockState = Default::default();
     let clock_events: ClockEvents = Default::default();
     let clock_writes: ClockWrites = Default::default();
+    let profiler: Profiler = Default::default();
+    let profiler_rows: ProfilerRows = Default::default();
+    let profiler_wanted = Rc::new(RefCell::new(false));
     let failure = Rc::new(RefCell::new(None));
     let session: Rc<RefCell<Option<Session>>> = Default::default();
     let next_try = Rc::new(RefCell::new(Instant::now()));
@@ -1068,6 +1144,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let clock_state_tick = clock.clone();
     let clock_events_tick = clock_events.clone();
     let clock_writes_tick = clock_writes.clone();
+    let profiler_tick = profiler.clone();
+    let profiler_rows_tick = profiler_rows.clone();
+    let profiler_wanted_tick = profiler_wanted.clone();
     let session_tick = session.clone();
     let next_tick = next_try.clone();
     let backoff_tick = backoff.clone();
@@ -1088,6 +1167,8 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
                 clock_writes_tick.borrow_mut().remove(&request);
                 results_tick.borrow_mut().push((request, Err(format!("PipeWire down: {reason}"))));
             }
+            profiler_tick.borrow_mut().take();
+            profiler_rows_tick.borrow_mut().clear();
             session_tick.borrow_mut().take();
             meters_tick.clear();
             let mut batch = pending_tick.borrow_mut();
@@ -1116,6 +1197,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
                 &clock_state_tick,
                 &clock_events_tick,
                 &clock_writes_tick,
+                &profiler_tick,
+                &profiler_rows_tick,
+                &profiler_wanted_tick,
             ) {
                 Ok(connected) => {
                     *session_tick.borrow_mut() = Some(connected);
@@ -1146,6 +1230,9 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
         }
         for event in clock_events_tick.borrow_mut().drain(..) {
             tick_sink(event);
+        }
+        for rows in profiler_rows_tick.borrow_mut().drain(..) {
+            tick_sink(Event::ProfilerRows(rows));
         }
         for request in clock_writes_tick
             .borrow()
@@ -1188,8 +1275,35 @@ fn run(rx: pw::channel::Receiver<Command>, sink: Sink, meters: MeterStore) {
     let command_actions = actions.clone();
     let command_results = results.clone();
     let command_clock_writes = clock_writes.clone();
+    let command_profiler_wanted = profiler_wanted.clone();
     let _attached = rx.attach(mainloop.loop_(), move |cmd| match cmd {
         Command::Shutdown => stop.quit(),
+        Command::StartProfiler => {
+            *command_profiler_wanted.borrow_mut() = true;
+            execute(
+                Command::StartProfiler,
+                &command_session,
+                &command_graph,
+                &pending,
+                &command_actions,
+                &command_results,
+                &meters,
+                &command_clock_writes,
+            );
+        }
+        Command::StopProfiler => {
+            *command_profiler_wanted.borrow_mut() = false;
+            execute(
+                Command::StopProfiler,
+                &command_session,
+                &command_graph,
+                &pending,
+                &command_actions,
+                &command_results,
+                &meters,
+                &command_clock_writes,
+            );
+        }
         command => execute(
             command,
             &command_session,

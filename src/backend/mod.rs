@@ -2,6 +2,7 @@
 pub mod fake;
 pub mod meters;
 pub mod pipewire;
+mod profiler;
 
 use crate::clock::{DriverRow, Settings};
 use crate::graph::{GlobalId, GraphDelta};

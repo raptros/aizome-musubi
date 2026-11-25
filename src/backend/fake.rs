@@ -345,6 +345,7 @@ mod tests {
         let mut fake = FakeBackend::from_dump(include_str!("../../tests/fixtures/studio.json"), 4).unwrap();
         assert!(matches!(fake.next_event(), Some(Event::Connection(Connection::Up(_)))));
         assert!(matches!(fake.next_event(), Some(Event::ClockDefaults { rate: 48_000, quantum: 1024 })));
+        assert!(matches!(fake.next_event(), Some(Event::ClockSettings(_))));
         assert!(matches!(fake.next_event(), Some(Event::Delta(_))));
         let out = Handle { epoch: 4, id: 100 };
         let input = Handle { epoch: 4, id: 104 };
@@ -375,6 +376,7 @@ mod tests {
         fake.next_event();
         fake.next_event();
         fake.next_event();
+        assert!(matches!(fake.next_event(), Some(Event::Delta(_))));
         let port = |id| Handle { epoch: 9, id };
         fake.command(Command::Connect { out: port(20), input: port(41), confirmed: false, request: 1 });
         assert!(

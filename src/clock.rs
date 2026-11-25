@@ -132,8 +132,8 @@ impl Load {
         }
         let load = rows
             .iter()
-            .filter(|r| r.driver && r.quantum > 0)
-            .map(|r| (r.busy / (r.busy + r.wait).max(f64::EPSILON) * 100.).clamp(0., 100.))
+            .filter(|r| r.driver && r.quantum > 0 && r.rate > 0)
+            .map(|r| (r.busy * r.rate as f64 / r.quantum as f64 / 10.).clamp(0., 100.))
             .fold(0_f64, f64::max);
         self.samples.push_back((now, load));
         while self
@@ -207,6 +207,6 @@ mod tests {
         load.observe(vec![later.clone()], now + Duration::from_secs(61));
         assert_eq!(load.delta(&later), (3, 4));
         assert_eq!(load.samples.len(), 1);
-        assert_eq!(load.samples[0].1, 25.);
+        assert_eq!(load.samples[0].1, 18.75);
     }
 }

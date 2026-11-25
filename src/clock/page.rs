@@ -67,9 +67,9 @@ pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> 
     ).push(text("Uses only the explicit forced numbers. Takes effect at the next PipeWire start. `aizome-musubi effects remove-all` removes this setting.").size(11.).role(Role::Text3).wrap());
 
     let current = load.samples.back().map_or(0., |(_, sample)| *sample);
-    let mut bars = row![].spacing(2.).height(72.);
+    let mut bars = row![].spacing(2.).height(72.).align(Align::End);
     for (_, sample) in load.samples.iter().rev().take(60).rev() {
-        bars = bars.push(container(spacer()).fill(Tone::Chrome).width(5.).height((sample / 100. * 68.).max(2.)));
+        bars = bars.push(container(spacer()).fill(Tone::Focus).width(5.).height((sample / 100. * 68.).max(2.)));
     }
     let mut table = column![
         row![

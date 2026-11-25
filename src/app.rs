@@ -3087,8 +3087,9 @@ impl Program for Musubi {
         ]
         .spacing(8.)
         .width(Fill);
-        for (page, icon, title) in
-            Page::ALL.into_iter().filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices))
+        for (page, icon, title) in Page::ALL
+            .into_iter()
+            .filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock))
         {
             let count = self
                 .graph

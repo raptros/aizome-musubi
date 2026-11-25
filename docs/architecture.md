@@ -60,10 +60,19 @@ defaults: effective `clock.rate` and `clock.quantum` determine one graph period,
 while force keys are explicit runtime overrides. The PipeWire thread binds the
 settings proxy and reports observed property changes; clock writes complete only
 after matching metadata read-back, with permission errors surfaced as read-only.
-The Clock & Load page retains a per-opened profiler baseline and a rolling 60 s
-DSP load series. The only persistent clock setting is
-`effects::paths::Paths::clock`; its drop-in contains explicit numeric defaults and
-is removed by Automatic and `effects remove-all`.
+The Clock & Load page starts the Profiler subscription on entry and drops its
+listener and proxy on exit; reconnect restores it only if the page remains open.
+The client context loads `libpipewire-module-profiler` before connecting because
+the server's Profiler global alone does not register a client-side marshaller.
+`backend::profiler` decodes each SPA Profiler point into driver and follower
+node IDs/names, clock rate and quantum, timing and xrun/error counters. `clock::Load`
+holds per-opened counter baselines and a rolling 60 s graph-cycle load series.
+The only persistent clock setting is `effects::paths::Paths::clock`; its drop-in
+contains explicit numeric defaults and is removed by Automatic and
+`effects remove-all`. `tests/clock_page.rs` covers Night/Day automatic, forced
+and read-only states with fake load rows; `tests/clock_live.rs` verifies private
+metadata and Profiler subscription. The VM selects 256 through compositor input,
+checks metadata read-back and the drop-in, then exercises Automatic and recovery.
 
 P3-S1 establishes a filter-chain helper independently owned by a template user
 service, not by the GUI's PipeWire connection. The module installs
