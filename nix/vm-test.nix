@@ -3,10 +3,13 @@
 pkgs.testers.runNixOSTest {
   name = "musubi-patchbay";
   globalTimeout = 600;
-  nodes.machine = { ... }: {
+  nodes.machine = { lib, ... }: {
     imports = [ sekka.nixosModules.aizome musubiModule ];
     programs.aizome.enable = true;
     programs.musubi.enable = true;
+    # Musubi doesn't print. CUPS's dbus notifier floods the serial console
+    # at shutdown (~480k lines) until the test's global timeout.
+    services.printing.enable = lib.mkForce false;
     environment.etc."musubi-effects-spike.conf".text = builtins.replaceStrings
       [ "musubi_test_speakers" ] [ "musubi-vm-default" ]
       (builtins.readFile ../tests/fixtures/effects-spike.conf);
