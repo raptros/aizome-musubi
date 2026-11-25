@@ -252,8 +252,8 @@ try:
             documents = [json.loads(line) for line in machine.succeed(
                 f'for f in {INSPECT}/*.json; do if test -f "$f"; then cat "$f"; printf "\\n"; fi; done'
             ).splitlines() if line.strip()]
-            return [e for doc in documents if doc.get("kind") != "window"
-                    and doc.get("pid") == w["pid"] for e in doc["elements"] if e["visible"]]
+            return [e for doc in documents if doc.get("pid") == w["pid"]
+                    for e in doc["elements"] if e["visible"]]
         until("delete confirmation", lambda: any(
             e.get("role") == "button" and e.get("text") == "Delete EQ" for e in dialog_elements()))
         for _ in range(6):
