@@ -109,6 +109,7 @@ fn clock_persistence_and_subscription() {
         "# Managed by Musubi. Applies at the next PipeWire start.\ncontext.properties = {\n    default.clock.quantum = 256\n}\n"
     );
     click_id(&mut h, "clock-automatic");
+    assert!(paths.clock.exists(), "the drop-in stays until both force keys read back cleared");
     flush(&mut h, &fake);
     assert_eq!(fake.borrow().clock.force_quantum, None);
     assert!(!paths.clock.exists());

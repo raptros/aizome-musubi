@@ -320,6 +320,8 @@ pub struct Musubi {
     clock_paths: Option<effects::paths::Paths>,
     clock_persistent: bool,
     clock_pending: Option<ClockPending>,
+    /// Automatic asked to remove the drop-in once both force keys read back cleared.
+    clock_clear_drop_in: bool,
     clock_undo: Vec<ClockChange>,
     clock_redo: Vec<ClockChange>,
     matrix_spike: Option<Rc<Layout>>,
@@ -1009,6 +1011,17 @@ impl Musubi {
         }
         self.clock_pending = Some(ClockPending { change: ClockChange { before, after }, requests, replay });
     }
+    fn clear_clock_drop_in(&mut self) {
+        if !std::mem::take(&mut self.clock_clear_drop_in) {
+            return;
+        }
+        if let Some(paths) = &self.clock_paths {
+            match clock::clear(paths) {
+                Ok(()) => self.clock_persistent = false,
+                Err(error) => self.notice = Some(format!("Clock drop-in: {error}")),
+            }
+        }
+    }
     fn finish_clock(&mut self) {
         let Some(pending) = &self.clock_pending else { return };
         if !pending.requests.is_empty()
@@ -1017,6 +1030,9 @@ impl Musubi {
             return;
         }
         let pending = self.clock_pending.take().unwrap();
+        if pending.change.after == (None, None) {
+            self.clear_clock_drop_in();
+        }
         match pending.replay {
             Some(true) => {
                 self.clock_undo.pop();
@@ -2119,12 +2135,15 @@ impl Program for Musubi {
             Msg::ClockClearRate => self.apply_clock((None, self.clock_settings.force_quantum), None),
             Msg::ClockClearQuantum => self.apply_clock((self.clock_settings.force_rate, None), None),
             Msg::ClockAutomatic => {
-                self.apply_clock((None, None), None);
-                if let Some(paths) = &self.clock_paths {
-                    if let Err(error) = clock::clear(paths) {
-                        self.notice = Some(format!("Clock drop-in: {error}"));
+                if self.clock_pending.is_some() {
+                    self.notice = Some("A clock change is still being applied; try again in a moment.".into());
+                } else if self.clock_settings.read_only.is_none() {
+                    // The drop-in goes only once both force keys read back cleared.
+                    self.clock_clear_drop_in = true;
+                    if (self.clock_settings.force_rate, self.clock_settings.force_quantum) == (None, None) {
+                        self.clear_clock_drop_in();
                     } else {
-                        self.clock_persistent = false;
+                        self.apply_clock((None, None), None);
                     }
                 }
             }
@@ -2919,6 +2938,14 @@ impl Program for Musubi {
                     self.clock_defaults = None;
                     self.clock_settings = Settings::default();
                     self.clock_pending = None;
+                    self.clock_clear_drop_in = false;
+                    // Requests of the old session will never be answered.
+                    let pending = self.effect_pending.take().is_some();
+                    if self.effect_queued.take().is_some() || pending {
+                        self.notice = Some("PipeWire went away; the EQ edit wasn't applied.".into());
+                    }
+                    self.effect_replay = None;
+                    self.effect_observing = None;
                     self.refresh_layouts();
                 }
                 self.connection = Some(connection);
@@ -2997,6 +3024,7 @@ impl Program for Musubi {
                 if self.clock_pending.as_ref().is_some_and(|pending| pending.requests.contains(&request)) {
                     if let Err(reason) = &result {
                         self.clock_pending = None;
+                        self.clock_clear_drop_in = false;
                         self.notice = Some(format!("Clock change failed: {reason}"));
                     } else if let Some(pending) = &mut self.clock_pending {
                         pending.requests.remove(&request);
