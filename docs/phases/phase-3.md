@@ -102,6 +102,26 @@ Clock & Load, seen in the goldens and the VM:
 - **Status bar:** page-specific text (forced values, load), not "16 ports".
 - **DSP load chart:** fill the card. A 60 s history with a visible axis (0–100%) and the current value; no tiny bars in an empty box.
 
+### P3-S5a — code review fixes (`docs/design/code-review-phase3.md`)
+D22 first:
+1. **Owned paths:** refuse symlinked managed directories (effects dir, and the clock drop-in's parent) before any write or delete.
+2. **Deletion:** independent of parsing the JSON. Remove the two files after unit cleanup.
+3. **`remove_all` keeps going:** it tries every resource, keeps unrelated entries, and reports an aggregate error at the end.
+4. **Stop jobs:** wait for the stop job's result and the inactive state before disabling the unit and removing its files.
+5. **Ownership:** remove only units Musubi owns. Use the template (`FragmentPath` / `SourcePath` is the module's template) plus a chain file, or an ownership marker.
+6. **Config path:** the unit reads the writer's config path. Pass the resolved path, e.g. a drop-in `Environment=` written beside the chain, or `ExecStart` using `%E`, matching `XDG_CONFIG_HOME`.
+
+Then:
+7. **Async systemd queries:** off the UI thread.
+8. **Undo after a restart:** wait for the replacement helper's nodes and their applied config.
+9. **`SetEffectParams` without a read-back:** a bounded timeout and a failure.
+10. **Disconnect:** clear pending and queued effect edits.
+11. **Automatic:** delete the drop-in only after both Automatic values read back.
+12. **Retry on a start-limited unit:** `ResetFailedUnit` before `StartUnit`.
+13. **Permissions:** files 0600, directories 0700.
+
+Done: the README limits and manual recovery commands.
+
 ### P3-S5 — VM, docs, reviews
 - **VM check:**
   1. Create an EQ chain from the Effects page with real input. The unit runs and `musubi_eq.<chain>` appears.
