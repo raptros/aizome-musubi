@@ -3246,7 +3246,8 @@ impl Program for Musubi {
         let status = if matches!(self.connection, Some(Connection::Up(_))) { "●" } else { "○" };
         let clock = self.clock_defaults.map(|(rate, quantum)| {
             format!(
-                "Defaults · {} kHz · {quantum} · {:.1} ms",
+                // The configured default, not the live graph (Clock & Load shows that).
+                "Default clock · {} kHz · {quantum} · {:.1} ms",
                 rate as f64 / 1000.,
                 quantum as f64 * 1000. / rate as f64
             )
@@ -3259,7 +3260,7 @@ impl Program for Musubi {
                         text(version).size(12.)
                     ]
                     .spacing(7.),
-                    text(clock.unwrap_or_else(|| "Defaults · unavailable".to_owned())).size(10.).role(Role::Text3),
+                    text(clock.unwrap_or_else(|| "Default clock · unavailable".to_owned())).size(10.).role(Role::Text3),
                 ]
                 .spacing(3.),
             )
