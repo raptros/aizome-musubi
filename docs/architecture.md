@@ -53,7 +53,7 @@ flowchart LR
 | `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in sunk wells in a modal Add Route sheet | changes graph data without app transactions |
 | `undo` | stable port identities and observed intents; retains pending undo/redo entries until the request and its observation settle | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
-| `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`, user-systemd D-Bus control and observed status; response-curve keyboard/pointer widget and snapshot-only page | edits another application's config or assumes unit startup from request success |
+| `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`; dedicated effects thread owns the user-systemd D-Bus connection and serializes unit operations/status batches; response-curve keyboard/pointer widget and snapshot-only page | edits another application's config, blocks UI on unit operations, or assumes unit startup from request success |
 
 `clock` models subject-0 `settings` metadata separately from the core's advertised
 defaults: effective `clock.rate` and `clock.quantum` determine one graph period,
@@ -104,9 +104,17 @@ service files and graph/audio snapshots. `effects::curve` paints the 20 Hz–20
 kHz response and emits drag, scroll and keyboard band edits; the app coalesces
 successfully observed drag/keyboard bursts at a 500 ms settle boundary. Live
 `SetEffectParams` changes persist and enter undo history only after the capture
-node's matching `Props.params` read-back. Enable, bypass and target changes
-show a pending state until the chain file and observed unit/node state agree;
-undo/redo reapply the same path rather than changing a displayed snapshot.
+node's matching `Props.params` read-back. The live Effects page sends unit
+operations and batched state queries to one effects thread; replies arrive in
+`Program::update` via `Cx::stream`, as audio and graph wakes do. Graph delta
+refreshes coalesce while a query batch is outstanding. The Harness retains
+the synchronous `Units` fake and deterministic graph delivery. Enable, bypass
+and target changes show a pending state until file and observed unit/node
+state agree; restart edits additionally require the completed stop, active
+restart, new capture and playback global IDs or serials, and a matching
+playback target when advertised. A five-second observation deadline fails
+without recording undo. Undo/redo reapply the same path rather than changing
+a displayed snapshot.
 Deletion confirmations bind the chain ID, and remove-all enumerates exact
 managed unit names and paths before acting. `tests/effects_page.rs` runs these
 controls against fake units and a fake Props backend, with Night/Day goldens
@@ -134,6 +142,7 @@ The corner stays fixed; column labels follow x only, row labels follow y only, a
 
 ## Threads and messages
 - UI thread: kit event loop, `Program`.
+- Effects thread: one user-systemd connection, a serialized channel for batched `state` queries and enable/start/stop/disable/reset/delete/remove-all work, and wake-to-`update` responses. The UI derives status from cached unit observations plus each current graph delta; no D-Bus property query or stop-job wait runs on the event loop. The CLI may use synchronous systemd calls.
 - PipeWire thread: everything PipeWire. Commands in: `Connect{out, in, confirmed, request}`, `Disconnect{link, request}`, `Shutdown` (+ later phases). Events out: `GraphDelta{epoch, upserts, removals}`, `CommandResult{request, Ok|Err(reason)}`, `Connection{Up(version)|Down(reason)}`. Deltas are batched on the PipeWire thread and flushed at most every 16 ms, so a burst (profile switch, app start) is one UI message.
 - `PipeWireBackend` owns a named MainLoop thread, its registry and bound object listeners; its 16 ms timer flushes value-only graph deltas into `Cx::stream`. `global_remove` drops each bound listener and proxy. A broken connection (a core error with `-EPIPE`, or a failed core sync) tears down the session, advances the epoch, fails pending requests, emits `Down`, and retries with bounded backoff; other core errors (the server reports per-object ones such as "unknown resource" on the core too) fail only the request they belong to. The first core sync emits `Up`. Connect validates current epoch, ports and graph legality, creates a lingering link, and resolves successfully only when the matching link becomes active; a Link Error completes with its reason. Disconnect resolves on `global_remove`. Proxy errors and three-second timeouts fail requests without declaring a successful mutation. Metadata monitoring is not part of phase 1: no Metadata proxy is bound and `Graph::metadata` stays empty.
 - `StartMeters(Vec<Handle>)` replaces the visible set (up to 24); extras are reported as paused. `StopMeters`, disappearing nodes and epoch teardown drop the capture streams. One F32 interleaved passive capture stream per metered node lives in the existing PipeWire session; sink monitors set `stream.capture.sink=true`. The RT process callback scans each channel into a preallocated atomic slot and stores a timestamp: no allocation, lock, logging, or GUI wake. The UI samples `Backend::meters()` only while a meter is visible (target 30 Hz) and decays stale peaks. Streams carry `application.id` and `musubi.meter=true`; the graph suppresses their nodes, ports and links on every page, and the mixer suppresses their Pulse recording entry.

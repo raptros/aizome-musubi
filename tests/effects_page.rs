@@ -173,6 +173,76 @@ fn create_edit_keys_pointer_undo_redo_and_failed_status() {
     assert!(units.calls.borrow().last().unwrap().starts_with("start "));
 }
 #[test]
+fn restarted_edits_wait_for_replacement_nodes_and_target() {
+    for (label, change) in [
+        ("restart-bypass", Msg::EffectBypass(true)),
+        ("restart-target", Msg::EffectTarget(Target::Output("alsa_output.usb_studio".into()))),
+        ("restart-topology", Msg::EffectAddBand),
+    ] {
+        let (mut h, fake, units, paths) = setup(label, false, true);
+        nodes(&mut h, &fake);
+        h.send(Msg::EffectEnable(true));
+        h.send(change);
+        let service = || EffectsService { paths: paths.clone(), units: TestUnits(units.clone()) };
+        let edited = service().load("eq-1").unwrap();
+        assert_eq!(units.state.borrow().active, "active");
+        // Both names, the saved JSON, and an active unit still refer to old nodes.
+        h.send(Msg::Backend(Event::Delta(Default::default())));
+        h.send(Msg::Undo);
+        assert_eq!(service().load("eq-1").unwrap(), edited, "{label}: old nodes cannot settle undo");
+        // A new capture alone is not sufficient; playback must also be replaced.
+        let mut capture = fake.borrow().graph.nodes[&450].clone();
+        fake.borrow_mut().remove(450);
+        capture.id = 452;
+        capture.props.insert("object.serial".into(), "50052".into());
+        fake.borrow_mut().upsert(Upsert::Node(capture));
+        flush(&mut h, &fake);
+        h.send(Msg::Undo);
+        assert_eq!(service().load("eq-1").unwrap(), edited, "{label}: partial replacement");
+        let mut playback = fake.borrow().graph.nodes[&451].clone();
+        fake.borrow_mut().remove(451);
+        playback.id = 453;
+        playback.props.insert("object.serial".into(), "50053".into());
+        if label == "restart-target" {
+            playback.props.insert("target.object".into(), "alsa_output.analog".into());
+        }
+        fake.borrow_mut().upsert(Upsert::Node(playback.clone()));
+        flush(&mut h, &fake);
+        if label == "restart-target" {
+            h.send(Msg::Undo);
+            assert_eq!(service().load("eq-1").unwrap(), edited, "wrong playback target");
+            playback.props.insert("target.object".into(), "alsa_output.usb_studio".into());
+            fake.borrow_mut().upsert(Upsert::Node(playback));
+            flush(&mut h, &fake);
+        }
+        h.send(Msg::Undo);
+        let undone = service().load("eq-1").unwrap();
+        assert!(
+            undone.enabled
+                && undone.target == chain().target
+                && undone.bypass == chain().bypass
+                && undone.bands == chain().bands,
+            "{label}: replacement permits undo"
+        );
+    }
+}
+#[test]
+fn restart_timeout_does_not_record_undo() {
+    let (mut h, fake, units, paths) = setup("restart-timeout", false, true);
+    nodes(&mut h, &fake);
+    h.send(Msg::EffectEnable(true));
+    h.send(Msg::EffectBypass(true));
+    h.advance(Duration::from_secs(5));
+    assert!(h.program().status_sentence().unwrap().contains("no undo entry recorded"));
+    // The only remaining entry is Enable, which cannot replay against the
+    // changed chain; an incorrectly recorded Bypass would have inverted it.
+    h.send(Msg::Undo);
+    assert!(h.program().status_sentence().unwrap().contains("changed since this undo entry"));
+    let saved = EffectsService { paths, units: TestUnits(units) }.load("eq-1").unwrap();
+    assert!(saved.enabled && saved.bypass);
+}
+
+#[test]
 fn goldens_and_confirmation() {
     for (day, theme) in [(false, "night"), (true, "day")] {
         let (mut h, _, units, paths) = setup(theme, day, true);

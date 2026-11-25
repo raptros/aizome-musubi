@@ -39,8 +39,152 @@ use std::{
     cell::{Cell as SharedCell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
+    sync::mpsc,
     time::{Duration, Instant},
 };
+
+/// Live unit work is serialized on this thread; the Harness never starts it.
+enum EffectRequest {
+    Status(Vec<String>),
+    Save(Chain, Chain),
+    Retry(String),
+    Delete(String),
+    Manifest,
+    RemoveAll(Vec<String>),
+}
+
+#[derive(Clone, Debug)]
+pub enum EffectResponse {
+    Status(Vec<(String, Result<effects::service::UnitState, String>)>),
+    Save(Result<(), String>),
+    Retry(Result<(), String>),
+    Delete(String, Result<(), String>),
+    Manifest(Result<Vec<String>, String>),
+    RemoveAll(Result<bool, String>),
+    Error(String),
+}
+
+/// File operations remain usable in the UI without opening a second D-Bus connection.
+struct FileOnlyUnits;
+impl Units for FileOnlyUnits {
+    fn enable(&self, _: &str) -> Result<(), String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn start(&self, _: &str) -> Result<(), String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn stop(&self, _: &str) -> Result<(), String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn disable(&self, _: &str) -> Result<(), String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn listed(&self) -> Result<Vec<String>, String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn state(&self, _: &str) -> Result<effects::service::UnitState, String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+    fn owned(&self, _: &str) -> Result<bool, String> {
+        Err("unit work belongs to the effects thread".into())
+    }
+}
+
+fn run_effects(
+    paths: effects::paths::Paths,
+    receiver: mpsc::Receiver<EffectRequest>,
+    send: impl Fn(Msg) + Send + 'static,
+) {
+    let units = match Systemd::user() {
+        Ok(units) => units,
+        Err(error) => {
+            send(Msg::EffectResponse(EffectResponse::Error(error.to_string())));
+            return;
+        }
+    };
+    let service = EffectsService { paths, units };
+    while let Ok(request) = receiver.recv() {
+        let response = match request {
+            EffectRequest::Status(ids) => EffectResponse::Status(
+                ids.into_iter()
+                    .map(|id| {
+                        let state = effects::service::unit(&id)
+                            .map_err(|e| e.to_string())
+                            .and_then(|name| service.units.state(&name));
+                        (id, state)
+                    })
+                    .collect(),
+            ),
+            EffectRequest::Save(before, after) => {
+                let result = save_effect(&service, &before, &after).map_err(|e| e.to_string());
+                EffectResponse::Save(result)
+            }
+            EffectRequest::Retry(id) => {
+                let result = effects::service::unit(&id)
+                    .map_err(|e| e.to_string())
+                    .and_then(|name| service.units.reset_failed(&name).and_then(|()| service.units.start(&name)));
+                EffectResponse::Retry(result)
+            }
+            EffectRequest::Delete(id) => {
+                EffectResponse::Delete(id.clone(), service.delete(&id).map_err(|e| e.to_string()))
+            }
+            EffectRequest::Manifest => EffectResponse::Manifest(service.removal_manifest().map_err(|e| e.to_string())),
+            EffectRequest::RemoveAll(resources) => {
+                let result = service.removal_manifest().map_err(|e| e.to_string()).and_then(|current| {
+                    if current == resources {
+                        service.remove_all().map(|()| true).map_err(|e| e.to_string())
+                    } else {
+                        Ok(false)
+                    }
+                });
+                EffectResponse::RemoveAll(result)
+            }
+        };
+        send(Msg::EffectResponse(response));
+    }
+}
+
+fn save_effect<U: Units>(service: &EffectsService<U>, before: &Chain, after: &Chain) -> std::io::Result<()> {
+    if before.enabled != after.enabled {
+        if after.enabled { service.enable(after) } else { service.disable(&after.id) }
+    } else if after.enabled
+        && (before.target != after.target
+            || before.bypass != after.bypass
+            || before.bands.len() != after.bands.len()
+            || before.bands.iter().zip(&after.bands).any(|(a, b)| a.kind != b.kind))
+    {
+        service.disable(&after.id).and_then(|_| service.save(after)).and_then(|_| service.enable(after))
+    } else {
+        service.save(after)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EffectNode {
+    id: GlobalId,
+    serial: Option<String>,
+}
+
+struct ObservingEffect {
+    before: Chain,
+    after: Chain,
+    record: bool,
+    restart: bool,
+    /// Set only by a fresh post-operation unit-state reply. Stop already
+    /// waited for inactive before the start was submitted.
+    restart_active: bool,
+    capture: Option<EffectNode>,
+    playback: Option<EffectNode>,
+}
+
+fn effect_restart(before: &Chain, after: &Chain) -> bool {
+    before.enabled
+        && after.enabled
+        && (before.target != after.target
+            || before.bypass != after.bypass
+            || before.bands.len() != after.bands.len()
+            || before.bands.iter().zip(&after.bands).any(|(a, b)| a.kind != b.kind))
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -213,6 +357,8 @@ pub enum Msg {
     EffectSettle(u64),
     /// Checks that a live EQ write was read back within its deadline.
     EffectWatchdog,
+    EffectTimeout(u64),
+    EffectResponse(EffectResponse),
     EffectBandType(usize, usize),
     EffectValueInput(usize, usize, String),
     EffectValueCommit(usize, usize),
@@ -297,6 +443,10 @@ pub struct Musubi {
     mixer_replaying: Option<(usize, bool)>,
     mixer_generation: u64,
     effects_service: Option<EffectsService<Box<dyn Units>>>,
+    effects_worker: Option<mpsc::Sender<EffectRequest>>,
+    effect_query_pending: bool,
+    effect_query_dirty: bool,
+    effect_states: HashMap<String, Result<effects::service::UnitState, String>>,
     effect_chains: Vec<Chain>,
     effect_selected: Option<String>,
     effect_statuses: Vec<(String, Status)>,
@@ -309,7 +459,10 @@ pub struct Musubi {
     effect_undo: Vec<(Chain, Chain)>,
     effect_redo: Vec<(Chain, Chain)>,
     effect_pending: Option<(Chain, Chain, usize, RequestId)>,
-    effect_observing: Option<(Chain, Chain, bool)>,
+    effect_observing: Option<ObservingEffect>,
+    effect_submitting: Option<ObservingEffect>,
+    effect_observe_generation: u64,
+    effect_observe_timer: bool,
     effect_queued: Option<(usize, Band)>,
     effect_burst: Option<(Chain, Chain)>,
     effect_replay: Option<(Chain, Chain, bool)>,
@@ -724,29 +877,57 @@ impl Musubi {
         self.effect_chains.iter().find(|c| Some(c.id.as_str()) == self.effect_selected.as_deref())
     }
     fn refresh_effect_statuses(&mut self) {
-        let Some(service) = &self.effects_service else { return };
+        if let Some(worker) = &self.effects_worker {
+            if self.effect_query_pending {
+                self.effect_query_dirty = true;
+            } else {
+                self.effect_query_pending = true;
+                let ids = self.effect_chains.iter().map(|c| c.id.clone()).collect();
+                if worker.send(EffectRequest::Status(ids)).is_err() {
+                    self.effect_query_pending = false;
+                    self.notice = Some("Effects thread stopped.".into());
+                }
+            }
+        } else if let Some(service) = &self.effects_service {
+            for chain in &self.effect_chains {
+                let name = effects::service::unit(&chain.id).expect("validated chain ID");
+                let state = service.units.state(&name);
+                if let Some(edit) = &mut self.effect_observing
+                    && edit.restart
+                    && edit.after.id == chain.id
+                    && state.as_ref().is_ok_and(|state| state.active == "active")
+                {
+                    edit.restart_active = true;
+                }
+                self.effect_states.insert(chain.id.clone(), state);
+            }
+        }
+        self.derive_effect_statuses();
+    }
+    fn effect_node(&self, name: &str) -> Option<EffectNode> {
+        self.graph
+            .nodes
+            .values()
+            .find(|n| n.props.get("node.name").is_some_and(|s| s == name))
+            .map(|n| EffectNode { id: n.id, serial: n.props.get("object.serial").cloned() })
+    }
+    fn derive_effect_statuses(&mut self) {
         self.effect_statuses = self
             .effect_chains
             .iter()
             .map(|chain| {
-                let unit = effects::service::unit(&chain.id).expect("validated chain ID");
-                let status = match service.units.state(&unit) {
-                    Ok(state) => {
-                        let capture = format!("musubi_eq.{}", chain.id);
-                        let playback = format!("{capture}.playback");
-                        let mut nodes = self.graph.nodes.values();
-                        let present = nodes.clone().any(|n| n.props.get("node.name") == Some(&capture))
-                            && nodes.any(|n| n.props.get("node.name") == Some(&playback));
-                        let target = match &chain.target {
-                            Target::FollowDefault => true,
-                            Target::Output(name) => {
-                                self.graph.nodes.values().any(|n| n.props.get("node.name") == Some(name))
-                            }
-                        };
-                        derive_status(&state, present, target)
-                    }
-                    Err(_) if !chain.enabled => Status::Stopped,
-                    Err(error) => Status::Failed(error),
+                let capture = format!("musubi_eq.{}", chain.id);
+                let present =
+                    self.effect_node(&capture).is_some() && self.effect_node(&format!("{capture}.playback")).is_some();
+                let target = match &chain.target {
+                    Target::FollowDefault => true,
+                    Target::Output(name) => self.graph.nodes.values().any(|n| n.props.get("node.name") == Some(name)),
+                };
+                let status = match self.effect_states.get(&chain.id) {
+                    Some(Ok(state)) => derive_status(state, present, target),
+                    Some(Err(_)) if !chain.enabled => Status::Stopped,
+                    Some(Err(error)) => Status::Failed(error.clone()),
+                    None => Status::Stopped,
                 };
                 (chain.id.clone(), status)
             })
@@ -754,15 +935,39 @@ impl Musubi {
         self.finish_effect_save();
     }
     fn finish_effect_save(&mut self) {
-        let Some((_, after, _)) = &self.effect_observing else { return };
+        let Some(edit) = &self.effect_observing else { return };
+        let after = &edit.after;
+        let capture_name = format!("musubi_eq.{}", after.id);
+        let playback_name = format!("{capture_name}.playback");
+        let replacement = |old: &Option<EffectNode>, current: Option<EffectNode>| {
+            current.is_some_and(|node| old.as_ref().is_none_or(|old| old.id != node.id || old.serial != node.serial))
+        };
+        let restarted_nodes = !edit.restart
+            || (replacement(&edit.capture, self.effect_node(&capture_name))
+                && replacement(&edit.playback, self.effect_node(&playback_name)));
+        let target_observed = match (
+            &after.target,
+            self.graph
+                .nodes
+                .values()
+                .find(|n| n.props.get("node.name") == Some(&playback_name))
+                .and_then(|n| n.props.get("target.object")),
+        ) {
+            (Target::Output(expected), Some(actual)) => actual == expected,
+            _ => true,
+        };
         let observed = self.effect_chains.iter().any(|chain| chain == after)
             && self.effect_statuses.iter().any(|(id, status)| {
                 id == &after.id && matches!((after.enabled, status), (true, Status::Running) | (false, Status::Stopped))
-            });
+            })
+            && restarted_nodes
+            && (!edit.restart || edit.restart_active)
+            && target_observed;
         if observed {
-            let (before, after, record) = self.effect_observing.take().unwrap();
-            if record {
-                self.effect_undo.push((before, after));
+            let edit = self.effect_observing.take().unwrap();
+            self.effect_observe_timer = false;
+            if edit.record {
+                self.effect_undo.push((edit.before, edit.after));
                 self.effect_redo.clear();
             }
             self.notice = Some("EQ change observed.".into());
@@ -775,45 +980,115 @@ impl Musubi {
             }
         }
     }
-    fn effect_save(&mut self, before: Chain, after: Chain, record: bool) {
-        let Some(service) = &self.effects_service else { return };
-        let result = if before.enabled != after.enabled {
-            if after.enabled { service.enable(&after) } else { service.disable(&after.id) }
-        } else if after.enabled
-            && (before.target != after.target
-                || before.bypass != after.bypass
-                || before.bands.len() != after.bands.len()
-                || before.bands.iter().zip(&after.bands).any(|(a, b)| a.kind != b.kind))
-        {
-            service.disable(&after.id).and_then(|_| service.save(&after)).and_then(|_| service.enable(&after))
-        } else {
-            service.save(&after)
-        };
+    fn complete_effect_save(&mut self, edit: ObservingEffect, result: Result<(), String>) {
         match result {
             Ok(()) => {
                 self.reload_effects();
-                if self.selected_effect() == Some(&after) {
-                    if before.enabled || after.enabled {
-                        self.effect_observing = Some((before, after, record));
+                if self.selected_effect() == Some(&edit.after) {
+                    if edit.before.enabled || edit.after.enabled {
+                        self.effect_observing = Some(edit);
                         self.notice = Some("Applying… waiting for the EQ chain to report its state.".into());
-                        self.finish_effect_save();
-                    } else if record {
-                        self.effect_undo.push((before, after));
-                        self.effect_redo.clear();
+                        self.refresh_effect_statuses();
+                    } else {
+                        if edit.record {
+                            self.effect_undo.push((edit.before, edit.after));
+                            self.effect_redo.clear();
+                        }
+                        self.effect_observe_timer = false;
                     }
                 } else {
+                    self.effect_observe_timer = false;
+                    self.effect_replay = None;
                     self.notice = Some("The effect change was not observed".into());
                 }
             }
             Err(error) => {
+                self.effect_observe_timer = false;
+                self.effect_replay = None;
                 self.notice = Some(format!("Effects: {error}"));
                 self.reload_effects();
             }
         }
     }
+    fn effect_save(&mut self, before: Chain, after: Chain, record: bool) {
+        if self.effect_submitting.is_some() || self.effect_observing.is_some() {
+            self.notice = Some("An EQ change is still being applied.".into());
+            return;
+        }
+        let capture = format!("musubi_eq.{}", after.id);
+        let edit = ObservingEffect {
+            restart: effect_restart(&before, &after),
+            restart_active: false,
+            capture: self.effect_node(&capture),
+            playback: self.effect_node(&format!("{capture}.playback")),
+            before,
+            after,
+            record,
+        };
+        self.effect_observe_generation += 1;
+        if let Some(worker) = &self.effects_worker {
+            if worker.send(EffectRequest::Save(edit.before.clone(), edit.after.clone())).is_ok() {
+                self.effect_submitting = Some(edit);
+                self.notice = Some("Applying… waiting for the EQ chain to report its state.".into());
+            } else {
+                self.notice = Some("Effects thread stopped.".into());
+                self.effect_replay = None;
+            }
+        } else if let Some(service) = &self.effects_service {
+            let result = save_effect(service, &edit.before, &edit.after).map_err(|e| e.to_string());
+            self.complete_effect_save(edit, result);
+        }
+    }
+    fn effect_deleted(&mut self, id: String, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                if self.effect_selected.as_deref() == Some(&id) {
+                    self.effect_selected = None;
+                }
+                self.effect_undo.clear();
+                self.effect_redo.clear();
+                self.effect_burst = None;
+                self.reload_effects();
+            }
+            Err(error) => self.notice = Some(format!("Effects: {error}")),
+        }
+    }
+    fn show_effect_manifest(&mut self, result: Result<Vec<String>, String>, cx: &mut Cx<Msg>) {
+        match result {
+            Ok(resources) => {
+                let description = if resources.is_empty() {
+                    "No Musubi effects or clock settings found.".to_owned()
+                } else {
+                    format!(
+                        "Stop and disable these units and remove these paths:\n{}\nOther applications' files are not touched.",
+                        resources.join("\n")
+                    )
+                };
+                cx.alert(
+                    self.window,
+                    Alert::new("Remove Musubi effects and clock settings", description)
+                        .default_button("Remove all", Msg::EffectRemoveAllConfirmed(resources))
+                        .cancel_button("Cancel"),
+                );
+            }
+            Err(error) => self.notice = Some(format!("Effects: {error}")),
+        }
+    }
+    fn effect_removed_all(&mut self, result: Result<bool, String>) {
+        match result {
+            Ok(true) => {
+                self.effect_selected = None;
+                self.effect_undo.clear();
+                self.effect_redo.clear();
+                self.reload_effects();
+            }
+            Ok(false) => self.notice = Some("Effects changed since confirmation; review the list again.".into()),
+            Err(error) => self.notice = Some(format!("Effects: {error}")),
+        }
+    }
     fn replay_effect(&mut self, undo: bool) {
         self.settle_effect_band();
-        if self.effect_pending.is_some() || self.effect_observing.is_some() {
+        if self.effect_pending.is_some() || self.effect_observing.is_some() || self.effect_submitting.is_some() {
             self.notice = Some("EQ undo waiting for the observed change.".into());
             return;
         }
@@ -849,19 +1124,21 @@ impl Musubi {
             self.effect_band_queued(index, desired.bands[index].clone());
         } else {
             self.effect_save(current.clone(), desired.clone(), false);
-            if self.effect_observing.is_none() && self.selected_effect() == Some(desired) {
-                let (first, last, undo) = self.effect_replay.take().unwrap();
-                if undo {
-                    self.effect_redo.push((first, last));
+            if self.effect_submitting.is_none() && self.effect_observing.is_none() {
+                if self.selected_effect() == Some(desired) {
+                    let (first, last, undo) = self.effect_replay.take().unwrap();
+                    if undo {
+                        self.effect_redo.push((first, last));
+                    } else {
+                        self.effect_undo.push((first, last));
+                    }
                 } else {
-                    self.effect_undo.push((first, last));
-                }
-            } else if self.effect_observing.is_none() {
-                self.effect_replay = None;
-                if undo {
-                    self.effect_undo.push((before, after));
-                } else {
-                    self.effect_redo.push((before, after));
+                    self.effect_replay = None;
+                    if undo {
+                        self.effect_undo.push((before, after));
+                    } else {
+                        self.effect_redo.push((before, after));
+                    }
                 }
             }
         }
@@ -2107,10 +2384,22 @@ impl Program for Musubi {
             }))));
         }
         if self.live {
-            match (effects::paths::Paths::from_environment(), Systemd::user()) {
-                (Ok(paths), Ok(units)) => self.effects_service = Some(EffectsService { paths, units: Box::new(units) }),
-                (Err(error), _) => self.notice = Some(format!("Effects: {error}")),
-                (_, Err(error)) => self.notice = Some(format!("Effects: {error}")),
+            match effects::paths::Paths::from_environment() {
+                Ok(paths) => {
+                    self.effects_service =
+                        Some(EffectsService { paths: paths.clone(), units: Box::new(FileOnlyUnits) });
+                    let (tx, rx) = mpsc::channel();
+                    let sender = cx.stream();
+                    match std::thread::Builder::new().name("musubi-effects".into()).spawn(move || {
+                        run_effects(paths, rx, move |msg| {
+                            sender.send(msg);
+                        })
+                    }) {
+                        Ok(_) => self.effects_worker = Some(tx),
+                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                    }
+                }
+                Err(error) => self.notice = Some(format!("Effects: {error}")),
             }
         }
         self.reload_effects();
@@ -2125,12 +2414,18 @@ impl Program for Musubi {
     fn update(&mut self, msg: Msg, cx: &mut Cx<Msg>) {
         if !matches!(
             &msg,
-            Msg::AudioWake | Msg::Backend(_) | Msg::Persist(_) | Msg::Matrix(MatrixMsg::Hover(_)) | Msg::MixerHover(_)
+            Msg::AudioWake
+                | Msg::Backend(_)
+                | Msg::EffectResponse(_)
+                | Msg::EffectTimeout(_)
+                | Msg::Persist(_)
+                | Msg::Matrix(MatrixMsg::Hover(_))
+                | Msg::MixerHover(_)
         ) {
             self.notice = None;
         }
         if self.effect_observing.is_some() {
-            self.refresh_effect_statuses();
+            self.finish_effect_save();
         }
         match msg {
             Msg::ClockRate(rate) if self.clock_settings.valid_rate(rate) => {
@@ -2248,15 +2543,21 @@ impl Program for Musubi {
                 }
             }
             Msg::EffectRetry => {
-                if let (Some(chain), Some(service)) = (self.selected_effect(), &self.effects_service) {
-                    let result = effects::service::unit(&chain.id)
-                        .map_err(|error| error.to_string())
-                        // A failed or start-limited unit refuses starts until reset.
-                        .and_then(|unit| service.units.reset_failed(&unit).and_then(|()| service.units.start(&unit)));
-                    if let Err(error) = result {
-                        self.notice = Some(format!("Retry failed: {error}"));
+                if let Some(chain) = self.selected_effect() {
+                    let id = chain.id.clone();
+                    if let Some(worker) = &self.effects_worker {
+                        if worker.send(EffectRequest::Retry(id)).is_err() {
+                            self.notice = Some("Effects thread stopped.".into());
+                        }
+                    } else if let Some(service) = &self.effects_service {
+                        let result = effects::service::unit(&id).map_err(|error| error.to_string()).and_then(|unit| {
+                            service.units.reset_failed(&unit).and_then(|()| service.units.start(&unit))
+                        });
+                        if let Err(error) = result {
+                            self.notice = Some(format!("Retry failed: {error}"));
+                        }
+                        self.refresh_effect_statuses();
                     }
-                    self.refresh_effect_statuses();
                 }
             }
             Msg::EffectBypass(bypass) => {
@@ -2363,60 +2664,93 @@ impl Program for Musubi {
                 }
             }
             Msg::EffectDeleteConfirmed(id) => {
-                if let Some(service) = &self.effects_service {
-                    match service.delete(&id) {
-                        Ok(()) => {
-                            if self.effect_selected.as_deref() == Some(&id) {
-                                self.effect_selected = None;
-                            }
-                            self.effect_undo.clear();
-                            self.effect_redo.clear();
-                            self.effect_burst = None;
-                            self.reload_effects();
-                        }
-                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                if let Some(worker) = &self.effects_worker {
+                    if worker.send(EffectRequest::Delete(id)).is_err() {
+                        self.notice = Some("Effects thread stopped.".into());
                     }
+                } else if let Some(service) = &self.effects_service {
+                    let result = service.delete(&id).map_err(|e| e.to_string());
+                    self.effect_deleted(id, result);
                 }
             }
             Msg::EffectRemoveAll => {
                 self.effect_page_menu = false;
-                if let Some(service) = &self.effects_service {
-                    match service.removal_manifest() {
-                        Ok(resources) => {
-                            let description = if resources.is_empty() {
-                                "No Musubi effects or clock settings found.".to_owned()
-                            } else {
-                                format!(
-                                    "Stop and disable these units and remove these paths:\n{}\nOther applications' files are not touched.",
-                                    resources.join("\n")
-                                )
-                            };
-                            cx.alert(
-                                self.window,
-                                Alert::new("Remove Musubi effects and clock settings", description)
-                                    .default_button("Remove all", Msg::EffectRemoveAllConfirmed(resources))
-                                    .cancel_button("Cancel"),
-                            );
-                        }
-                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                if let Some(worker) = &self.effects_worker {
+                    if worker.send(EffectRequest::Manifest).is_err() {
+                        self.notice = Some("Effects thread stopped.".into());
                     }
+                } else if let Some(service) = &self.effects_service {
+                    let result = service.removal_manifest().map_err(|e| e.to_string());
+                    self.show_effect_manifest(result, cx);
                 }
             }
             Msg::EffectRemoveAllConfirmed(resources) => {
-                if let Some(service) = &self.effects_service {
-                    if !matches!(service.removal_manifest(), Ok(current) if current == resources) {
-                        self.notice = Some("Effects changed since confirmation; review the list again.".into());
-                        return;
+                if let Some(worker) = &self.effects_worker {
+                    if worker.send(EffectRequest::RemoveAll(resources)).is_err() {
+                        self.notice = Some("Effects thread stopped.".into());
                     }
-                    match service.remove_all() {
-                        Ok(()) => {
-                            self.effect_selected = None;
-                            self.effect_undo.clear();
-                            self.effect_redo.clear();
-                            self.reload_effects();
+                } else if let Some(service) = &self.effects_service {
+                    let result = service.removal_manifest().map_err(|e| e.to_string()).and_then(|current| {
+                        if current != resources {
+                            Ok(false)
+                        } else {
+                            service.remove_all().map(|()| true).map_err(|e| e.to_string())
                         }
-                        Err(error) => self.notice = Some(format!("Effects: {error}")),
+                    });
+                    self.effect_removed_all(result);
+                }
+            }
+            Msg::EffectResponse(response) => match response {
+                EffectResponse::Status(states) => {
+                    self.effect_query_pending = false;
+                    for (id, state) in states {
+                        if let Some(edit) = &mut self.effect_observing
+                            && edit.restart
+                            && edit.after.id == id
+                            && state.as_ref().is_ok_and(|state| state.active == "active")
+                        {
+                            edit.restart_active = true;
+                        }
+                        self.effect_states.insert(id, state);
                     }
+                    self.derive_effect_statuses();
+                    if self.effect_query_dirty {
+                        self.effect_query_dirty = false;
+                        self.refresh_effect_statuses();
+                    }
+                }
+                EffectResponse::Save(result) => {
+                    if let Some(edit) = self.effect_submitting.take() {
+                        self.complete_effect_save(edit, result);
+                    }
+                }
+                EffectResponse::Retry(result) => {
+                    if let Err(error) = result {
+                        self.notice = Some(format!("Retry failed: {error}"));
+                    }
+                    self.refresh_effect_statuses();
+                }
+                EffectResponse::Delete(id, result) => self.effect_deleted(id, result),
+                EffectResponse::Manifest(result) => self.show_effect_manifest(result, cx),
+                EffectResponse::RemoveAll(result) => self.effect_removed_all(result),
+                EffectResponse::Error(error) => {
+                    self.effects_worker = None;
+                    self.notice = Some(format!("Effects: {error}"));
+                }
+            },
+            Msg::EffectTimeout(generation) => {
+                if generation == self.effect_observe_generation
+                    && (self.effect_submitting.take().is_some() || self.effect_observing.take().is_some())
+                {
+                    self.effect_observe_timer = false;
+                    if let Some((first, last, undo)) = self.effect_replay.take() {
+                        if undo {
+                            self.effect_undo.push((first, last));
+                        } else {
+                            self.effect_redo.push((first, last));
+                        }
+                    }
+                    self.notice = Some("EQ change not observed within 5 seconds; no undo entry recorded.".into());
                 }
             }
             Msg::AudioWake => {
@@ -3118,6 +3452,10 @@ impl Program for Musubi {
                 }
                 self.refresh_layouts();
             }
+        }
+        if (self.effect_submitting.is_some() || self.effect_observing.is_some()) && !self.effect_observe_timer {
+            self.effect_observe_timer = true;
+            cx.after(Duration::from_secs(5), Msg::EffectTimeout(self.effect_observe_generation));
         }
         self.finish_audio();
     }

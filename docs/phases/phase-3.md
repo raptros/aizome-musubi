@@ -103,7 +103,7 @@ Clock & Load, seen in the goldens and the VM:
 - **DSP load chart:** fill the card. A 60 s history with a visible axis (0–100%) and the current value; no tiny bars in an empty box.
 
 ### P3-S5a — code review fixes (`docs/design/code-review-phase3.md`)
-D22 first (1–6, 9–18 done by the coordinator, `1a01d31` and the next four commits; 7 and 8 remain):
+D22 first (1–18 done in S5a/S5b; item 7 and 8 complete with the effects thread and restart observation):
 1. **Owned paths:** refuse symlinked managed directories (effects dir, and the clock drop-in's parent) before any write or delete.
 2. **Deletion:** independent of parsing the JSON. Remove the two files after unit cleanup.
 3. **`remove_all` keeps going:** it tries every resource, keeps unrelated entries, and reports an aggregate error at the end.
@@ -112,8 +112,8 @@ D22 first (1–6, 9–18 done by the coordinator, `1a01d31` and the next four co
 6. **Config path:** the unit reads the writer's config path. Pass the resolved path, e.g. a drop-in `Environment=` written beside the chain, or `ExecStart` using `%E`, matching `XDG_CONFIG_HOME`.
 
 Then:
-7. **Async systemd queries:** off the UI thread.
-8. **Undo after a restart:** wait for the replacement helper's nodes and their applied config.
+7. **Async systemd queries (done):** one effects thread owns user-systemd, coalesces status batches, and wakes `update` with observations.
+8. **Undo after a restart (done):** completed stop/start, fresh capture and playback identities, matching target when exposed; otherwise 5 s timeout without history.
 9. **`SetEffectParams` without a read-back:** a bounded timeout and a failure.
 10. **Disconnect:** clear pending and queued effect edits.
 11. **Automatic:** delete the drop-in only after both Automatic values read back.
