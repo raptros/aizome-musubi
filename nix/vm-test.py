@@ -1,4 +1,5 @@
 """Packaged Musubi: compositor input only, live PipeWire observations only."""
+import json
 import math
 import shlex
 import time
