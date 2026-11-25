@@ -23,6 +23,10 @@ pub trait Units {
     /// Whether `name` is an instance of Musubi's own template (not a
     /// same-named unit someone else wrote).
     fn owned(&self, name: &str) -> Result<bool, String>;
+    /// Clear a failed or start-limited state so a start is accepted again.
+    fn reset_failed(&self, _name: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl Units for Box<dyn Units> {
@@ -46,6 +50,9 @@ impl Units for Box<dyn Units> {
     }
     fn owned(&self, name: &str) -> Result<bool, String> {
         (**self).owned(name)
+    }
+    fn reset_failed(&self, name: &str) -> Result<(), String> {
+        (**self).reset_failed(name)
     }
 }
 
@@ -137,6 +144,11 @@ impl Units for Systemd {
         let fragment: String = unit.get_property("FragmentPath").map_err(|e| e.to_string())?;
         let description: String = unit.get_property("Description").map_err(|e| e.to_string())?;
         Ok(fragment.ends_with("/aizome-musubi-effect@.service") && description.starts_with("Musubi EQ effect"))
+    }
+    fn reset_failed(&self, name: &str) -> Result<(), String> {
+        let _: () =
+            self.manager().map_err(|e| e.to_string())?.call("ResetFailedUnit", &(name,)).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

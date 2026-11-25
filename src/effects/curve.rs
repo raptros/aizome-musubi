@@ -127,7 +127,8 @@ impl Widget for Curve {
             cx.canvas.fill_rect(Rect::new(r.x0, y, r.x1, y + 1.), t.line());
             cx.draw_text_in(label, &caption, Rect::new(0., y - 9., r.x0 - 5., y + 9.), Align::End);
         }
-        cx.draw_text_in("dB", &caption, Rect::new(0., r.y0 - 12., r.x0 - 5., r.y0 + 3.), Align::End);
+        // Inside the plot's top-left corner: beside the tick labels it would sit on "+15".
+        cx.draw_text_in("dB", &caption, Rect::new(r.x0 + 4., r.y0 + 2., r.x0 + 40., r.y0 + 16.), Align::Start);
         for (freq, label) in [
             (20., "20"),
             (50., "50"),

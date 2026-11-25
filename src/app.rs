@@ -1849,12 +1849,11 @@ impl Musubi {
                     self.mixer_hover.clone()
                 } else if self.page == Page::Clock {
                     Some(format!(
-                        "Forced clock: {} · {} · DSP {:.1}%",
-                        self.clock_settings.force_rate.map_or_else(|| "Automatic".into(), |rate| format!("{rate} Hz")),
+                        "Forced clock: rate {} · quantum {}",
+                        self.clock_settings.force_rate.map_or_else(|| "automatic".into(), |rate| format!("{rate} Hz")),
                         self.clock_settings
                             .force_quantum
-                            .map_or_else(|| "Automatic".into(), |quantum| format!("{quantum} frames")),
-                        self.clock_load.current_percent()
+                            .map_or_else(|| "automatic".into(), |quantum| format!("{quantum} frames")),
                     ))
                 } else {
                     self.hover_sentence()
@@ -2223,7 +2222,8 @@ impl Program for Musubi {
                 if let (Some(chain), Some(service)) = (self.selected_effect(), &self.effects_service) {
                     let result = effects::service::unit(&chain.id)
                         .map_err(|error| error.to_string())
-                        .and_then(|unit| service.units.start(&unit));
+                        // A failed or start-limited unit refuses starts until reset.
+                        .and_then(|unit| service.units.reset_failed(&unit).and_then(|()| service.units.start(&unit)));
                     if let Err(error) = result {
                         self.notice = Some(format!("Retry failed: {error}"));
                     }
@@ -2301,12 +2301,15 @@ impl Program for Musubi {
                         self.window,
                         Alert::new(
                             "Delete EQ",
+                            // The folder once, then each file on its own line, so the
+                            // alert's fixed width never breaks a name mid-token.
                             format!(
-                                "Remove “{}” and its unit?\n{}\nFiles:\n{}\n{}",
+                                "Remove “{}” and its unit?\n{}\n\nFiles in {}:\n    {}.json\n    {}.conf",
                                 chain.name,
                                 effects::service::unit(&chain.id).unwrap_or_default(),
-                                service.paths.json(&chain.id).unwrap().display(),
-                                service.paths.conf(&chain.id).unwrap().display()
+                                home_relative(&service.paths.effects),
+                                chain.id,
+                                chain.id
                             ),
                         )
                         .destructive_button("Delete EQ", Msg::EffectDeleteConfirmed(chain.id.clone()))
@@ -3450,10 +3453,8 @@ impl Program for Musubi {
         } else if self.page == Page::Effects {
             chains_label(self.effect_chains.len())
         } else if self.page == Page::Clock {
-            let rate = self.clock_settings.force_rate.map_or_else(|| "Automatic".into(), |value| format!("{value} Hz"));
-            let quantum =
-                self.clock_settings.force_quantum.map_or_else(|| "Automatic".into(), |value| value.to_string());
-            format!("Forced {rate} · {quantum} frames · DSP {:.1}%", self.clock_load.current_percent())
+            // The forced values are the left-hand sentence; don't repeat them.
+            format!("DSP {:.1}%", self.clock_load.current_percent())
         } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
@@ -3553,4 +3554,14 @@ impl Program for Musubi {
 
 fn chains_label(count: usize) -> String {
     format!("{count} {}", if count == 1 { "chain" } else { "chains" })
+}
+
+/// `~/…` for paths under the home directory, as people read them.
+fn home_relative(path: &std::path::Path) -> String {
+    match std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        Some(home) if path.starts_with(&home) => {
+            format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display())
+        }
+        _ => path.display().to_string(),
+    }
 }

@@ -103,7 +103,7 @@ Clock & Load, seen in the goldens and the VM:
 - **DSP load chart:** fill the card. A 60 s history with a visible axis (0–100%) and the current value; no tiny bars in an empty box.
 
 ### P3-S5a — code review fixes (`docs/design/code-review-phase3.md`)
-D22 first (items 1–6 and 13 done in the coordinator commit below):
+D22 first (1–6, 12, 13, 14, 16, 17, 18 done by the coordinator, `1a01d31` and the next commit):
 1. **Owned paths:** refuse symlinked managed directories (effects dir, and the clock drop-in's parent) before any write or delete.
 2. **Deletion:** independent of parsing the JSON. Remove the two files after unit cleanup.
 3. **`remove_all` keeps going:** it tries every resource, keeps unrelated entries, and reports an aggregate error at the end.

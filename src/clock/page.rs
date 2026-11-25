@@ -45,7 +45,7 @@ pub fn view(settings: &Settings, load: &Load, persistent: bool) -> Element<Msg> 
             text(format!("Rate: {rate}")).width(180.),
             text(format!("Quantum: {quantum}")).width(180.),
             spacer(),
-            button("Automatic").on_press(Msg::ClockAutomatic).enabled(!read_only).id("clock-automatic")
+            button("Reset to Automatic").on_press(Msg::ClockAutomatic).enabled(!read_only).id("clock-automatic")
         ]
         .spacing(10.),
         row![
