@@ -246,7 +246,24 @@ try:
         user("systemctl --user stop musubi-vm-eq-tone.service")
         user("systemctl --user start musubi-vm-player.service")
         click_element("effect-delete")
-        input_("key return")
+        # A destructive button never answers Return (kit dialogs): Tab to it, Space.
+        def dialog_elements():
+            w = window()
+            documents = [json.loads(line) for line in machine.succeed(
+                f'for f in {INSPECT}/*.json; do if test -f "$f"; then cat "$f"; printf "\\n"; fi; done'
+            ).splitlines() if line.strip()]
+            return [e for doc in documents if doc.get("kind") != "window"
+                    and doc.get("pid") == w["pid"] for e in doc["elements"] if e["visible"]]
+        until("delete confirmation", lambda: any(
+            e.get("role") == "button" and e.get("text") == "Delete EQ" for e in dialog_elements()))
+        for _ in range(6):
+            if any(e.get("role") == "button" and e.get("text") == "Delete EQ" and e.get("focused")
+                   for e in dialog_elements()):
+                break
+            input_("key tab")
+        else:
+            raise AssertionError(("Delete EQ not keyboard reachable", dialog_elements()))
+        input_("key space")
         until("effect unit inactive after UI deletion", lambda: not active())
         until("effect nodes removed after UI deletion", lambda: not chain_nodes())
         assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
