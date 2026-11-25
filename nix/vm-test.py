@@ -1,5 +1,5 @@
 """Packaged Musubi: compositor input only, live PipeWire observations only."""
-import json
+import math
 import shlex
 import time
 from pathlib import Path
@@ -183,21 +183,26 @@ default_sink = until("null sink appears", lambda: user(
 user("wpctl set-default " + default_sink)
 observations.append({"default_sink": default_sink, "wpctl": user("wpctl status")})
 try:
-    with subtest("effect service end-to-end from packaged Rust code"):
-        unit = "aizome-musubi-effect@vm.service"
+    with subtest("Effects page creates, edits and deletes a live EQ chain"):
+        unit = "aizome-musubi-effect@eq-1.service"
         assert user("aizome-musubi effects list").strip() == ""
-        user("aizome-musubi effects create vm musubi-vm-default")
-        assert user("aizome-musubi effects list").strip().startswith("vm\tenabled\tvm")
-        created_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
-        print("effect unit after enable:", created_enablement)
-        assert created_enablement == "enabled", created_enablement
+        user(f"aizomectl spawn env AIZOME_KIT_INSPECT={INSPECT} aizome-musubi")
+        until("Musubi window", window)
+        click_element("Effects")
+        click_element("effect-new")
+        until("EQ JSON created by New EQ", lambda: user(
+            "if test -f ~/.config/aizome-musubi/effects/eq-1.json; then echo ready; fi").strip() == "ready")
+        capture("00-effects-created")
+        click_element("effect-enable")
+        assert until("effect unit enabled", lambda: user(
+            f"systemctl --user is-enabled {unit} || true").strip() == "enabled")
         def active():
             return user(f"systemctl --user is-active {unit} || true").strip() == "active"
         until("effect unit active", active)
         def chain_nodes():
             return json.loads(user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                                   "and (.info.props[\"node.name\"] == \"musubi_eq.vm\" "
-                                   "or .info.props[\"node.name\"] == \"musubi_eq.vm.playback\")) "
+                                   "and (.info.props[\"node.name\"] == \"musubi_eq.eq-1\" "
+                                   "or .info.props[\"node.name\"] == \"musubi_eq.eq-1.playback\")) "
                                    "| {id, name: .info.props[\"node.name\"]}]'"))
         visible = until("effect nodes visible", lambda: (
             nodes if len(nodes) == 2 else None
@@ -205,56 +210,61 @@ try:
         user("systemctl --user stop musubi-vm-player.service")
         user("systemctl --user start musubi-vm-eq-tone.service")
         until("EQ player routes through capture", lambda: user(
-            "pw-link -l | grep -F 'musubi_eq.vm' | head -1"))
-        flat_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
-        capture_id = next(n["id"] for n in visible if n["name"] == "musubi_eq.vm")
-        before_info = user(f"pw-cli info {capture_id}")
-        before_props = user(f"pw-cli enum-params {capture_id} Props")
-        before_dump = user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                           "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'")
-        boost_status, boost_output = machine.execute("su - alice -c " + shlex.quote(
-            "export XDG_RUNTIME_DIR=/run/user/1000; aizome-musubi effects boost vm 12"))
-        if boost_status != 0:
-            print("boost status and debug:", boost_status, boost_output)
-            print("capture before info:", before_info)
-            print("capture before Props:", before_props)
-            print("chain before dump:", before_dump)
-            print("capture after info:", user(f"pw-cli info {capture_id}"))
-            print("capture after Props:", user(f"pw-cli enum-params {capture_id} Props"))
-            print("chain after dump:", user("pw-dump | jq -c '[.[] | select(.type == \"PipeWire:Interface:Node\" "
-                        "and (.info.props[\"node.name\"] | strings | startswith(\"musubi_eq.vm\")))]'"))
-            raise AssertionError(boost_output)
-        boosted_peak = float(user("aizome-musubi effects meter musubi-vm-default").strip())
-        effect_db = 20 * __import__("math").log10(boosted_peak / flat_peak)
+            "pw-link -l | grep -F 'musubi_eq.eq-1' | head -1"))
+        def meter_peak():
+            # Same linear peak ratio as the old backend meter probe, measured
+            # directly on the destination sink rather than through an app CLI.
+            user("timeout -s INT 3 pw-record --target=musubi-vm-default "
+                 "--properties='{\"stream.capture.sink\":true}' --raw --format=f32 "
+                 "--rate=48000 --channels=2 /tmp/musubi-eq-meter.raw >/tmp/musubi-eq-meter.log 2>&1 || "
+                 "test $? -eq 124")
+            return float(user("sox -t raw -e floating-point -b 32 -c 2 -r 48000 "
+                              "/tmp/musubi-eq-meter.raw -n stat 2>&1 | "
+                              "awk '/Maximum amplitude:/ {print $3}'").strip())
+        flat_peak = meter_peak()
+        assert flat_peak > 0, flat_peak
+        curve = until("EQ curve in inspect", lambda: element("effect-curve"))
+        x, y, width, height = curve["rect"]
+        gx, gy = window()["geometry"]["x"], window()["geometry"]["y"]
+        handle_x = gx + x + 43 + math.log10(1000 / 20) / 3 * (width - 55)
+        handle_y = gy + y + 12 + (height - 34) / 2
+        click(handle_x, handle_y)
+        for _ in range(12):
+            input_("key up")
+        gain = until("keyboard EQ gain persisted", lambda: (
+            value if value == 12 else None
+        ) if (value := json.loads(user("cat ~/.config/aizome-musubi/effects/eq-1.json"))["bands"][0]["gain"]) else None)
+        boosted_peak = meter_peak()
+        effect_db = 20 * math.log10(boosted_peak / flat_peak)
         assert 9 < effect_db < 15, (flat_peak, boosted_peak, effect_db)
         print("effect meter levels:", flat_peak, boosted_peak, effect_db)
-        user("systemctl --user stop musubi-vm-eq-tone.service")
-        user("systemctl --user start musubi-vm-player.service")
-        gain = json.loads(user("cat ~/.config/aizome-musubi/effects/vm.json"))
-        assert gain["bands"][0]["gain"] == 12, gain
-        observations.append({"effect_supervision": {"nodes": visible, "gain": gain["bands"][0]["gain"],
+        observations.append({"effect_supervision": {"nodes": visible, "gain": gain,
                                                      "meter_flat": flat_peak, "meter_boosted": boosted_peak,
                                                      "meter_db": effect_db}})
-        user("aizome-musubi effects disable vm")
-        until("effect unit inactive", lambda: not active())
-        until("effect nodes removed", lambda: not chain_nodes())
-        disabled_enablement = user(f"systemctl --user is-enabled {unit} || true").strip()
-        print("effect unit after disable:", disabled_enablement)
-        assert disabled_enablement == "disabled", disabled_enablement
-        user("aizome-musubi effects remove vm")
-        assert user("test ! -e ~/.config/aizome-musubi/effects/vm.json && "
-                    "test ! -e ~/.config/aizome-musubi/effects/vm.conf && echo clean").strip() == "clean"
-        assert user("aizome-musubi effects list").strip() == ""
-        user("aizome-musubi effects create vm musubi-vm-default")
+        capture("00-effects-boosted")
+        user("systemctl --user stop musubi-vm-eq-tone.service")
+        user("systemctl --user start musubi-vm-player.service")
+        click_element("effect-delete")
+        input_("key return")
+        until("effect unit inactive after UI deletion", lambda: not active())
+        until("effect nodes removed after UI deletion", lambda: not chain_nodes())
+        assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
+        assert user("test ! -e ~/.config/aizome-musubi/effects/eq-1.json && "
+                    "test ! -e ~/.config/aizome-musubi/effects/eq-1.conf && echo clean").strip() == "clean"
+        capture("00-effects-deleted")
+        # The documented recovery commands remain available without the GUI.
+        click_element("effect-new")
+        assert user("aizome-musubi effects list").strip().startswith("eq-1\tdisabled\tEQ 1")
+        user("aizome-musubi effects remove eq-1")
+        click_element("effect-new")
         user("aizome-musubi effects remove-all")
         assert user("test ! -e ~/.config/aizome-musubi/effects && echo clean").strip() == "clean"
-        assert user(f"systemctl --user is-enabled {unit} || true").strip() == "disabled"
+        click_element("Audio")
+        until("Audio matrix", lambda: element("matrix"))
     with subtest("stream FL to second sink FL, then Undo"):
         until("player has managed output ports", lambda: any(
             p.get("port.direction") == "out" and "musubi_vm_player" in n.get("node.name", "")
             for p, n in ports()), seconds=60)
-        user(f"aizomectl spawn env AIZOME_KIT_INSPECT={INSPECT} aizome-musubi")
-        until("Musubi window", window)
         until("Audio matrix", lambda: element("matrix"))
         capture("01-audio-before")
         click_element("pairs-channels", "Channels")
