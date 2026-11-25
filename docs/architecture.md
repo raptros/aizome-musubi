@@ -53,9 +53,9 @@ flowchart LR
 | `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in sunk wells in a modal Add Route sheet | changes graph data without app transactions |
 | `undo` | stable port identities and observed intents; retains pending undo/redo entries until the request and its observation settle | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
-| `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`, user-systemd D-Bus control and observed status | edits another application's config or assumes unit startup from request success |
+| `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`, user-systemd D-Bus control and observed status; response-curve keyboard/pointer widget and snapshot-only page | edits another application's config or assumes unit startup from request success |
 
-Later phases add `clock` (settings metadata + profiler) and `setups` + `keeper` (user service binary mode). The Effects page is P3-S3; P3-S2 has no UI.
+Later phases add `clock` (settings metadata + profiler) and `setups` + `keeper` (user service binary mode). The Effects page is available when user systemd and the effects paths are available.
 
 P3-S1 establishes a filter-chain helper independently owned by a template user
 service, not by the GUI's PipeWire connection. The module installs
@@ -63,7 +63,7 @@ service, not by the GUI's PipeWire connection. The module installs
 generated config in `~/.config/aizome-musubi/effects/`; D-Bus on the user manager
 starts/stops it (A9). The existing backend PipeWire thread can write the helper's
 capture-node `Props.params` struct (`String "<filter>:<control>"`, `Float`) via
-`SetEffectGain` (A8), without introducing another native connection. The private
+`SetEffectParams` (A8), without introducing another native connection. The private
 live probe keeps the helper process independent and meters the private null
 sink reached by its playback stream; it is not a UI feature or persisted config.
 P3-S2 stores `<id>.json` and its derived `<id>.conf` under
@@ -79,8 +79,23 @@ calls `EnableUnitFiles` before `StartUnit`, and `StopUnit` before
 only chain definitions and generated confs, and optionally remove the single
 clock drop-in. `effects::paths` lists every effect/clock write target. The
 packaged headless `effects list | remove | remove-all` recovery commands do not
-need the GUI; VM-only creation, edit and meter commands exercise the same
-service/backend path until the Effects page owns creation.
+need the GUI; creation, enablement, parameter edits and deletion belong to
+the Effects page and never use hidden CLI probes.
+
+The Effects page derives chain rows, targets and external filters from current
+service files and graph/audio snapshots. `effects::curve` paints the 20 Hz–20
+kHz response and emits drag, scroll and keyboard band edits; the app coalesces
+successfully observed drag/keyboard bursts at a 500 ms settle boundary. Live
+`SetEffectParams` changes persist and enter undo history only after the capture
+node's matching `Props.params` read-back. Enable, bypass and target changes
+show a pending state until the chain file and observed unit/node state agree;
+undo/redo reapply the same path rather than changing a displayed snapshot.
+Deletion confirmations bind the chain ID, and remove-all enumerates exact
+managed unit names and paths before acting. `tests/effects_page.rs` runs these
+controls against fake units and a fake Props backend, with Night/Day goldens
+for five bands, failure, empty and delete confirmation. The VM drives New EQ,
+Enable, a +12 dB keyboard burst and Delete through compositor input, checks
+the unit/nodes/files, and measures the destination sink's linear peak ratio.
 
 
 
@@ -121,7 +136,8 @@ Devices selects cards by stable Pulse card name and derives each card's nodes fr
 ## Files
 - Settings `$XDG_CONFIG_HOME/aizome/musubi.toml` (view options per page).
 - Settings are per-page booleans (pairs, swap, monitors, MIDI 1.0, List), header sizes and full-name display; From/To queries stay transient. State `state.toml` stores folded groups by stable identity: device folds use device name plus serial/bus regardless of constituent node, while node groups retain node name. On each graph delta, saved identities are mapped to live group keys; absent groups remain saved until they return. App debounces changes for 350 ms and writes via a same-directory temporary file and rename. Harness persistence tests inject isolated config/state paths into their app constructor without changing process environment.
-- Data `$XDG_DATA_HOME/aizome/musubi/` (setups, effect chains; later phases).
+- Effects `$XDG_CONFIG_HOME/aizome-musubi/effects/<id>.json` (chain source of truth) and generated `<id>.conf` for the independent user service. The optional clock drop-in is `$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/90-aizome-musubi-clock.conf`; cleanup never removes another application's files.
+- Data `$XDG_DATA_HOME/aizome/musubi/` (setups in a later phase).
 - One instance: `$XDG_RUNTIME_DIR/aizome-app.musubi.sock`.
 
 ## Testing seams
