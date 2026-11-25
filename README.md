@@ -1,8 +1,8 @@
 # Musubi 結び — Patchbay
 
-See what is connected in PipeWire, make the next connection yourself, and set levels. Musubi puts sources on one axis and destinations on the other: click a cell to connect or disconnect a port. A line drag applies several connections together; Undo reverses the action. Audio, MIDI 1.0, MIDI 2.0 and video each have their own page. Switch to List to inspect, filter and change routes without using the grid. The Mixer page has a fader, meter, mute and balance per device and app stream; the Devices page switches profiles and routes.
+See what is connected in PipeWire, make the next connection yourself, and set levels. Musubi puts sources on one axis and destinations on the other: click a cell to connect or disconnect a port. A line drag applies several connections together; Undo reverses the action. Audio, MIDI 1.0, MIDI 2.0 and video each have their own page. Switch to List to inspect, filter and change routes without using the grid. The Mixer page has a fader, meter, mute and balance per device and app stream; the Devices page switches profiles and routes. Effects adds stereo EQ chains as virtual outputs, each its own user service; Clock & Load forces the graph's rate and buffer size and shows DSP load.
 
-**Status:** early and unpolished; phases 1 (patchbay) and 2 (mixer, meters, devices) of a larger plan (effects and saved setups come later). Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
+**Status:** early and unpolished; phases 1 (patchbay), 2 (mixer, meters, devices) and 3 (EQ effects, clock & load) of a larger plan (saved setups come later). Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
 
 | Night | Day |
 | --- | --- |
