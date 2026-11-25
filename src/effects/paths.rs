@@ -33,13 +33,48 @@ impl Paths {
     pub fn conf(&self, id: &str) -> io::Result<PathBuf> {
         Ok(self.effects.join(format!("{}.conf", checked_id(id)?)))
     }
+    /// Create Musubi's own directories (0700). Refuses a managed directory
+    /// that is a symlink: writes and cleanup must never follow one elsewhere.
     pub fn ensure_effects(&self) -> io::Result<()> {
-        fs::create_dir_all(&self.effects)?;
-        if !self.effects.canonicalize()?.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "effects path is not a directory"));
+        self.check_effects()?;
+        let owned = self.effects.parent().unwrap_or(&self.effects);
+        for dir in [owned, self.effects.as_path()] {
+            match fs::create_dir(dir) {
+                Ok(()) => set_mode(dir, 0o700)?,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    fs::create_dir_all(dir)?;
+                    set_mode(dir, 0o700)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        self.check_effects()
+    }
+    /// Musubi's directories (`aizome-musubi`, `aizome-musubi/effects`) are
+    /// absent or real directories, never symlinks.
+    pub fn check_effects(&self) -> io::Result<()> {
+        let owned = self.effects.parent().unwrap_or(&self.effects);
+        for dir in [owned, self.effects.as_path()] {
+            match fs::symlink_metadata(dir) {
+                Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{} is not a plain directory; Musubi won't write or delete through it", dir.display()),
+                    ));
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
+}
+
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 pub fn checked_id(id: &str) -> io::Result<&str> {
@@ -59,7 +94,8 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = parent.join(format!(".musubi-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let result = (|| {
         use std::io::Write;
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;

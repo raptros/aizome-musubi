@@ -68,7 +68,8 @@
             requires = [ "pipewire.service" ];
             unitConfig.StartLimitBurst = 3;
             serviceConfig = {
-              ExecStart = "${pkgs.pipewire}/bin/pipewire -c %h/.config/aizome-musubi/effects/%i.conf";
+              # %E is the user manager's XDG_CONFIG_HOME (default ~/.config), as Musubi writes.
+              ExecStart = "${pkgs.pipewire}/bin/pipewire -c %E/aizome-musubi/effects/%i.conf";
               Restart = "on-failure";
             };
           };

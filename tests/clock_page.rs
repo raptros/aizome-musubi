@@ -34,6 +34,9 @@ impl Units for NoUnits {
     fn state(&self, _: &str) -> Result<UnitState, String> {
         Ok(UnitState::default())
     }
+    fn owned(&self, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
 }
 
 fn setup(label: &str, day: bool) -> (Harness<Musubi>, Rc<RefCell<FakeBackend>>, Paths) {

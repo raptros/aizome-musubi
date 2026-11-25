@@ -51,6 +51,9 @@ impl Units for TestUnits {
     fn state(&self, _: &str) -> Result<UnitState, String> {
         Ok(self.0.state.borrow().clone())
     }
+    fn owned(&self, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
 }
 fn root(label: &str) -> PathBuf {
     PathBuf::from(format!("/tmp/musubi-effects-page-{label}"))
