@@ -265,31 +265,26 @@ try:
     with subtest("Clock & Load settings from compositor input and managed drop-in cleanup"):
         click_element("Clock & Load")
         until("clock quantum selector", lambda: element("clock-quantum"))
-        # The kit's dropdown opens a menu, not a popover. A click opens it on
-        # press and may choose the row under the pointer on release, so: click
-        # to focus, Escape (evdev 1) to close whatever opened, ↓ to open it from
-        # the keyboard, type to filter, Return for the first match.
+        # The kit's dropdown opens a menu: typing filters its rows and Return
+        # picks the first match. Musubi offers only quanta inside the
+        # server's min/max: in this VM 1024–8192, so 2048 (256 isn't offered).
         def choose_quantum(value):
             click_element("clock-quantum")
-            capture(f"00-clock-menu-click-{value}")
-            input_("key 1")
-            input_("key down")
-            capture(f"00-clock-menu-open-{value}")
             input_("type " + shlex.quote(str(value)))
             input_("key return")
-        choose_quantum(256)
+        choose_quantum(2048)
         def metadata():
             return user("pw-metadata -n settings 0")
         def has_quantum(value):
             return any("clock.force-quantum" in line and f"'{value}'" in line
                        for line in metadata().splitlines())
-        until("forced quantum 256 in settings metadata", lambda: has_quantum(256))
-        observations.append({"clock_force_256": metadata()})
+        until("forced quantum 2048 in settings metadata", lambda: has_quantum(2048))
+        observations.append({"clock_force_2048": metadata()})
         capture("00-clock-forced")
         click_element("clock-persist")
         drop_in = "~/.config/pipewire/pipewire.conf.d/90-aizome-musubi-clock.conf"
         contents = user(f"cat {drop_in}")
-        assert "default.clock.quantum = 256" in contents, contents
+        assert "default.clock.quantum = 2048" in contents, contents
         assert "default.clock.rate" not in contents, contents
         observations.append({"clock_drop_in": contents})
         click_element("clock-automatic")
@@ -298,10 +293,10 @@ try:
         observations.append({"clock_automatic": metadata()})
         capture("00-clock-automatic")
         # Persist once more to demonstrate the documented recovery command removes it.
-        choose_quantum(256)
-        until("forced again", lambda: has_quantum(256))
+        choose_quantum(2048)
+        until("forced again", lambda: has_quantum(2048))
         click_element("clock-persist")
-        assert "default.clock.quantum = 256" in user(f"cat {drop_in}")
+        assert "default.clock.quantum = 2048" in user(f"cat {drop_in}")
         user("aizome-musubi effects remove-all")
         assert user(f"test ! -e {drop_in} && echo clean").strip() == "clean"
         click_element("clock-automatic")

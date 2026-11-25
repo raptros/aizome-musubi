@@ -97,6 +97,11 @@ Minors:
 - **Delete dialog:** paths on their own lines, never broken mid-token; a destructive-styled button.
 - **Day:** a stronger checkbox outline.
 
+Clock & Load, seen in the goldens and the VM:
+- **"Effective graph values"** must be the drivers' actual rate and quantum (the profiler's driver rows, or each driver node's `clock.quantum`), not the `settings` defaults. In the VM the drivers ran at 4096 while the card said 1024. If drivers differ, show "varies" with the per-driver table as the detail.
+- **Status bar:** page-specific text (forced values, load), not "16 ports".
+- **DSP load chart:** fill the card. A 60 s history with a visible axis (0–100%) and the current value; no tiny bars in an empty box.
+
 ### P3-S5 — VM, docs, reviews
 - **VM check:**
   1. Create an EQ chain from the Effects page with real input. The unit runs and `musubi_eq.<chain>` appears.
