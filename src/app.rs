@@ -1743,8 +1743,8 @@ impl Musubi {
             self.effect_selected.as_ref().and_then(|id| self.effect_statuses.iter().find(|(name, _)| name == id)).map(
                 |(_, status)| {
                     format!(
-                        "{} EQ chain · {}",
-                        self.selected_effect().map_or("EQ", |c| c.name.as_str()),
+                        "{} · {}",
+                        self.selected_effect().map_or("EQ chain", |c| c.name.as_str()),
                         effects::page::status_text(status)
                     )
                 },
@@ -3180,7 +3180,7 @@ impl Program for Musubi {
                 title: if self.page == Page::Mixer {
                     format!("Mixer · {strip_count} strips")
                 } else if self.page == Page::Effects {
-                    format!("Effects · {} chains", self.effect_chains.len())
+                    format!("Effects · {}", chains_label(self.effect_chains.len()))
                 } else if self.page == Page::Devices {
                     format!("Devices · {cards} {}", if cards == 1 { "device" } else { "devices" })
                 } else {
@@ -3253,7 +3253,7 @@ impl Program for Musubi {
         } else if self.page == Page::Devices {
             format!("{cards} {}", if cards == 1 { "device" } else { "devices" })
         } else if self.page == Page::Effects {
-            format!("{} chains", self.effect_chains.len())
+            chains_label(self.effect_chains.len())
         } else if !options.from.is_empty() {
             format!("From “{}” hides {} ports", options.from, self.layout(self.page).map_or(0, |l| l.hidden_from))
         } else if !options.to.is_empty() {
@@ -3349,4 +3349,8 @@ impl Program for Musubi {
             .item(MenuItem::new("Add Route…", Msg::AddRoute));
         MenuBar::standard(&self.info()).replace("Edit", edit).with_menu(view).with_menu(routing)
     }
+}
+
+fn chains_label(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "chain" } else { "chains" })
 }

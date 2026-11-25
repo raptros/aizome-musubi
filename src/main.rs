@@ -1,8 +1,11 @@
+use aizome_musubi::effects::{
+    paths::Paths,
+    service::{EffectsService, Systemd},
+};
 use aizome_musubi::{
     app::Musubi,
     instance::{self, Claim},
 };
-use aizome_musubi::effects::{paths::Paths, service::{EffectsService, Systemd}};
 use std::io;
 
 fn effects(args: &[String]) -> io::Result<()> {

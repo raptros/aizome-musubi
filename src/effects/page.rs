@@ -140,7 +140,7 @@ pub fn view(
         editor = editor.push(
             row![
                 checkbox("Enable", chain.enabled).on_toggle(Msg::EffectEnable).id("effect-enable"),
-                button("Bypass").selected(chain.bypass).on_press(Msg::EffectBypass(!chain.bypass)).id("effect-bypass"),
+                checkbox("Bypass", chain.bypass).on_toggle(Msg::EffectBypass).id("effect-bypass"),
                 spacer(),
                 button("Delete chain…").icon(Icon::Trash).on_press(Msg::EffectDelete).id("effect-delete")
             ]
