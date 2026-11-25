@@ -265,10 +265,16 @@ try:
     with subtest("Clock & Load settings from compositor input and managed drop-in cleanup"):
         click_element("Clock & Load")
         until("clock quantum selector", lambda: element("clock-quantum"))
-        # The kit's dropdown opens a menu, not a popover; typing filters its
-        # rows and Return picks the first match.
+        # The kit's dropdown opens a menu, not a popover. A click opens it on
+        # press and may choose the row under the pointer on release, so: click
+        # to focus, Escape (evdev 1) to close whatever opened, ↓ to open it from
+        # the keyboard, type to filter, Return for the first match.
         def choose_quantum(value):
             click_element("clock-quantum")
+            capture(f"00-clock-menu-click-{value}")
+            input_("key 1")
+            input_("key down")
+            capture(f"00-clock-menu-open-{value}")
             input_("type " + shlex.quote(str(value)))
             input_("key return")
         choose_quantum(256)
