@@ -120,6 +120,15 @@ Then:
 12. **Retry on a start-limited unit:** `ResetFailedUnit` before `StartUnit`.
 13. **Permissions:** files 0600, directories 0700.
 
+Visual review majors (`docs/design/visual-review-phase3.md`), after the code items:
+14. **Clock status bar:** one sentence, not a duplicated left/right pair; no "Automatic frames".
+15. **Sidebar footer:** "Defaults · …" either shows the live effective clock or is labelled as the configured default.
+16. **Curve axis:** the "dB" label no longer overlaps "+15".
+17. **Delete dialog:** paths unbroken, with each file on its own indented line.
+18. **Clock reset button:** "Reset to automatic", not a second "Automatic".
+
+Minors as budget allows: the band table formatting; the failed caption wrap; the status dot inside the row; the persistence note naming a clock-appropriate command (`aizome-musubi effects remove-all` also removes it, so say so); Busy / Wait units.
+
 Done: the README limits and manual recovery commands.
 
 ### P3-S5 — VM, docs, reviews
