@@ -211,6 +211,8 @@ pub enum Msg {
     EffectBand(usize, Band),
     EffectBandEnd,
     EffectSettle(u64),
+    /// Checks that a live EQ write was read back within its deadline.
+    EffectWatchdog,
     EffectBandType(usize, usize),
     EffectValueInput(usize, usize, String),
     EffectValueCommit(usize, usize),
@@ -322,6 +324,9 @@ pub struct Musubi {
     clock_pending: Option<ClockPending>,
     /// Automatic asked to remove the drop-in once both force keys read back cleared.
     clock_clear_drop_in: bool,
+    /// When the pending live EQ write was sent; a watchdog fails it after 3 s.
+    effect_sent_at: Option<Instant>,
+    effect_watchdog: bool,
     clock_undo: Vec<ClockChange>,
     clock_redo: Vec<ClockChange>,
     matrix_spike: Option<Rc<Layout>>,
@@ -865,6 +870,10 @@ impl Musubi {
         self.effect_generation += 1;
         cx.after(Duration::from_millis(500), Msg::EffectSettle(self.effect_generation));
         self.effect_band_queued(index, band);
+        if self.effect_pending.is_some() && !self.effect_watchdog {
+            self.effect_watchdog = true;
+            cx.after(Duration::from_secs(1), Msg::EffectWatchdog);
+        }
     }
     fn effect_band_queued(&mut self, index: usize, band: Band) {
         if self.effect_pending.is_some() {
@@ -903,6 +912,7 @@ impl Musubi {
                 }
             }
             self.effect_pending = Some((before, after, index, request));
+            self.effect_sent_at = Some(Instant::now());
             self.send_command(Command::SetEffectParams { node: capture, params, request });
             self.pump_effect_fake();
         } else {
@@ -2269,6 +2279,22 @@ impl Program for Musubi {
                 }
             }
             Msg::EffectSettle(_) => {}
+            Msg::EffectWatchdog => {
+                self.effect_watchdog = false;
+                if self.effect_pending.is_some() {
+                    if self.effect_sent_at.is_some_and(|sent| sent.elapsed() >= Duration::from_secs(3)) {
+                        // Never read back: fail it rather than queue edits behind it forever.
+                        self.effect_pending = None;
+                        self.effect_queued = None;
+                        self.effect_replay = None;
+                        self.effect_sent_at = None;
+                        self.notice = Some("PipeWire didn't confirm the EQ change within 3 s; it wasn't saved.".into());
+                    } else {
+                        self.effect_watchdog = true;
+                        cx.after(Duration::from_secs(1), Msg::EffectWatchdog);
+                    }
+                }
+            }
             Msg::EffectBandType(index, kind) => {
                 if let Some(band) = self.selected_effect().and_then(|c| c.bands.get(index)).cloned() {
                     let mut band = band;
