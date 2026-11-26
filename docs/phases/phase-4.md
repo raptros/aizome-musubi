@@ -1,6 +1,6 @@
 # Phase 4 — Setups (keep connected, exclusive)
 
-Scope: `design.md` §5; decisions D5 (opt-in per setup; a small user service keeps them while Musubi is closed; Exclusive with a warning), D22 (cleanup is guaranteed: the same rules apply to setup files and the keeper unit), A1–A9. Research: `research/pipewire-graph.md` §3, §5 (identity, WirePlumber policy). Semantics are written here before any code; the open ones are marked **Q** and wait for the user.
+Scope: `design.md` §5; decisions D5 (opt-in per setup; a small user service keeps them while Musubi is closed; Exclusive with a warning), D22 (cleanup is guaranteed: the same rules apply to setup files and the keeper unit), D24–D26 (below), A1–A9. Research: `research/pipewire-graph.md` §3, §5 (identity, WirePlumber policy).
 
 ## Semantics
 
@@ -15,19 +15,19 @@ Stored as `$XDG_DATA_HOME/aizome/musubi/setups/<id>.json`, written atomically wi
 - *missing*: nothing matches; the route waits;
 - *ambiguous*: several match; the route is listed and never acted on, and the UI says which candidates.
 
-**Activate / deactivate.** Activating creates every missing matched link once (one transaction, undoable). Deactivating does nothing to the graph. It only stops Keep connected and Exclusive for that setup; Undo still reverses the activation's links. **Q1** decides how several active setups interact.
+**One active setup (D24).** At most one setup is active. Activating a setup deactivates the previous one first, then creates every missing matched link of the new one in one undoable transaction. The previous setup's links stay; only its enforcement stops. Deactivating does nothing to the graph: it only stops Keep connected and Exclusive. Undo still reverses the activation's links. The active setup's id is stored in `$XDG_DATA_HOME/aizome/musubi/active.json`, so it survives a restart and the keeper reads it.
 
 **Keep connected (opt-in per setup).** While a setup is active with Keep connected, a matched route whose link disappears is re-created when both endpoints are present. That covers a device replugged, an app restarted, or WirePlumber moving a stream.
-- Musubi does this while it runs, and `aizome-musubi --keeper` does it while Musubi is closed. The keeper is a user unit, `aizome-musubi-keeper.service`, enabled only while some setup needs it, through A9's D-Bus path.
+- Musubi does this while it runs, and `aizome-musubi --keeper` does it while Musubi is closed (Keep connected and Exclusive alike). The keeper is a user unit, `aizome-musubi-keeper.service`, enabled only while the active setup has Keep connected or Exclusive on, through A9's D-Bus path.
 - The keeper and the app never act on the same setup at once: the app takes over while it runs, through a lock in `$XDG_RUNTIME_DIR`.
 
-**Exclusive (opt-in, with a warning).** While active, links that touch the setup's ports but aren't in the setup are removed (**Q2**: the scope). WirePlumber may re-create its automatic links. Musubi removes them again at most 3 times per minute per link, then stops, and the status bar explains WirePlumber's policy rather than fighting it.
+**Exclusive (D25, opt-in, with a warning).** While the setup is active, links that touch a port the setup names but aren't in the setup are removed. Links on other ports are never touched. WirePlumber may re-create its automatic links. Musubi removes them again at most 3 times per minute per link, then stops, and the status bar explains WirePlumber's policy rather than fighting it.
 
-**Pin / unpin (editing a setup).** Changing routes while a setup is active doesn't change the setup by itself (**Q3**). "Pin" adds the selected live link to a setup; "unpin" removes a route from it.
+**Pin / unpin (D26).** Changing routes while a setup is active doesn't change the setup. "Pin" adds the selected live link to a setup; "unpin" removes a route from it. There is no recording mode.
 
 **Cleanup (D22).**
-- Deleting a setup removes its file, and disables the keeper unit if no setup needs it.
-- `aizome-musubi setups remove-all` and the existing `effects remove-all` (renamed `remove-all`, with `effects remove-all` kept as an alias) remove setups and the keeper's enablement.
+- Deleting a setup removes its file (and `active.json` if it was active), and disables the keeper unit if no longer needed.
+- `aizome-musubi setups list|remove <id>|remove-all` follows the `effects` CLI: remove-all deletes every setup file and `active.json` and disables the keeper, continuing past failures and keeping foreign files.
 - README recovery commands are updated to match.
 
 ## Slices
@@ -52,7 +52,6 @@ Stored as `$XDG_DATA_HOME/aizome/musubi/setups/<id>.json`, written atomically wi
 | 6 | Setups page: keyboard, semantics, goldens | Harness |
 | 7 | Docs, code review, visual review | `docs/` |
 
-## Questions for the user
-- **Q1, several active setups.** (a) Any number can be active; their routes are unioned, and Exclusive in one setup never removes another active setup's routes. (b) One active setup at a time; activating another deactivates the first. Default: (a).
-- **Q2, Exclusive scope.** (a) Only links touching ports the setup names. (b) Every link on the page's kind (audio/MIDI/video) that isn't in an active setup. Default: (a); (b) breaks too much that WirePlumber manages.
-- **Q3, changes while active.** (a) Explicit pin/unpin only. (b) Auto-pin: while a setup is "recording", new links you make are added to it. Default: (a), with (b) as a later option.
+## User answers (2026-11-25)
+Q1 several active setups → one at a time (D24); Q2 Exclusive scope → only the setup's ports (D25); Q3 changes while active → explicit pin/unpin only (D26).
+
