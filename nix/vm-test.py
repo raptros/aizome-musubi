@@ -451,6 +451,75 @@ try:
             capture("08-devices-profile-switched")
         else:
             observations.append({"profile_switch": "No alternate available non-off profile on VM card"})
+    with subtest("Keeper restores stream routes without a window and Exclusive removes policy links"):
+        unit = "aizome-musubi-keeper.service"
+        assert user(f"systemctl --user is-enabled {unit} || true").strip() != "enabled"
+        user("kill " + str(window()["pid"]))
+        until("Musubi closed before keeper test", lambda: window() is None)
+        user("systemctl --user start musubi-vm-keeper-tone")
+        stream = until("keeper stream ports", lambda: [
+            (p, n) for p, n in ports() if n.get("node.name") == "musubi_vm_keeper" and p.get("port.direction") == "out"
+        ])
+        source = next(p["id"] for p, n in stream if p.get("port.name") == "output_FL")
+        destination = next(p["id"] for p, n in ports() if n.get("node.name") == "musubi-vm-patch"
+                           and p.get("port.name") == "playback_FL")
+        default_destination = next(p["id"] for p, n in ports() if n.get("node.name") == "musubi-vm-default"
+                                   and p.get("port.name") == "playback_FL")
+
+        def identity(port_id):
+            port, node = next((p, n) for p, n in ports() if p["id"] == port_id)
+            props = json.loads(user("pw-dump | jq -c --argjson id " + node["id"]
+                                    + " '[.[] | select(.id == $id)] | first | .info.props'"))
+            client = json.loads(user("pw-dump | jq -c --argjson id " + str(props.get("client.id", -1))
+                                     + " '[.[] | select(.id == $id)] | first | .info.props // {}'"))
+            device = json.loads(user("pw-dump | jq -c --argjson id " + str(props.get("device.id", -1))
+                                     + " '[.[] | select(.id == $id)] | first | .info.props // {}'"))
+            device_name = device.get("device.name")
+            app = device_name is None
+            return {"Port": {
+                "device_name": device_name,
+                "device_serial_or_bus": device.get("device.serial") or device.get("device.bus-path"),
+                "node_name": props.get("node.name"),
+                "application_name": (props.get("application.name") or client.get("application.name")) if app else None,
+                "application_binary": (props.get("application.process.binary") or client.get("application.process.binary")) if app else None,
+                "direction": "Output" if port["port.direction"] == "out" else "Input",
+                "port_name": port.get("port.name") or None,
+                "sequencer_client_name": None
+            }}
+
+        output_identity = identity(source)
+        input_identity = identity(destination)
+        data = "/home/alice/.local/share/aizome/musubi"
+        user("mkdir -p " + data + "/setups && chmod 700 " + data + " " + data + "/setups")
+
+        def save_setup(exclusive):
+            payload = {"version": 1, "id": "vm-keeper", "name": "VM keeper",
+                       "routes": [{"output": output_identity, "input": input_identity}],
+                       "keep_connected": True, "exclusive": exclusive}
+            user("printf %s " + shlex.quote(json.dumps(payload)) + " > " + data + "/setups/vm-keeper.json")
+            user("chmod 600 " + data + "/setups/vm-keeper.json")
+
+        save_setup(False)
+        user("printf %s " + shlex.quote(json.dumps({"id": "vm-keeper"})) + " > " + data + "/active.json")
+        user("chmod 600 " + data + "/active.json")
+        user("systemctl --user enable --now " + unit)
+        until("keeper running", lambda: "active" in user(f"systemctl --user is-active {unit}"))
+        until("keeper links FL to second sink", lambda: linked(source, destination))
+        user("systemctl --user restart musubi-vm-keeper-tone")
+        source = until("restarted stream FL", lambda: next(
+            (p["id"] for p, n in ports() if n.get("node.name") == "musubi_vm_keeper"
+             and p.get("port.name") == "output_FL"), None))
+        until("keeper restores route after player restart", lambda: linked(source, destination))
+        save_setup(True)
+        until("Exclusive removes WirePlumber default route", lambda: not linked(source, default_destination))
+        observations.append({"keeper_exclusive": user("journalctl --user -u " + unit + " --no-pager -n 80"),
+                             "wireplumber_default_link": linked(source, default_destination),
+                             "second_sink_link": linked(source, destination)})
+        user("aizome-musubi setups remove-all")
+        assert user(f"systemctl --user is-enabled {unit} || true").strip() != "enabled"
+        until("keeper inactive after cleanup", lambda: "inactive" in user(f"systemctl --user is-active {unit} || true"))
+        assert user("find " + data + " -name '*.json' -print").strip() == ""
+        user("systemctl --user stop musubi-vm-keeper-tone")
     machine.fail("coredumpctl --no-pager list aizome-musubi")
 finally:
     machine.screenshot("final")

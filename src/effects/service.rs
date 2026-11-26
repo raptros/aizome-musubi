@@ -143,12 +143,35 @@ impl Units for Systemd {
             Proxy::new(&self.connection, DEST, path, "org.freedesktop.systemd1.Unit").map_err(|e| e.to_string())?;
         let fragment: String = unit.get_property("FragmentPath").map_err(|e| e.to_string())?;
         let description: String = unit.get_property("Description").map_err(|e| e.to_string())?;
-        Ok(fragment.ends_with("/aizome-musubi-effect@.service") && description.starts_with("Musubi EQ effect"))
+        Ok((fragment.ends_with("/aizome-musubi-effect@.service") && description.starts_with("Musubi EQ effect"))
+            || (name == crate::setups::keeper::UNIT
+                && fragment.ends_with("/aizome-musubi-keeper.service")
+                && description == "Musubi setup keeper"))
     }
     fn reset_failed(&self, name: &str) -> Result<(), String> {
         let _: () =
             self.manager().map_err(|e| e.to_string())?.call("ResetFailedUnit", &(name,)).map_err(|e| e.to_string())?;
         Ok(())
+    }
+}
+/// Stop and disable are both attempted even if the other fails (D22).
+pub fn keeper_unit<U: Units>(units: &U, enabled: bool) -> Result<(), String> {
+    let name = crate::setups::keeper::UNIT;
+    if enabled {
+        if !units.owned(name)? {
+            return Err(format!("{name} is not Musubi's unit"));
+        }
+        units.enable(name)?;
+        units.start(name)
+    } else {
+        let mut errors = Vec::new();
+        if let Err(error) = units.stop(name) {
+            errors.push(error);
+        }
+        if let Err(error) = units.disable(name) {
+            errors.push(error);
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
     }
 }
 

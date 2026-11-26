@@ -77,11 +77,12 @@ Do not remove other PipeWire configuration. Deleting a chain through Musubi like
 
 ## Setups recovery
 
-If the GUI cannot start, `aizome-musubi setups list` shows saved setups (including damaged JSON as errors), `aizome-musubi setups remove <id>` removes one file even if damaged, and `aizome-musubi setups remove-all` removes managed setup files and `active.json` while keeping foreign files. This file-only recovery does not manage the keeper unit yet.
+If the GUI cannot start, `aizome-musubi setups list` shows saved setups (including damaged JSON as errors), `aizome-musubi setups remove <id>` deletes one setup and stops/disables the keeper when it was active, and `aizome-musubi setups remove-all` stops/disables the keeper and removes managed setup files and `active.json` while keeping foreign files. Unit operations use the user systemd manager; cleanup continues past individual failures.
 
-If the CLI cannot run, remove only Musubi's setup data (and, once installed, stop/disable `aizome-musubi-keeper.service` with `systemctl --user disable --now aizome-musubi-keeper.service`):
+If the CLI cannot run, stop the keeper first, then remove only Musubi's setup data:
 
 ```sh
+systemctl --user disable --now aizome-musubi-keeper
 dir="${XDG_DATA_HOME:-$HOME/.local/share}/aizome/musubi"
 rm -f "$dir"/setups/*.json "$dir"/setups/.musubi-*.tmp "$dir"/active.json
 rmdir "$dir"/setups 2>/dev/null

@@ -54,6 +54,7 @@ enum EffectRequest {
     Retry(String),
     Delete(String),
     Manifest,
+    Keeper(bool),
     RemoveAll(Vec<String>),
 }
 
@@ -66,6 +67,7 @@ pub enum EffectResponse {
     Manifest(Result<Vec<String>, String>),
     RemoveAll(Result<bool, String>),
     Error(String),
+    Keeper(Result<(), String>),
 }
 
 /// File operations remain usable in the UI without opening a second D-Bus connection.
@@ -142,6 +144,9 @@ fn run_effects(
                     }
                 });
                 EffectResponse::RemoveAll(result)
+            }
+            EffectRequest::Keeper(enabled) => {
+                EffectResponse::Keeper(effects::service::keeper_unit(&service.units, enabled))
             }
         };
         send(Msg::EffectResponse(response));
@@ -878,6 +883,28 @@ impl Musubi {
     pub fn with_fake_setups(fake: Rc<RefCell<FakeBackend>>, paths: setups::paths::Paths) -> Self {
         Self { fake: Some(fake), setup_store: Some(setups::store::Store { paths }), ..Self::default() }
     }
+    pub fn with_fake_setups_units(
+        fake: Rc<RefCell<FakeBackend>>,
+        paths: setups::paths::Paths,
+        effect_paths: effects::paths::Paths,
+        units: Box<dyn Units>,
+    ) -> Self {
+        let mut app = Self::with_fake_setups(fake, paths);
+        app.effects_service = Some(EffectsService { paths: effect_paths, units });
+        app
+    }
+    fn sync_keeper(&mut self) {
+        let enabled = self.active_setup.as_ref().is_some_and(|setup| setup.keep_connected || setup.exclusive);
+        if let Some(worker) = &self.effects_worker {
+            if let Err(error) = worker.send(EffectRequest::Keeper(enabled)) {
+                self.notice = Some(format!("Setup keeper: {error}"));
+            }
+        } else if let Some(service) = &self.effects_service {
+            if let Err(error) = effects::service::keeper_unit(&service.units, enabled) {
+                self.notice = Some(format!("Setup keeper: {error}"));
+            }
+        }
+    }
     fn finish_activation(&mut self) {
         let Some(index) = self.activation_pending else { return };
         let intents = &self.transactions[index].intents;
@@ -938,6 +965,7 @@ impl Musubi {
             return;
         }
         self.active_setup = Some(setup.clone());
+        self.sync_keeper();
         self.reconcile_state = reconcile::State::default();
         self.reconcile_requests.clear();
         let mut seen = HashSet::new();
@@ -2514,6 +2542,9 @@ impl Program for Musubi {
                 Err(error) => self.notice = Some(format!("Effects: {error}")),
             }
         }
+        if self.setup_store.is_some() {
+            self.sync_keeper();
+        }
         self.reload_effects();
         if let Some(fake) = &self.fake {
             let events = std::iter::from_fn(|| fake.borrow_mut().next_event()).collect::<Vec<_>>();
@@ -2552,6 +2583,7 @@ impl Program for Musubi {
                             self.active_setup = None;
                             self.reconcile_state = reconcile::State::default();
                             self.reconcile_requests.clear();
+                            self.sync_keeper();
                             self.notice = Some("Setup deactivated; links left in place.".into());
                         }
                         Err(error) => self.notice = Some(format!("Setup: {error}")),
@@ -2564,6 +2596,7 @@ impl Program for Musubi {
                         Ok(()) => {
                             if self.active_setup.as_ref().is_some_and(|active| active.id == setup.id) {
                                 self.active_setup = Some(setup);
+                                self.sync_keeper();
                                 self.reconcile_state = reconcile::State::default();
                                 self.enforce_setup(cx);
                             }
@@ -2934,6 +2967,8 @@ impl Program for Musubi {
                 EffectResponse::Delete(id, result) => self.effect_deleted(id, result),
                 EffectResponse::Manifest(result) => self.show_effect_manifest(result, cx),
                 EffectResponse::RemoveAll(result) => self.effect_removed_all(result),
+                EffectResponse::Keeper(Err(error)) => self.notice = Some(format!("Setup keeper: {error}")),
+                EffectResponse::Keeper(Ok(())) => {}
                 EffectResponse::Error(error) => {
                     self.effects_worker = None;
                     self.notice = Some(format!("Effects: {error}"));

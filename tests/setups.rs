@@ -1,4 +1,9 @@
 use aizome_kit::testing::Harness;
+use aizome_musubi::effects::{
+    paths::Paths as EffectPaths,
+    service::{UnitState, Units, keeper_unit},
+};
+use aizome_musubi::setups::keeper::UNIT;
 use aizome_musubi::{
     app::{Msg, Musubi},
     backend::{Backend, Command, fake::FakeBackend},
@@ -16,6 +21,36 @@ use aizome_musubi::{
         store::Store,
     },
 };
+
+#[derive(Clone, Default)]
+struct KeeperUnits(Rc<RefCell<Vec<String>>>);
+impl Units for KeeperUnits {
+    fn enable(&self, name: &str) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("enable {name}"));
+        Ok(())
+    }
+    fn start(&self, name: &str) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("start {name}"));
+        Ok(())
+    }
+    fn stop(&self, name: &str) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("stop {name}"));
+        Ok(())
+    }
+    fn disable(&self, name: &str) -> Result<(), String> {
+        self.0.borrow_mut().push(format!("disable {name}"));
+        Ok(())
+    }
+    fn listed(&self) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn state(&self, _: &str) -> Result<UnitState, String> {
+        Ok(UnitState::default())
+    }
+    fn owned(&self, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+}
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc};
 use std::{
@@ -333,6 +368,48 @@ fn activation_is_one_observed_undo_transaction_and_switch_stops_enforcement() {
     assert!(!h.program().graph.links_by_pair.contains_key(&(100, 120)));
     h.send(Msg::Undo);
     assert!(!h.program().graph.links_by_pair.contains_key(&(101, 105)));
+}
+
+#[test]
+fn keeper_unit_follows_active_opt_in_and_remove_all() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let units = KeeperUnits::default();
+    let item = |id: &str, keep_connected, exclusive| Setup {
+        version: VERSION,
+        id: id.into(),
+        name: id.into(),
+        routes: vec![],
+        keep_connected,
+        exclusive,
+    };
+    for setup in [item("off", false, false), item("keep", true, false), item("exclusive", false, true)] {
+        store.save(&setup).unwrap();
+    }
+    let mut h = Harness::new(Musubi::with_fake_setups_units(
+        fake,
+        paths,
+        EffectPaths::under(tmp.path().into()),
+        Box::new(units.clone()),
+    ));
+    units.0.borrow_mut().clear();
+    h.send(Msg::ActivateSetup("off".into()));
+    assert!(!units.0.borrow().iter().any(|call| call.starts_with("enable ")));
+    for id in ["keep", "exclusive"] {
+        units.0.borrow_mut().clear();
+        h.send(Msg::ActivateSetup(id.into()));
+        assert_eq!(&*units.0.borrow(), &[format!("enable {UNIT}"), format!("start {UNIT}")]);
+    }
+    h.send(Msg::DeactivateSetup);
+    assert!(units.0.borrow().contains(&format!("disable {UNIT}")));
+    units.0.borrow_mut().clear();
+    keeper_unit(&units, false).unwrap();
+    store.remove_all().unwrap();
+    assert_eq!(&*units.0.borrow(), &[format!("stop {UNIT}"), format!("disable {UNIT}")]);
+    assert!(store.list().unwrap().is_empty());
+    assert!(store.active().unwrap().is_none());
 }
 
 #[test]

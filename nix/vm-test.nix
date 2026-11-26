@@ -67,6 +67,13 @@ pkgs.testers.runNixOSTest {
       serviceConfig.ExecStart =
         "${pkgs.bash}/bin/bash -o pipefail -c '${pkgs.sox}/bin/sox -n -t raw -b 16 -e signed-integer -c 2 -r 48000 - synth 120 sine 1000 vol 0.08 | ${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --target=musubi_eq.eq-1 -'";
     };
+    # Restartable WirePlumber-managed stream for keeper takeover; no fixed target.
+    systemd.user.services.musubi-vm-keeper-tone = {
+      description = "Restartable stream for Musubi keeper";
+      after = [ "pipewire.service" "wireplumber.service" ];
+      serviceConfig.ExecStart =
+        "${pkgs.bash}/bin/bash -o pipefail -c '${pkgs.sox}/bin/sox -n -t raw -b 16 -e signed-integer -c 2 -r 48000 - synth 3600 sine 660 vol 0.1 | ${pkgs.pipewire}/bin/pw-play --raw --format=s16 --rate=48000 --channels=2 --properties={\\\"node.name\\\":\\\"musubi_vm_keeper\\\",\\\"application.name\\\":\\\"Musubi Keeper Test\\\"} -'";
+    };
     systemd.user.settings.Manager.DefaultEnvironment = "AIZOME_KIT_INSPECT=/run/user/1000/musubi-inspect";
     systemd.user.tmpfiles.rules = [ "d %t/musubi-inspect 0700 - - -" ];
     virtualisation = {

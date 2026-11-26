@@ -2,7 +2,11 @@ use aizome_musubi::effects::{
     paths::Paths,
     service::{EffectsService, Systemd},
 };
-use aizome_musubi::setups::{paths::Paths as SetupPaths, store::Store};
+use aizome_musubi::setups::{
+    keeper::{self, Handover, UNIT},
+    paths::Paths as SetupPaths,
+    store::Store,
+};
 use aizome_musubi::{
     app::Musubi,
     instance::{self, Claim},
@@ -21,10 +25,43 @@ fn setups(args: &[String]) -> io::Result<()> {
             }
             Ok(())
         }
-        [action, id] if action == "remove" => store.delete(id),
-        [action] if action == "remove-all" => store.remove_all(),
+        [action, id] if action == "remove" => {
+            let active = store.active()?.is_some_and(|active| active.id == *id);
+            let mut errors = Vec::new();
+            if active {
+                if let Err(e) = stop_keeper() {
+                    errors.push(e.to_string());
+                }
+            }
+            if let Err(e) = store.delete(id) {
+                errors.push(e.to_string());
+            }
+            if errors.is_empty() { Ok(()) } else { Err(io::Error::other(errors.join("; "))) }
+        }
+        [action] if action == "remove-all" => {
+            let unit = stop_keeper();
+            let files = store.remove_all();
+            match (unit, files) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
+                (Err(a), Err(b)) => Err(io::Error::other(format!("{a}; {b}"))),
+            }
+        }
         _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "setups: list | remove <id> | remove-all")),
     }
+}
+
+fn stop_keeper() -> io::Result<()> {
+    use aizome_musubi::effects::service::Units;
+    let units = Systemd::user().map_err(io::Error::other)?;
+    let mut errors = Vec::new();
+    if let Err(e) = units.stop(UNIT) {
+        errors.push(e);
+    }
+    if let Err(e) = units.disable(UNIT) {
+        errors.push(e);
+    }
+    if errors.is_empty() { Ok(()) } else { Err(io::Error::other(errors.join("; "))) }
 }
 
 fn effects(args: &[String]) -> io::Result<()> {
@@ -59,6 +96,13 @@ fn main() {
         }
         return;
     }
+    if arguments.as_slice() == ["--keeper"] {
+        if let Err(error) = keeper::run() {
+            eprintln!("Musubi keeper: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut args = std::env::args().skip(1);
     match (args.next().as_deref(), args.next()) {
         (Some("--version"), None) => {
@@ -67,7 +111,7 @@ fn main() {
         }
         (Some("--help" | "-h"), None) => {
             println!(
-                "Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version | effects list | effects remove <chain> | effects remove-all | setups list | setups remove <id> | setups remove-all]"
+                "Musubi 結び — the PipeWire patchbay for Aizome\n\nUsage: aizome-musubi [--help | --version | --keeper | effects list | effects remove <chain> | effects remove-all | setups list | setups remove <id> | setups remove-all]"
             );
             return;
         }
@@ -87,5 +131,12 @@ fn main() {
             std::process::exit(1);
         }
     }
+    let _handover = match Handover::path().and_then(|path| Handover::acquire(&path)) {
+        Ok(lock) => Some(lock),
+        Err(error) => {
+            eprintln!("Musubi: setup handover: {error}");
+            return;
+        }
+    };
     aizome_kit::run(app);
 }

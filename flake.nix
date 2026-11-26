@@ -73,6 +73,16 @@
               Restart = "on-failure";
             };
           };
+          systemd.user.services.aizome-musubi-keeper = {
+            description = "Musubi setup keeper";
+            unitConfig.Install.WantedBy = [ "default.target" ];
+            after = [ "pipewire.service" ];
+            wants = [ "pipewire.service" ];
+            serviceConfig = {
+              ExecStart = "${self.packages.${pkgs.stdenv.hostPlatform.system}.musubi}/bin/aizome-musubi --keeper";
+              Restart = "on-failure";
+            };
+          };
         };
       };
     };

@@ -1,4 +1,5 @@
 //! Persisted setup routes and read-only matching against the observed graph.
+pub mod keeper;
 pub mod paths;
 pub mod reconcile;
 pub mod store;
