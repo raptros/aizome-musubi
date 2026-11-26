@@ -16,7 +16,7 @@ pub fn is_musubi_meter(props: &Properties) -> bool {
         && props.get("musubi.meter").is_some_and(|marker| marker == "true")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Direction {
     Input,
     Output,

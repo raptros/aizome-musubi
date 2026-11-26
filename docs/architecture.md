@@ -47,13 +47,14 @@ flowchart LR
 | `graph::classify` | port kind (format.dsp → typed port EnumFormat → unambiguous media.class only when no EnumFormat); control type mask distinguishes MIDI 1.0 and UMP, otherwise unknown | — |
 | `graph::group` | MIDI sequencer-client, device, client, node grouping; display labels, kinds and ordered ports | treats runtime IDs as persistent |
 | `graph::legal` | output/input, media and comparable video raw/DSP EnumFormat-family preflight; MIDI 1.0↔UMP confirmation | overrides server refusal |
-| `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
+| `graph::identity` | live ID (`GlobalId` + epoch) and stable identity (device name + serial/bus, node name, app name/binary for streams, direction, port name, sequencer client); ambiguity detection | persists runtime IDs |
 | `matrix::layout` | for (page, view options, filters, folded groups): ordered row/column groups and lines, MIDI 1.0 group tags, offsets, active links plus negotiating/error overrides and error reasons; resolves a visible cell for a port pair | allocates the cross-product |
 | `matrix::widget` (`PatchMatrix`) | fixed corner, scrolling headers/body, focus navigation and Table semantics with a focused Cell child carrying route state and toggle activation through `MatrixMsg::Toggle`; Return opens the row-port inspector; deferred click/line gesture and Bresenham preview | owns graph data or mutates links during pointer movement |
 | `routes` | kit table of observed, asked and failed links on a page; stable physical-link selection, searchable source/destination lists in sunk wells in a modal Add Route sheet | changes graph data without app transactions |
 | `undo` | stable port identities and observed intents; retains pending undo/redo entries until the request and its observation settle | replays runtime ids from another epoch |
 | `app` | `Program`: model, command dispatch, sparse pending/errors, session conversion confirmation, context actions, re-link notice, transactions, menus and settings persistence | does I/O in `view` |
 | `effects` | validated JSON chain, deterministic stereo filter-chain conf (peaking/low/high shelves), atomic writes through `effects::paths`; dedicated effects thread owns the user-systemd D-Bus connection and serializes unit operations/status batches; response-curve keyboard/pointer widget and snapshot-only page | edits another application's config, blocks UI on unit operations, or assumes unit startup from request success |
+| `setups` | versioned setup routes using the graph's existing stable port identities; read-only plan reports linked/linkable/missing/ambiguous/illegal routes and D25-scoped foreign links; hardened data store under `$XDG_DATA_HOME/aizome/musubi/` and file-only recovery CLI | mutates the graph or manages keeper units in P4-S1 |
 
 `clock` models subject-0 `settings` metadata separately from the core's advertised
 defaults: effective `clock.rate` and `clock.quantum` determine one graph period,
@@ -163,7 +164,7 @@ Devices selects cards by stable Pulse card name and derives each card's nodes fr
 - Settings `$XDG_CONFIG_HOME/aizome/musubi.toml` (view options per page).
 - Settings are per-page booleans (pairs, swap, monitors, MIDI 1.0, List), header sizes and full-name display; From/To queries stay transient. State `state.toml` stores folded groups by stable identity: device folds use device name plus serial/bus regardless of constituent node, while node groups retain node name. On each graph delta, saved identities are mapped to live group keys; absent groups remain saved until they return. App debounces changes for 350 ms and writes via a same-directory temporary file and rename. Harness persistence tests inject isolated config/state paths into their app constructor without changing process environment.
 - Effects `$XDG_CONFIG_HOME/aizome-musubi/effects/<id>.json` (chain source of truth) and generated `<id>.conf` for the independent user service. The optional clock drop-in is `$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/90-aizome-musubi-clock.conf`; cleanup never removes another application's files.
-- Data `$XDG_DATA_HOME/aizome/musubi/` (setups in a later phase).
+- Data `$XDG_DATA_HOME/aizome/musubi/setups/<id>.json` (versioned routes) and `active.json` (one selected id). The setup store reuses `effects::paths`'s checked IDs and 0600 atomic writer, refuses symlinked managed directories, and preserves unrelated files on cleanup. Keeper-unit lifecycle will be added at the store caller seam in P4-S3.
 - One instance: `$XDG_RUNTIME_DIR/aizome-app.musubi.sock`.
 
 ## Testing seams

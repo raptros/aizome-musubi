@@ -1,7 +1,7 @@
 //! Persisted identities intentionally omit ephemeral global IDs and object serials.
 use super::{Direction, GlobalId, Graph, PortRecord};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum StableId {
     Group {
         device_name: Option<String>,
@@ -14,6 +14,10 @@ pub enum StableId {
         device_name: Option<String>,
         device_serial_or_bus: Option<String>,
         node_name: Option<String>,
+        #[serde(default)]
+        application_name: Option<String>,
+        #[serde(default)]
+        application_binary: Option<String>,
         direction: Direction,
         port_name: Option<String>,
         sequencer_client_name: Option<String>,
@@ -51,13 +55,23 @@ impl Graph {
     pub fn stable_port_id(&self, port: &PortRecord) -> Option<StableId> {
         let node = port.node_id.and_then(|id| self.nodes.get(&id))?;
         let (device_name, device_serial_or_bus) = self.device_identity(node);
+        let sequencer_client_name = Self::seq_name(port);
+        let app_stream = device_name.is_none() && sequencer_client_name.is_none();
+        let client = node.client_id.and_then(|id| self.clients.get(&id));
+        let app_property = |key| {
+            property(&node.props, key)
+                .or_else(|| client.and_then(|client| property(&client.props, key)))
+                .map(str::to_owned)
+        };
         Some(StableId::Port {
             device_name,
             device_serial_or_bus,
             node_name: property(&node.props, "node.name").map(str::to_owned),
+            application_name: app_stream.then(|| app_property("application.name")).flatten(),
+            application_binary: app_stream.then(|| app_property("application.process.binary")).flatten(),
             direction: port.direction,
             port_name: property(&port.props, "port.name").map(str::to_owned),
-            sequencer_client_name: Self::seq_name(port),
+            sequencer_client_name,
         })
     }
 

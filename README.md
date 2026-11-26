@@ -75,6 +75,18 @@ rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d/90-aizome-musu
 
 Do not remove other PipeWire configuration. Deleting a chain through Musubi likewise stops and disables its service before removing its `.json` and `.conf` files.
 
+## Setups recovery
+
+If the GUI cannot start, `aizome-musubi setups list` shows saved setups (including damaged JSON as errors), `aizome-musubi setups remove <id>` removes one file even if damaged, and `aizome-musubi setups remove-all` removes managed setup files and `active.json` while keeping foreign files. This file-only recovery does not manage the keeper unit yet.
+
+If the CLI cannot run, remove only Musubi's setup data (and, once installed, stop/disable `aizome-musubi-keeper.service` with `systemctl --user disable --now aizome-musubi-keeper.service`):
+
+```sh
+dir="${XDG_DATA_HOME:-$HOME/.local/share}/aizome/musubi"
+rm -f "$dir"/setups/*.json "$dir"/setups/.musubi-*.tmp "$dir"/active.json
+rmdir "$dir"/setups 2>/dev/null
+```
+
 ## License
 
 MIT OR Apache-2.0. See [LICENSE-MIT](LICENSE-MIT) (Aidan Coyne) and [LICENSE-APACHE](LICENSE-APACHE).

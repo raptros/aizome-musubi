@@ -9,4 +9,5 @@ pub mod matrix;
 pub mod mixer;
 pub mod persistence;
 pub mod routes;
+pub mod setups;
 pub mod undo;
