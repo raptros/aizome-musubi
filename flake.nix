@@ -75,7 +75,10 @@
           };
           systemd.user.services.aizome-musubi-keeper = {
             description = "Musubi setup keeper";
-            unitConfig.Install.WantedBy = [ "default.target" ];
+            extraConfig = ''
+              [Install]
+              WantedBy=default.target
+            '';
             after = [ "pipewire.service" ];
             wants = [ "pipewire.service" ];
             serviceConfig = {
