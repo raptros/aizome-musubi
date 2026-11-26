@@ -72,6 +72,12 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                 ambiguous.extend(candidates.iter().copied());
             }
         }
+        if let Resolution::Unique(id) = &out {
+            named.insert(*id);
+        }
+        if let Resolution::Unique(id) = &input {
+            named.insert(*id);
+        }
         let status = match (out, input) {
             (Resolution::Ambiguous(candidates), _) => RouteStatus::Ambiguous { which: End::Output, candidates },
             (_, Resolution::Ambiguous(candidates)) => RouteStatus::Ambiguous { which: End::Input, candidates },
@@ -102,17 +108,6 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                 }
             }
         };
-        match &status {
-            RouteStatus::Linked(id) => {
-                if let Some(link) = graph.links.get(id) {
-                    named.extend([link.output, link.input]);
-                }
-            }
-            RouteStatus::Linkable(out, input) => {
-                named.extend([*out, *input]);
-            }
-            _ => {}
-        }
         routes.push(status);
     }
     let mut foreign_links: Vec<_> = graph

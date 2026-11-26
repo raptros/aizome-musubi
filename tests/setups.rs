@@ -285,6 +285,157 @@ fn exclusive_limits_each_stable_foreign_pair_and_notices() {
         state = result.state;
     }
 }
+#[test]
+fn exclusive_conflict_does_not_expire_until_state_resets() {
+    let initial = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let mut saved = setup(&initial, 12, 22);
+    saved.keep_connected = false;
+    let now = Instant::now();
+    let mut state = State::default();
+    for attempt in 0..5 {
+        let id = 100 + attempt;
+        let graph = fixture(
+            2,
+            [
+                hardware(10, Some("usb-serial")),
+                target(20),
+                vec![
+                    device(30, "other", None),
+                    node(31, "other.input", Some(30), None, ""),
+                    port(32, 31, Direction::Input),
+                    link(id, 12, 32),
+                ],
+            ]
+            .concat(),
+        );
+        let second = if attempt < 4 { attempt as u64 } else { 120 };
+        let result = reconcile::step(&graph, &saved, state, now + Duration::from_secs(second));
+        assert_eq!(result.actions, if attempt < 3 { vec![Action::RemoveLink(id)] } else { vec![] });
+        assert_eq!(result.notices.len(), usize::from(attempt == 3));
+        state = result.state;
+    }
+    let graph = fixture(
+        2,
+        [
+            hardware(10, Some("usb-serial")),
+            target(20),
+            vec![
+                device(30, "other", None),
+                node(31, "other.input", Some(30), None, ""),
+                port(32, 31, Direction::Input),
+                link(200, 12, 32),
+            ],
+        ]
+        .concat(),
+    );
+    assert_eq!(reconcile::step(&graph, &saved, State::default(), now).actions, vec![Action::RemoveLink(200)]);
+}
+
+#[test]
+fn exclusive_scopes_each_unique_endpoint_even_when_other_is_missing_or_illegal() {
+    let initial = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let mut saved = setup(&initial, 12, 22);
+    let graph = fixture(
+        2,
+        [
+            hardware(10, Some("usb-serial")),
+            target(20),
+            vec![
+                device(30, "other", None),
+                node(31, "other.input", Some(30), None, ""),
+                port(32, 31, Direction::Input),
+                link(100, 12, 32),
+            ],
+        ]
+        .concat(),
+    );
+    let absent = fixture(
+        3,
+        [
+            hardware(10, Some("usb-serial")),
+            vec![
+                device(200, "absent", None),
+                node(201, "absent.input", Some(200), None, ""),
+                port(202, 201, Direction::Input),
+            ],
+        ]
+        .concat(),
+    );
+    saved.routes[0].input = absent.stable_port_id(&absent.ports[&202]).unwrap();
+    assert_eq!(plan(&graph, &saved).foreign_links, vec![100]);
+    saved.routes[0].input = saved.routes[0].output.clone();
+    assert!(matches!(plan(&graph, &saved).routes[0], RouteStatus::Illegal { .. }));
+    assert_eq!(plan(&graph, &saved).foreign_links, vec![100]);
+}
+
+#[test]
+fn activation_submits_when_only_existing_link_is_errored() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let route = {
+        let borrowed = fake.borrow();
+        let graph = &borrowed.graph;
+        Route {
+            output: graph.stable_port_id(&graph.ports[&100]).unwrap(),
+            input: graph.stable_port_id(&graph.ports[&104]).unwrap(),
+        }
+    };
+    store
+        .save(&Setup {
+            version: VERSION,
+            id: "errored".into(),
+            name: "Errored".into(),
+            routes: vec![route],
+            keep_connected: true,
+            exclusive: false,
+        })
+        .unwrap();
+    fake.borrow_mut().upsert(Upsert::Link(LinkRecord {
+        id: 900,
+        output: 100,
+        input: 104,
+        state: LinkState::Error("failed".into()),
+        props: Properties::new(),
+    }));
+    let mut h = Harness::new(Musubi::with_fake_setups(fake.clone(), paths));
+    h.send(Msg::ActivateSetup("errored".into()));
+    assert_eq!(
+        fake.borrow()
+            .commands
+            .iter()
+            .filter(|cmd| matches!(cmd, Command::Connect { out, input, .. } if out.id == 100 && input.id == 104))
+            .count(),
+        1
+    );
+    assert!(h.program().graph.has_active_link((100, 104)));
+}
+
+#[test]
+fn cli_remove_damaged_active_marker_still_removes_setup_file() {
+    let tmp = Temp::new();
+    let store = Store { paths: Paths::under(tmp.path().into()) };
+    store
+        .save(&Setup {
+            version: VERSION,
+            id: "broken".into(),
+            name: "Broken".into(),
+            routes: vec![],
+            keep_connected: false,
+            exclusive: false,
+        })
+        .unwrap();
+    fs::write(&store.paths.active, b"not JSON").unwrap();
+    let result = std::process::Command::new(std::env::var("CARGO_BIN_EXE_aizome-musubi").unwrap())
+        .args(["setups", "remove", "broken"])
+        .env("XDG_DATA_HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("active"));
+    assert!(!store.paths.json("broken").unwrap().exists());
+}
 
 #[test]
 fn create_failure_backoff_and_ambiguous_route_no_action() {

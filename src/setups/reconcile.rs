@@ -2,7 +2,7 @@
 use super::{Route, RouteStatus, Setup, plan};
 use crate::graph::{GlobalId, Graph, LinkState, identity::StableId};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -17,7 +17,7 @@ pub struct State {
     creates: HashMap<RouteKey, (GlobalId, GlobalId)>,
     removes: HashMap<GlobalId, PairKey>,
     attempts: HashMap<PairKey, Vec<Instant>>,
-    warned: HashMap<PairKey, Instant>,
+    conflicted: HashSet<PairKey>,
     failures: HashMap<RouteKey, (u32, Instant)>,
 }
 
@@ -101,17 +101,14 @@ pub fn step(graph: &Graph, setup: &Setup, mut state: State, now: Instant) -> Ste
                 continue;
             };
             let pair = (out, input);
+            if state.conflicted.contains(&pair) {
+                continue;
+            }
             let attempts = state.attempts.entry(pair.clone()).or_default();
             attempts.retain(|time| now.saturating_duration_since(*time) < Duration::from_secs(60));
             if attempts.len() >= 3 {
-                if !state
-                    .warned
-                    .get(&pair)
-                    .is_some_and(|time| now.saturating_duration_since(*time) < Duration::from_secs(60))
-                {
-                    notices.push("WirePlumber's policy keeps re-linking this setup port; Exclusive stopped removing that link for one minute.".into());
-                    state.warned.insert(pair, now);
-                }
+                notices.push("WirePlumber's policy keeps re-linking this setup port; Exclusive stopped removing that link until re-activation or toggling Exclusive.".into());
+                state.conflicted.insert(pair);
             } else {
                 attempts.push(now);
                 state.removes.insert(id, pair);

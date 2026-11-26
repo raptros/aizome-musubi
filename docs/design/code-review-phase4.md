@@ -8,6 +8,8 @@ Reviewer: `reviewer` agent (OMP, openai-codex/gpt-6-sol, high), static review of
 1. **Foreign keeper units can be stopped.** `src/effects/service.rs:158-174`, `src/main.rs:54-65`: disable calls `stop`/`disable` without the ownership check used when enabling. Launching the GUI with no active setup, or running cleanup, can stop a same-named unit Musubi doesn't own. Fix: check `owned()` before either operation.
 2. **Activation undo is undone by Keep connected.** `src/app.rs:3897-3900`: Undo disconnects activation-created links, then the graph delta runs `enforce_setup`, which recreates them. Fix (C, decision A11): undoing an activation also restores the previous active setup (or none), so enforcement of the undone setup stops before its links go.
 
+Items 1–3 fixed in `99ac44724f` (keeper ownership, activation undo/redo, independent deletion).
+
 ## Majors
 3. **Deleting stops at a keeper failure.** `src/app.rs:153-160, 2815-2826`: deleting the active setup uses `?` on keeper shutdown, so a systemd failure prevents `store.delete`. Fix: attempt both and aggregate the errors (D22).
 4. **Exclusive fights forever at 3 per minute.** `src/setups/reconcile.rs:104-115`: attempts expire after 60 s. Fix: after 3 removals in 60 s, the pair stays conflicted (no more removals, one notice) until the setup is re-activated or Exclusive is toggled; the plan says "then stops".

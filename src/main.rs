@@ -26,7 +26,13 @@ fn setups(args: &[String]) -> io::Result<()> {
             Ok(())
         }
         [action, id] if action == "remove" => {
-            let active = store.active()?.is_some_and(|active| active.id == *id);
+            let active = match store.active() {
+                Ok(active) => active.is_some_and(|active| active.id == *id),
+                Err(error) => {
+                    eprintln!("Musubi: active marker: {error}");
+                    false
+                }
+            };
             let mut errors = Vec::new();
             if active {
                 if let Err(e) = stop_keeper() {

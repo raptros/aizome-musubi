@@ -908,7 +908,7 @@ impl Musubi {
                 );
             }
             _ => {
-                if let Some(index) = self.submit_pairs(vec![(from, to, true)], cx) {
+                if let Some(index) = self.submit_pairs(vec![(from, to, true)], cx, false) {
                     self.history.record(index);
                 }
             }
@@ -1075,16 +1075,12 @@ impl Musubi {
         let pairs: Vec<_> = setups::plan(&self.graph, &setup)
             .routes
             .into_iter()
-            .zip(&setup.routes)
-            .filter_map(|(status, route)| match status {
-                RouteStatus::Linkable(out, input) if seen.insert((out, input)) => {
-                    reconcile::create_pending(&mut self.reconcile_state, route, (out, input));
-                    Some((out, input, true))
-                }
+            .filter_map(|status| match status {
+                RouteStatus::Linkable(out, input) if seen.insert((out, input)) => Some((out, input, true)),
                 _ => None,
             })
             .collect();
-        self.activation_pending = self.submit_pairs(pairs, cx);
+        self.activation_pending = self.submit_pairs(pairs, cx, true);
         if let Some(index) = self.activation_pending {
             self.transactions[index].activation = Some((previous, setup.id.clone()));
         }
@@ -2051,11 +2047,20 @@ impl Musubi {
     }
 
     /// Execute explicit physical links (inspector and history need not be visible in the matrix).
-    fn submit_pairs(&mut self, pairs: Vec<(GlobalId, GlobalId, bool)>, cx: &mut Cx<Msg>) -> Option<usize> {
+    fn submit_pairs(
+        &mut self,
+        pairs: Vec<(GlobalId, GlobalId, bool)>,
+        cx: &mut Cx<Msg>,
+        activation: bool,
+    ) -> Option<usize> {
         let mut transaction = Transaction::default();
         let mut commands = Vec::new();
         for (from, to, connect) in pairs {
-            let existing = self.graph.links_by_pair.get(&(from, to)).and_then(|ids| ids.first()).copied();
+            let existing = self.graph.links_by_pair.get(&(from, to)).and_then(|ids| {
+                ids.iter().copied().find(|id| {
+                    !connect || self.graph.links.get(id).is_some_and(|link| !matches!(link.state, LinkState::Error(_)))
+                })
+            });
             if existing.is_some() == connect {
                 continue;
             }
@@ -2065,6 +2070,13 @@ impl Musubi {
             ) else {
                 continue;
             };
+            if activation {
+                if let Some(setup) = &self.active_setup {
+                    for route in setup.routes.iter().filter(|route| route.output == from_id && route.input == to_id) {
+                        reconcile::create_pending(&mut self.reconcile_state, route, (from, to));
+                    }
+                }
+            }
             self.next_request += 1;
             let request = self.next_request;
             let epoch = self.graph.epoch;
@@ -2179,7 +2191,7 @@ impl Musubi {
                 }
             }
         }
-        let replay = self.submit_pairs(pairs, cx);
+        let replay = self.submit_pairs(pairs, cx, false);
         if let (Some(activation), Some(replay)) = (activation, replay) {
             self.transactions[replay].activation = Some(activation);
         }
@@ -2905,9 +2917,13 @@ impl Program for Musubi {
                     match store.save(&setup) {
                         Ok(()) => {
                             if self.active_setup.as_ref().is_some_and(|active| active.id == setup.id) {
+                                let exclusive_changed =
+                                    self.active_setup.as_ref().is_some_and(|active| active.exclusive != setup.exclusive);
                                 self.active_setup = Some(setup);
                                 self.sync_keeper();
-                                self.reconcile_state = reconcile::State::default();
+                                if exclusive_changed {
+                                    self.reconcile_state = reconcile::State::default();
+                                }
                                 self.enforce_setup(cx);
                             }
                             self.notice = Some("Setup saved.".into());
@@ -3658,7 +3674,7 @@ impl Program for Musubi {
             }
             Msg::DeleteRoutes => {
                 let pairs: Vec<_> = self.route_selection.iter().map(|&(a, b)| (a, b, false)).collect();
-                if let Some(index) = self.submit_pairs(pairs, cx) {
+                if let Some(index) = self.submit_pairs(pairs, cx, false) {
                     self.history.record(index);
                 }
                 self.route_selection.clear();
@@ -3744,7 +3760,7 @@ impl Program for Musubi {
                     .filter(|l| l.output == id || l.input == id)
                     .map(|l| (l.output, l.input, false))
                     .collect();
-                if let Some(index) = self.submit_pairs(pairs, cx) {
+                if let Some(index) = self.submit_pairs(pairs, cx, false) {
                     self.history.record(index);
                 }
             }
@@ -3828,7 +3844,7 @@ impl Program for Musubi {
                 self.sync_meters(cx);
             }
             Msg::Unlink(from, to) => {
-                if let Some(index) = self.submit_pairs(vec![(from, to, false)], cx) {
+                if let Some(index) = self.submit_pairs(vec![(from, to, false)], cx, false) {
                     self.history.record(index);
                 }
             }
