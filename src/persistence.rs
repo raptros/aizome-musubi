@@ -200,7 +200,7 @@ pub fn save_folds(
 
 pub fn page_index(page: Page) -> usize {
     match page {
-        Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock => 0,
+        Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock | Page::Setups => 0,
         Page::Midi => 1,
         Page::Midi2 => 2,
         Page::Video => 3,

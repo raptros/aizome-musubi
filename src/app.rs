@@ -55,6 +55,7 @@ enum EffectRequest {
     Delete(String),
     Manifest,
     Keeper(bool),
+    SetupDelete(String, setups::paths::Paths, bool),
     RemoveAll(Vec<String>),
 }
 
@@ -68,6 +69,7 @@ pub enum EffectResponse {
     RemoveAll(Result<bool, String>),
     Error(String),
     Keeper(Result<(), String>),
+    SetupDelete(String, Result<(), String>),
 }
 
 /// File operations remain usable in the UI without opening a second D-Bus connection.
@@ -148,6 +150,17 @@ fn run_effects(
             EffectRequest::Keeper(enabled) => {
                 EffectResponse::Keeper(effects::service::keeper_unit(&service.units, enabled))
             }
+            EffectRequest::SetupDelete(id, paths, active) => {
+                let store = setups::store::Store { paths };
+                let result = (|| {
+                    if active {
+                        effects::service::keeper_unit(&service.units, false).map_err(std::io::Error::other)?;
+                    }
+                    store.delete(&id)
+                })()
+                .map_err(|error| error.to_string());
+                EffectResponse::SetupDelete(id, result)
+            }
         };
         send(Msg::EffectResponse(response));
     }
@@ -202,6 +215,7 @@ pub enum Page {
     Midi,
     Midi2,
     Video,
+    Setups,
     Mixer,
     Effects,
     Devices,
@@ -209,11 +223,12 @@ pub enum Page {
 }
 
 impl Page {
-    const ALL: [(Page, Icon, &str); 8] = [
+    const ALL: [(Page, Icon, &str); 9] = [
         (Page::Audio, Icon::Volume2, "Audio"),
         (Page::Midi, Icon::Music, "MIDI"),
         (Page::Midi2, Icon::Keyboard, "MIDI 2.0"),
         (Page::Video, Icon::Video, "Video"),
+        (Page::Setups, Icon::ListFilter, "Setups"),
         (Page::Mixer, Icon::SlidersHorizontal, "Mixer"),
         (Page::Effects, Icon::Activity, "Effects"),
         (Page::Devices, Icon::Usb, "Devices"),
@@ -225,6 +240,7 @@ impl Page {
             Page::Audio => "Audio",
             Page::Midi => "MIDI",
             Page::Midi2 => "MIDI 2.0",
+            Page::Setups => "Setups",
             Page::Video => "Video",
             Page::Mixer => "Mixer",
             Page::Devices => "Devices",
@@ -243,6 +259,7 @@ impl Page {
                 | (Page::Devices, PortKind::Audio)
                 | (Page::Effects, PortKind::Audio)
                 | (Page::Clock, PortKind::Audio)
+                | (Page::Setups, PortKind::Audio)
         )
     }
 }
@@ -382,6 +399,21 @@ pub enum Msg {
     PinLink(String, GlobalId),
     UnpinRoute(String, usize),
     SetupRetry,
+    SetupSelect(String),
+    SetupNameInput(String),
+    SetupNameCommit,
+    SetupKeep(bool),
+    SetupExclusive(bool),
+    SetupExclusiveConfirmed,
+    SetupNew,
+    SetupNewName(String),
+    SetupNewCommit,
+    SetupDelete(String),
+    SetupDeleteConfirmed(String),
+    SetupPin(GlobalId),
+    SetupNewCancel,
+    SetupUnpin(GlobalId),
+    SetupKeeperRetry,
     Activated,
     Matrix(MatrixMsg),
     Backend(Event),
@@ -487,6 +519,13 @@ pub struct Musubi {
     reconcile_state: reconcile::State,
     reconcile_requests: HashMap<RequestId, Action>,
     setup_retry_scheduled: bool,
+    setup_selected: Option<String>,
+    setup_name_input: String,
+    setup_new_name: String,
+    setup_new_page: Page,
+    setup_entries: Vec<(String, Result<Setup, String>)>,
+    setup_sheet: Option<WindowKey>,
+    setup_keeper_error: Option<String>,
     activation_pending: Option<usize>,
     pub graph: Graph,
     connection: Option<Connection>,
@@ -622,6 +661,7 @@ struct ToolbarConfig {
     mixer_filter: String,
     mixer_show: bool,
     effects_available: bool,
+    active_setup: Option<String>,
 }
 
 struct ResponsiveToolbar(ToolbarConfig);
@@ -651,6 +691,16 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
     if !very_narrow {
         let title = if compact { config.short_title.clone() } else { config.title.clone() };
         controls.push(text(title).semibold().into());
+    }
+    if let Some(active) = &config.active_setup {
+        controls.push(
+            button(active.as_str())
+                .toolbar()
+                .on_press(Msg::Page(Page::Setups))
+                .id("setup-chip")
+                .label("Active setup")
+                .into(),
+        );
     }
     if config.page == Page::Mixer {
         controls.push(
@@ -704,6 +754,9 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
                 .id("mixer-filter")
                 .into(),
         );
+        return toolbar(controls).into();
+    }
+    if config.page == Page::Setups {
         return toolbar(controls).into();
     }
     if config.page == Page::Effects {
@@ -893,15 +946,59 @@ impl Musubi {
         app.effects_service = Some(EffectsService { paths: effect_paths, units });
         app
     }
+    fn reload_setups(&mut self) {
+        let Some(store) = &self.setup_store else { return };
+        match store.list() {
+            Ok(entries) => {
+                self.setup_entries =
+                    entries.into_iter().map(|(id, result)| (id, result.map_err(|e| e.to_string()))).collect();
+                if !self.setup_entries.iter().any(|(id, _)| Some(id.as_str()) == self.setup_selected.as_deref()) {
+                    self.setup_selected = self.active_setup.as_ref().map(|setup| setup.id.clone()).or_else(|| {
+                        self.setup_entries.iter().find(|(_, result)| result.is_ok()).map(|(id, _)| id.clone())
+                    });
+                }
+                self.setup_name_input = self.selected_setup().map_or_else(String::new, |setup| setup.name.clone());
+            }
+            Err(error) => self.notice = Some(format!("Setups: {error}")),
+        }
+    }
+    fn selected_setup(&self) -> Option<&Setup> {
+        self.setup_entries
+            .iter()
+            .find(|(id, _)| Some(id.as_str()) == self.setup_selected.as_deref())
+            .and_then(|(_, result)| result.as_ref().ok())
+    }
+    fn setup_deleted(&mut self, id: String, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                if self.active_setup.as_ref().is_some_and(|setup| setup.id == id) {
+                    self.active_setup = None;
+                    self.reconcile_state = reconcile::State::default();
+                    self.reconcile_requests.clear();
+                }
+                self.reload_setups();
+                self.notice = Some("Setup deleted.".into());
+                self.setup_keeper_error = None;
+            }
+            Err(error) => {
+                self.setup_keeper_error = Some(error.clone());
+                self.notice = Some(format!("Setup: {error}"));
+            }
+        }
+    }
     fn sync_keeper(&mut self) {
         let enabled = self.active_setup.as_ref().is_some_and(|setup| setup.keep_connected || setup.exclusive);
         if let Some(worker) = &self.effects_worker {
             if let Err(error) = worker.send(EffectRequest::Keeper(enabled)) {
+                self.setup_keeper_error = Some(error.to_string());
                 self.notice = Some(format!("Setup keeper: {error}"));
             }
         } else if let Some(service) = &self.effects_service {
             if let Err(error) = effects::service::keeper_unit(&service.units, enabled) {
+                self.setup_keeper_error = Some(error.clone());
                 self.notice = Some(format!("Setup keeper: {error}"));
+            } else {
+                self.setup_keeper_error = None;
             }
         }
     }
@@ -965,6 +1062,7 @@ impl Musubi {
             return;
         }
         self.active_setup = Some(setup.clone());
+        self.reload_setups();
         self.sync_keeper();
         self.reconcile_state = reconcile::State::default();
         self.reconcile_requests.clear();
@@ -2088,6 +2186,34 @@ impl Musubi {
             .item(MenuItem::new("Disconnect all to this port", Msg::ContextAction(ContextAction::DisconnectTo(to))));
         menu =
             menu.item(MenuItem::new("Connect group in order", Msg::ContextAction(ContextAction::ConnectGroup(cell))));
+        let link = self.graph.links_by_pair.get(&(from, to)).and_then(|ids| {
+            ids.iter()
+                .copied()
+                .find(|id| self.graph.links.get(id).is_some_and(|link| matches!(link.state, LinkState::Active)))
+        });
+        let setup = self.active_setup.as_ref();
+        let pinned = setup.is_some_and(|setup| {
+            setup.routes.iter().any(|route| {
+                self.graph.ports.get(&from).and_then(|port| self.graph.stable_port_id(port)).as_ref()
+                    == Some(&route.output)
+                    && self.graph.ports.get(&to).and_then(|port| self.graph.stable_port_id(port)).as_ref()
+                        == Some(&route.input)
+            })
+        });
+        let label = setup.map_or("Add to setup (activate a setup first)".to_owned(), |setup| {
+            format!("{} {}", if pinned { "Remove from" } else { "Add to" }, setup.name)
+        });
+        menu = menu.item(
+            MenuItem::new(
+                label,
+                if pinned {
+                    Msg::SetupUnpin(link.unwrap_or_default())
+                } else {
+                    Msg::SetupPin(link.unwrap_or_default())
+                },
+            )
+            .enabled(setup.is_some() && link.is_some()),
+        );
         let group = if column {
             &layout.cols.groups[layout.cols.group_of(cell.col)]
         } else {
@@ -2141,7 +2267,7 @@ impl Musubi {
     }
     fn kind(&self) -> PortKind {
         match self.page {
-            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock => PortKind::Audio,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock | Page::Setups => PortKind::Audio,
             Page::Midi => PortKind::Midi,
             Page::Midi2 => PortKind::Ump,
             Page::Video => PortKind::Video,
@@ -2149,7 +2275,7 @@ impl Musubi {
     }
     fn index(page: Page) -> usize {
         match page {
-            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock => 0,
+            Page::Audio | Page::Mixer | Page::Effects | Page::Devices | Page::Clock | Page::Setups => 0,
             Page::Midi => 1,
             Page::Midi2 => 2,
             Page::Video => 3,
@@ -2367,6 +2493,31 @@ impl Musubi {
                         .spacing(4.)
                         .into(),
                     );
+                    if let Some(setup) = &self.active_setup {
+                        let pinned = self
+                            .graph
+                            .ports
+                            .get(&link.output)
+                            .and_then(|port| self.graph.stable_port_id(port))
+                            .zip(self.graph.ports.get(&link.input).and_then(|port| self.graph.stable_port_id(port)))
+                            .is_some_and(|(out, input)| {
+                                setup.routes.iter().any(|route| route.output == out && route.input == input)
+                            });
+                        body.push(
+                            button(format!("{} {}", if pinned { "Remove from" } else { "Add to" }, setup.name))
+                                .on_press(if pinned { Msg::SetupUnpin(link.id) } else { Msg::SetupPin(link.id) })
+                                .id(format!("setup-inspector-{}", link.id))
+                                .into(),
+                        );
+                    } else if self.setup_store.is_some() {
+                        body.push(
+                            button("Add to active setup")
+                                .enabled(false)
+                                .tooltip("Activate a setup first")
+                                .id(format!("setup-inspector-{}", link.id))
+                                .into(),
+                        );
+                    }
                 }
             }
             if self.graph.kind(port.id) == Some(PortKind::Audio) {
@@ -2459,7 +2610,7 @@ impl Musubi {
     }
 }
 
-fn reason_text(reason: Reason) -> &'static str {
+pub(crate) fn reason_text(reason: Reason) -> &'static str {
     match reason {
         Reason::MissingPort => "port no longer present",
         Reason::WrongDirection => "both ports must run output → input",
@@ -2546,6 +2697,7 @@ impl Program for Musubi {
             self.sync_keeper();
         }
         self.reload_effects();
+        self.reload_setups();
         if let Some(fake) = &self.fake {
             let events = std::iter::from_fn(|| fake.borrow_mut().next_event()).collect::<Vec<_>>();
             for event in events {
@@ -2575,6 +2727,122 @@ impl Program for Musubi {
                 self.setup_retry_scheduled = false;
                 self.enforce_setup(cx);
             }
+            Msg::SetupSelect(id) => {
+                self.setup_selected = Some(id);
+                self.setup_name_input = self.selected_setup().map_or_else(String::new, |setup| setup.name.clone());
+            }
+            Msg::SetupNameInput(name) => self.setup_name_input = name,
+            Msg::SetupNameCommit => {
+                if let Some(mut setup) = self.selected_setup().cloned() {
+                    let name = self.setup_name_input.trim();
+                    if !name.is_empty() && name != setup.name {
+                        setup.name = name.to_owned();
+                        self.update(Msg::SaveSetup(setup), cx);
+                    }
+                }
+            }
+            Msg::SetupKeep(enabled) => {
+                if let Some(mut setup) = self.selected_setup().cloned() {
+                    setup.keep_connected = enabled;
+                    self.update(Msg::SaveSetup(setup), cx);
+                }
+            }
+            Msg::SetupExclusive(true) => cx.alert(self.window,
+                Alert::new("Exclusive setup", "Exclusive removes other links on this setup’s ports. WirePlumber may re-create its automatic links.")
+                    .default_button("Turn on Exclusive", Msg::SetupExclusiveConfirmed).cancel_button("Cancel")),
+            Msg::SetupExclusiveConfirmed | Msg::SetupExclusive(false) => {
+                let enabled = matches!(msg, Msg::SetupExclusiveConfirmed);
+                if let Some(mut setup) = self.selected_setup().cloned() {
+                    setup.exclusive = enabled;
+                    self.update(Msg::SaveSetup(setup), cx);
+                    self.notice = Some(if enabled {
+                        "Exclusive removes other links on these ports; WirePlumber may re-create automatic links.".into()
+                    } else { "Exclusive turned off.".into() });
+                }
+            }
+            Msg::SetupKeeperRetry => self.sync_keeper(),
+            Msg::SetupNew => {
+                if self.setup_store.is_some() {
+                    if self.page != Page::Setups { self.setup_new_page = self.page; }
+                    self.setup_new_name.clear();
+                    self.setup_sheet = Some(cx.show_sheet(self.window));
+                }
+            }
+            Msg::SetupNewName(name) => self.setup_new_name = name,
+            Msg::SetupNewCancel => {
+                if let Some(sheet) = self.setup_sheet.take() { cx.close_window(sheet); }
+            }
+            Msg::SetupNewCommit => {
+                let name = self.setup_new_name.trim();
+                if !name.is_empty() {
+                    let id = (1..).map(|n| format!("setup-{n}"))
+                        .find(|id| !self.setup_entries.iter().any(|(existing, _)| existing == id)).unwrap();
+                    let kind = self.setup_new_page;
+                    let mut links: Vec<_> = self.graph.links.values()
+                        .filter(|link| matches!(link.state, LinkState::Active)
+                            && self.graph.kind(link.output).is_some_and(|port| kind.accepts(port))
+                            && self.graph.kind(link.input).is_some_and(|port| kind.accepts(port)))
+                        .collect();
+                    links.sort_by_key(|link| link.id);
+                    let routes = links.into_iter().filter_map(|link| Some(Route {
+                        output: self.graph.stable_port_id(self.graph.ports.get(&link.output)?)?,
+                        input: self.graph.stable_port_id(self.graph.ports.get(&link.input)?)?,
+                    })).collect();
+                    let setup = Setup { version: setups::VERSION, id: id.clone(), name: name.to_owned(),
+                        routes, keep_connected: false, exclusive: false };
+                    self.update(Msg::SaveSetup(setup), cx);
+                    if self.setup_entries.iter().any(|(existing, _)| existing == &id) {
+                        self.setup_selected = Some(id);
+                        self.update(Msg::SetupNewCancel, cx);
+                        self.update(Msg::Page(Page::Setups), cx);
+                    }
+                }
+            }
+            Msg::SetupDelete(id) => {
+                if let Some(store) = &self.setup_store {
+                    let file = store.paths.json(&id).map(|path| home_relative(&path)).unwrap_or_default();
+                    cx.alert(self.window, Alert::new("Delete setup", format!("Remove this setup and its file?\n{file}"))
+                        .destructive_button("Delete setup", Msg::SetupDeleteConfirmed(id)).cancel_button("Cancel"));
+                }
+            }
+            Msg::SetupDeleteConfirmed(id) => {
+                if let Some(store) = &self.setup_store {
+                    let active = self.active_setup.as_ref().is_some_and(|setup| setup.id == id);
+                    if let Some(worker) = &self.effects_worker {
+                        if worker.send(EffectRequest::SetupDelete(id, store.paths.clone(), active)).is_err() {
+                            self.notice = Some("Effects thread stopped.".into());
+                        }
+                    } else {
+                        let result = (|| {
+                            if active {
+                                if let Some(service) = &self.effects_service {
+                                    effects::service::keeper_unit(&service.units, false).map_err(std::io::Error::other)?;
+                                }
+                            }
+                            store.delete(&id)
+                        })().map_err(|error| error.to_string());
+                        self.setup_deleted(id, result);
+                    }
+                }
+            }
+            Msg::SetupPin(link) => {
+                if let Some(setup) = &self.active_setup {
+                    self.update(Msg::PinLink(setup.id.clone(), link), cx);
+                } else { self.notice = Some("Activate a setup to pin links.".into()); }
+            }
+            Msg::SetupUnpin(link) => {
+                if let Some(setup) = &self.active_setup {
+                    if let Some(link) = self.graph.links.get(&link) {
+                        let route = self.graph.ports.get(&link.output).and_then(|port| self.graph.stable_port_id(port))
+                            .zip(self.graph.ports.get(&link.input).and_then(|port| self.graph.stable_port_id(port)));
+                        if let Some((output, input)) = route {
+                            if let Some(index) = setup.routes.iter().position(|route| route.output == output && route.input == input) {
+                                self.update(Msg::UnpinRoute(setup.id.clone(), index), cx);
+                            }
+                        }
+                    }
+                } else { self.notice = Some("Activate a setup to unpin routes.".into()); }
+            }
             Msg::ActivateSetup(id) => self.activate_setup(id, cx),
             Msg::DeactivateSetup => {
                 if let Some(store) = &self.setup_store {
@@ -2585,6 +2853,7 @@ impl Program for Musubi {
                             self.reconcile_requests.clear();
                             self.sync_keeper();
                             self.notice = Some("Setup deactivated; links left in place.".into());
+                            self.reload_setups();
                         }
                         Err(error) => self.notice = Some(format!("Setup: {error}")),
                     }
@@ -2601,6 +2870,7 @@ impl Program for Musubi {
                                 self.enforce_setup(cx);
                             }
                             self.notice = Some("Setup saved.".into());
+                            self.reload_setups();
                         }
                         Err(error) => self.notice = Some(format!("Setup: {error}")),
                     }
@@ -2635,6 +2905,7 @@ impl Program for Musubi {
                                 self.active_setup = Some(setup);
                             }
                             self.notice = Some("Route pinned to setup.".into());
+                            self.reload_setups();
                         }
                         Err(error) => self.notice = Some(format!("Setup: {error}")),
                     }
@@ -2657,6 +2928,7 @@ impl Program for Musubi {
                                 self.reconcile_state = reconcile::State::default();
                             }
                             self.notice = Some("Route unpinned from setup.".into());
+                            self.reload_setups();
                         }
                         Err(error) => self.notice = Some(format!("Setup: {error}")),
                     }
@@ -2967,8 +3239,12 @@ impl Program for Musubi {
                 EffectResponse::Delete(id, result) => self.effect_deleted(id, result),
                 EffectResponse::Manifest(result) => self.show_effect_manifest(result, cx),
                 EffectResponse::RemoveAll(result) => self.effect_removed_all(result),
-                EffectResponse::Keeper(Err(error)) => self.notice = Some(format!("Setup keeper: {error}")),
-                EffectResponse::Keeper(Ok(())) => {}
+                EffectResponse::Keeper(Err(error)) => {
+                    self.setup_keeper_error = Some(error.clone());
+                    self.notice = Some(format!("Setup keeper: {error}"));
+                }
+                EffectResponse::Keeper(Ok(())) => self.setup_keeper_error = None,
+                EffectResponse::SetupDelete(id, result) => self.setup_deleted(id, result),
                 EffectResponse::Error(error) => {
                     self.effects_worker = None;
                     self.notice = Some(format!("Effects: {error}"));
@@ -3259,6 +3535,9 @@ impl Program for Musubi {
                     self.send_command(Command::StartProfiler);
                 } else if page != Page::Clock && self.page == Page::Clock {
                     self.send_command(Command::StopProfiler);
+                }
+                if matches!(self.page, Page::Audio | Page::Midi | Page::Midi2 | Page::Video) {
+                    self.setup_new_page = self.page;
                 }
                 self.page = page;
                 self.hovered = None;
@@ -3751,6 +4030,9 @@ impl Program for Musubi {
                 self.route_to,
             );
         }
+        if self.setup_sheet == Some(window) {
+            return setups::page::new_sheet(&self.setup_new_name);
+        }
         let mut side = column![
             row![
                 container(aizome_kit::icon(Icon::Music).size(18.).role(Role::Accent))
@@ -3771,15 +4053,18 @@ impl Program for Musubi {
             .into_iter()
             .filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock))
         {
-            let count = self
-                .graph
-                .links
-                .values()
-                .filter(|link| {
-                    self.graph.kind(link.output).is_some_and(|kind| page.accepts(kind))
-                        && self.graph.kind(link.input).is_some_and(|kind| page.accepts(kind))
-                })
-                .count();
+            let count = if page == Page::Setups {
+                self.setup_entries.len()
+            } else {
+                self.graph
+                    .links
+                    .values()
+                    .filter(|link| {
+                        self.graph.kind(link.output).is_some_and(|kind| page.accepts(kind))
+                            && self.graph.kind(link.input).is_some_and(|kind| page.accepts(kind))
+                    })
+                    .count()
+            };
             side = side.push(
                 row![
                     sidebar_item(icon, title, self.page == page).on_press(Msg::Page(page)).id(title).width(Fill),
@@ -3901,6 +4186,15 @@ impl Program for Musubi {
             }
         } else if self.page == Page::Clock {
             clock::page::view(&self.clock_settings, &self.clock_load, self.clock_persistent)
+        } else if self.page == Page::Setups {
+            setups::page::view(
+                &self.graph,
+                &self.setup_entries,
+                self.setup_selected.as_deref(),
+                self.active_setup.as_ref(),
+                &self.setup_name_input,
+                self.setup_keeper_error.as_deref(),
+            )
         } else if self.page == Page::Effects {
             let outputs = self
                 .audio
@@ -3954,7 +4248,9 @@ impl Program for Musubi {
                 Page::Audio => "No audio ports. Audio devices and applications appear here when PipeWire finds them.",
                 Page::Midi => "No MIDI ports. MIDI devices and applications appear here when PipeWire finds them.",
                 Page::Midi2 => "No MIDI 2.0 ports. UMP devices and applications appear here when PipeWire finds them.",
-                Page::Mixer | Page::Effects | Page::Devices | Page::Clock => unreachable!("content handled above"),
+                Page::Mixer | Page::Effects | Page::Devices | Page::Clock | Page::Setups => {
+                    unreachable!("content handled above")
+                }
             };
             container(text(explanation).size(20.).role(Role::Text2).wrap())
                 .align_x(Align::Center)
@@ -4034,6 +4330,8 @@ impl Program for Musubi {
                     format!("Devices · {cards} {}", if cards == 1 { "device" } else { "devices" })
                 } else if self.page == Page::Clock {
                     "Clock & Load".into()
+                } else if self.page == Page::Setups {
+                    format!("Setups · {}", self.setup_entries.len())
                 } else {
                     title
                 },
@@ -4045,6 +4343,8 @@ impl Program for Musubi {
                     format!("Devices · {cards}")
                 } else if self.page == Page::Clock {
                     "Clock & Load".into()
+                } else if self.page == Page::Setups {
+                    "Setups".into()
                 } else {
                     short_title
                 },
@@ -4069,6 +4369,17 @@ impl Program for Musubi {
                 mixer_filter: self.mixer_filter.clone(),
                 mixer_show: self.mixer_show,
                 effects_available: self.effects_service.is_some(),
+                active_setup: self
+                    .active_setup
+                    .as_ref()
+                    .filter(|_| matches!(self.page, Page::Audio | Page::Midi | Page::Midi2 | Page::Video))
+                    .map(|setup| {
+                        format!(
+                            "{} · {}",
+                            setup.name,
+                            if setup.keep_connected || setup.exclusive { "kept" } else { "active" }
+                        )
+                    }),
             }),
             vec![],
         )
@@ -4109,6 +4420,8 @@ impl Program for Musubi {
             format!("{cards} {}", if cards == 1 { "device" } else { "devices" })
         } else if self.page == Page::Effects {
             chains_label(self.effect_chains.len())
+        } else if self.page == Page::Setups {
+            format!("{} setups", self.setup_entries.len())
         } else if self.page == Page::Clock {
             // The forced values are the left-hand sentence; don't repeat them.
             format!("DSP {:.1}%", self.clock_load.current_percent())
@@ -4119,12 +4432,12 @@ impl Program for Musubi {
         } else {
             format!("{ports} ports")
         };
-        let body: Element<Msg> = if self.inspector && !matches!(self.page, Page::Mixer | Page::Effects | Page::Devices)
-        {
-            row![content, self.inspector_view()].height(Fill).into()
-        } else {
-            content
-        };
+        let body: Element<Msg> =
+            if self.inspector && !matches!(self.page, Page::Mixer | Page::Effects | Page::Devices | Page::Setups) {
+                row![content, self.inspector_view()].height(Fill).into()
+            } else {
+                content
+            };
         let main = column![controls, body, status_bar(vec![status_text(status), spacer().into(), status_text(right)]),]
             .height(Fill);
         sidebar_layout(side, main).into()
@@ -4204,7 +4517,8 @@ impl Program for Musubi {
                     .enabled(self.selected.is_some()),
             )
             .item(MenuItem::new("Connect in Order", Msg::ConnectInOrder))
-            .item(MenuItem::new("Add Route…", Msg::AddRoute));
+            .item(MenuItem::new("Add Route…", Msg::AddRoute))
+            .item(MenuItem::new("Save Setup…", Msg::SetupNew).enabled(self.setup_store.is_some()));
         MenuBar::standard(&self.info()).replace("Edit", edit).with_menu(view).with_menu(routing)
     }
 }

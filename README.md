@@ -2,7 +2,7 @@
 
 See what is connected in PipeWire, make the next connection yourself, and set levels. Musubi puts sources on one axis and destinations on the other: click a cell to connect or disconnect a port. A line drag applies several connections together; Undo reverses the action. Audio, MIDI 1.0, MIDI 2.0 and video each have their own page. Switch to List to inspect, filter and change routes without using the grid. The Mixer page has a fader, meter, mute and balance per device and app stream; the Devices page switches profiles and routes. Effects adds stereo EQ chains as virtual outputs, each its own user service; Clock & Load forces the graph's rate and buffer size and shows DSP load.
 
-**Status:** early and unpolished; phases 1 (patchbay), 2 (mixer, meters, devices) and 3 (EQ effects, clock & load) of a larger plan (saved setups come later). Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
+**Status:** early and unpolished; phases 1 (patchbay), 2 (mixer, meters, devices), 3 (EQ effects, clock & load) and 4 (saved setups) of a larger plan. Musubi is a power-user tool for Aizome on [Sekka](https://github.com/bitemyapp/sekka) and is not part of Sekka's app catalog.
 
 | Night | Day |
 | --- | --- |
@@ -10,6 +10,7 @@ See what is connected in PipeWire, make the next connection yourself, and set le
 | ![Filtered route list in Night theme](docs/screenshots/list-filtered-night.png) | ![Filtered route list in Day theme](docs/screenshots/list-filtered-day.png) |
 | ![Mixer in Night theme](docs/screenshots/mixer-page-night.png) | ![Mixer in Day theme](docs/screenshots/mixer-page-day.png) |
 | ![Devices in Night theme](docs/screenshots/devices-page-night.png) | ![Devices in Day theme](docs/screenshots/devices-page-day.png) |
+| ![Saved setups in Night theme](docs/screenshots/setups-page-night.png) | ![Saved setups in Day theme](docs/screenshots/setups-page-day.png) |
 
 These are headless Aizome Harness goldens with fixture ports, not screenshots of a live session.
 
@@ -40,6 +41,12 @@ Replace `myMachine` with your system's name; alternatively import `musubi.nixosM
 
 The Audio toolbar offers stereo Pairs or individual Channels, monitor ports, axis Swap and independent From/To filters. Applications are grouped under their name, with each stream's own title beneath, so two players of one app stay apart. Long names are shortened to the part that tells siblings apart; hover a name for all of it, drag the edge of a header to widen it (double-click fits it), or turn on **Full Names** (Option+Super+F) to see everything. MIDI 2.0 can show MIDI 1.0 ports and asks before crossing formats. The inspector shows the selected port's facts and connections. The route list has sortable columns and an Add Route sheet. In both views Musubi shows the graph as PipeWire reports it; a requested link is pending until the server reports it, and errors are shown rather than silently accepted. View choices are stored in `$XDG_CONFIG_HOME/aizome/musubi.toml` (or `~/.config/aizome/musubi.toml`).
 
+## Setups
+
+On Audio, MIDI, MIDI 2.0 or Video, choose **Routing → Save Setup…** (also available from the command palette), enter a name, and save the page’s currently connected links as stable routes. **PATCHBAY → Setups** lists saved setups and each route’s state. Activate one setup at a time; switching leaves the previous setup’s physical links connected. The matrix toolbar shows the active setup; click its chip to open Setups. In a matrix cell’s context menu or the inspector, explicitly add a live link to the active setup or remove its route; ordinary graph changes do not change saved routes.
+
+**Keep connected** recreates missing routes while Musubi runs and via its user keeper service when closed. **Exclusive** removes other links touching the setup’s ports; the confirmation explains that WirePlumber may re-create automatic links, and Musubi stops trying after its rate limit. Waiting and ambiguous endpoints are not guessed; inspect ambiguous candidate names in the route status tooltip. Deactivating does not disconnect links. Deleting a setup confirms its exact file and stops/disables its keeper when active.
+
 ## Keyboard
 
 | Keys | Action |
@@ -58,7 +65,7 @@ The View, Edit and Routing menus expose commands without needing the grid. In Li
 
 ## Limits
 
-Musubi has no saved setups yet. Effects are stereo EQ chains on a virtual output (no input/voice EQ, LADSPA or LV2 plugins); Clock & Load forces the graph's rate and quantum and shows DSP load, but doesn't measure round-trip latency. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
+Effects are stereo EQ chains on a virtual output (no input/voice EQ, LADSPA or LV2 plugins); Clock & Load forces the graph's rate and quantum and shows DSP load, but doesn't measure round-trip latency. The Mixer writes Pulse-visible volume, mute, balance, defaults, routes and profiles through Aizome's audio service (the same as Settei), so a refused change can show for up to a second before the server's value returns; the status bar names the error. App streams have no balance control yet, and nodes Pulse cannot see get a fader only when they are filters (JACK clients stay read-only for now). Meters run only while visible, at most 24 at a time. PipeWire must expose compatible ports: a stream without a session manager may have **no ports** to display until the session manager sets up its routing. If PipeWire is unreachable, Musubi shows an unavailable message and keeps trying to reconnect rather than showing stale routes. An empty video or MIDI page does not mean hardware has been configured. WirePlumber can re-create its automatic links after you remove them; the status message explains this when observed. Hardware, permissions and session-manager support determine what you can connect.
 
 ## Effects recovery
 
