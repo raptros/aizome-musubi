@@ -26,6 +26,10 @@ use crate::{
         model::{StripControl, StripKind},
     },
     persistence, routes,
+    setups::{
+        self, Active, Route, RouteStatus, Setup,
+        reconcile::{self, Action},
+    },
     undo::History,
 };
 use aizome_kit::{
@@ -367,6 +371,12 @@ pub enum Msg {
     EffectDeleteConfirmed(String),
     EffectRemoveAll,
     EffectRemoveAllConfirmed(Vec<String>),
+    ActivateSetup(String),
+    DeactivateSetup,
+    SaveSetup(Setup),
+    PinLink(String, GlobalId),
+    UnpinRoute(String, usize),
+    SetupRetry,
     Activated,
     Matrix(MatrixMsg),
     Backend(Event),
@@ -467,6 +477,12 @@ pub struct Musubi {
     effect_burst: Option<(Chain, Chain)>,
     effect_replay: Option<(Chain, Chain, bool)>,
     effect_generation: u64,
+    setup_store: Option<setups::store::Store>,
+    pub active_setup: Option<Setup>,
+    reconcile_state: reconcile::State,
+    reconcile_requests: HashMap<RequestId, Action>,
+    setup_retry_scheduled: bool,
+    activation_pending: Option<usize>,
     pub graph: Graph,
     connection: Option<Connection>,
     clock_defaults: Option<(u32, u32)>,
@@ -859,6 +875,90 @@ impl Musubi {
             ..Self::default()
         }
     }
+    pub fn with_fake_setups(fake: Rc<RefCell<FakeBackend>>, paths: setups::paths::Paths) -> Self {
+        Self { fake: Some(fake), setup_store: Some(setups::store::Store { paths }), ..Self::default() }
+    }
+    fn finish_activation(&mut self) {
+        let Some(index) = self.activation_pending else { return };
+        let intents = &self.transactions[index].intents;
+        if intents
+            .iter()
+            .all(|intent| intent.result.is_some() && (!matches!(intent.result, Some(Ok(()))) || intent.observed))
+        {
+            self.activation_pending = None;
+            if intents.iter().any(|intent| intent.observed) {
+                self.history.record(index);
+            }
+        }
+    }
+
+    fn enforce_setup(&mut self, cx: &mut Cx<Msg>) {
+        let Some(setup) = &self.active_setup else { return };
+        let outcome = reconcile::step(&self.graph, setup, std::mem::take(&mut self.reconcile_state), Instant::now());
+        self.reconcile_state = outcome.state;
+        if !self.setup_retry_scheduled {
+            if let Some(delay) = reconcile::next_retry(&self.reconcile_state, Instant::now()) {
+                self.setup_retry_scheduled = true;
+                cx.after(delay, Msg::SetupRetry);
+            }
+        }
+        for notice in outcome.notices {
+            self.notice = Some(notice);
+        }
+        for action in outcome.actions {
+            self.next_request += 1;
+            let request = self.next_request;
+            let epoch = self.graph.epoch;
+            let command = match action {
+                Action::CreateLink(out, input) => Command::Connect {
+                    out: Handle { epoch, id: out },
+                    input: Handle { epoch, id: input },
+                    confirmed: false,
+                    request,
+                },
+                Action::RemoveLink(id) => Command::Disconnect { link: Handle { epoch, id }, request },
+            };
+            self.reconcile_requests.insert(request, action);
+            self.send_command(command);
+        }
+        self.pump_fake(cx);
+    }
+
+    fn activate_setup(&mut self, id: String, cx: &mut Cx<Msg>) {
+        let Some(store) = &self.setup_store else { return };
+        let setup = match store.load(&id) {
+            Ok(setup) => setup,
+            Err(error) => {
+                self.notice = Some(format!("Setup: {error}"));
+                return;
+            }
+        };
+        if let Err(error) = store.set_active(&Active { id }) {
+            self.notice = Some(format!("Setup: {error}"));
+            return;
+        }
+        self.active_setup = Some(setup.clone());
+        self.reconcile_state = reconcile::State::default();
+        self.reconcile_requests.clear();
+        let mut seen = HashSet::new();
+        let pairs: Vec<_> = setups::plan(&self.graph, &setup)
+            .routes
+            .into_iter()
+            .zip(&setup.routes)
+            .filter_map(|(status, route)| match status {
+                RouteStatus::Linkable(out, input) if seen.insert((out, input)) => {
+                    reconcile::create_pending(&mut self.reconcile_state, route, (out, input));
+                    Some((out, input, true))
+                }
+                _ => None,
+            })
+            .collect();
+        self.activation_pending = self.submit_pairs(pairs, cx);
+        self.finish_activation();
+        self.enforce_setup(cx);
+        self.notice.get_or_insert(format!("Setup “{}” active.", setup.name));
+    }
+
     fn reload_effects(&mut self) {
         let Some(service) = &self.effects_service else { return };
         match service.list() {
@@ -2355,10 +2455,22 @@ impl Program for Musubi {
             self.paths = persistence::Paths::from_environment();
             self.clock_paths = effects::paths::Paths::from_environment().ok();
         }
+        if self.live && self.setup_store.is_none() {
+            match setups::paths::Paths::from_environment() {
+                Ok(paths) => self.setup_store = Some(setups::store::Store { paths }),
+                Err(error) => self.notice = Some(format!("Setup: {error}")),
+            }
+        }
         if self.persist_enabled {
             self.options = persistence::load_options(self.paths.as_ref());
             self.mixer_options = persistence::load_mixer(self.paths.as_ref());
             self.persisted_folds = persistence::load_folds(self.paths.as_ref());
+        }
+        if let Some(store) = &self.setup_store {
+            match store.active().and_then(|active| active.map(|active| store.load(&active.id)).transpose()) {
+                Ok(active) => self.active_setup = active,
+                Err(error) => self.notice = Some(format!("Setup: {error}")),
+            }
         }
         self.clock_persistent = self.clock_paths.as_ref().is_some_and(|paths| paths.clock.exists());
         self.window = cx.open_window(WindowSpec::new("Musubi — Patchbay").size(1280., 800.).min_size(900., 560.));
@@ -2428,6 +2540,95 @@ impl Program for Musubi {
             self.finish_effect_save();
         }
         match msg {
+            Msg::SetupRetry => {
+                self.setup_retry_scheduled = false;
+                self.enforce_setup(cx);
+            }
+            Msg::ActivateSetup(id) => self.activate_setup(id, cx),
+            Msg::DeactivateSetup => {
+                if let Some(store) = &self.setup_store {
+                    match store.clear_active() {
+                        Ok(()) => {
+                            self.active_setup = None;
+                            self.reconcile_state = reconcile::State::default();
+                            self.reconcile_requests.clear();
+                            self.notice = Some("Setup deactivated; links left in place.".into());
+                        }
+                        Err(error) => self.notice = Some(format!("Setup: {error}")),
+                    }
+                }
+            }
+            Msg::SaveSetup(setup) => {
+                if let Some(store) = &self.setup_store {
+                    match store.save(&setup) {
+                        Ok(()) => {
+                            if self.active_setup.as_ref().is_some_and(|active| active.id == setup.id) {
+                                self.active_setup = Some(setup);
+                                self.reconcile_state = reconcile::State::default();
+                                self.enforce_setup(cx);
+                            }
+                            self.notice = Some("Setup saved.".into());
+                        }
+                        Err(error) => self.notice = Some(format!("Setup: {error}")),
+                    }
+                }
+            }
+            Msg::PinLink(id, link) => {
+                if let Some(store) = &self.setup_store {
+                    let result = store.load(&id).and_then(|mut setup| {
+                        let link = self.graph.links.get(&link).ok_or_else(|| std::io::Error::other("link is gone"))?;
+                        let output = self
+                            .graph
+                            .ports
+                            .get(&link.output)
+                            .and_then(|port| self.graph.stable_port_id(port))
+                            .ok_or_else(|| std::io::Error::other("output has no stable identity"))?;
+                        let input = self
+                            .graph
+                            .ports
+                            .get(&link.input)
+                            .and_then(|port| self.graph.stable_port_id(port))
+                            .ok_or_else(|| std::io::Error::other("input has no stable identity"))?;
+                        let route = Route { output, input };
+                        if !setup.routes.contains(&route) {
+                            setup.routes.push(route);
+                        }
+                        store.save(&setup)?;
+                        Ok(setup)
+                    });
+                    match result {
+                        Ok(setup) => {
+                            if self.active_setup.as_ref().is_some_and(|active| active.id == id) {
+                                self.active_setup = Some(setup);
+                            }
+                            self.notice = Some("Route pinned to setup.".into());
+                        }
+                        Err(error) => self.notice = Some(format!("Setup: {error}")),
+                    }
+                }
+            }
+            Msg::UnpinRoute(id, index) => {
+                if let Some(store) = &self.setup_store {
+                    let result = store.load(&id).and_then(|mut setup| {
+                        if index >= setup.routes.len() {
+                            return Err(std::io::Error::other("route is gone"));
+                        }
+                        setup.routes.remove(index);
+                        store.save(&setup)?;
+                        Ok(setup)
+                    });
+                    match result {
+                        Ok(setup) => {
+                            if self.active_setup.as_ref().is_some_and(|active| active.id == id) {
+                                self.active_setup = Some(setup);
+                                self.reconcile_state = reconcile::State::default();
+                            }
+                            self.notice = Some("Route unpinned from setup.".into());
+                        }
+                        Err(error) => self.notice = Some(format!("Setup: {error}")),
+                    }
+                }
+            }
             Msg::ClockRate(rate) if self.clock_settings.valid_rate(rate) => {
                 self.apply_clock((Some(rate), self.clock_settings.force_quantum), None)
             }
@@ -3295,6 +3496,8 @@ impl Program for Musubi {
                     self.pending.clear();
                     self.errors.clear();
                     self.removed.clear();
+                    self.reconcile_state = reconcile::State::default();
+                    self.reconcile_requests.clear();
                     self.clock_defaults = None;
                     self.clock_settings = Settings::default();
                     self.clock_pending = None;
@@ -3377,6 +3580,10 @@ impl Program for Musubi {
                             })
                     })
                 });
+                self.finish_activation();
+                if self.active_setup.as_ref().is_some_and(|setup| setup.keep_connected || setup.exclusive) {
+                    self.enforce_setup(cx);
+                }
                 self.refresh_layouts();
                 self.sync_meters(cx);
             }
@@ -3402,6 +3609,27 @@ impl Program for Musubi {
                 for intent in self.transactions.iter_mut().flat_map(|t| &mut t.intents) {
                     if intent.request == request {
                         intent.result = Some(result.clone());
+                    }
+                }
+                if let Some(action) = self.reconcile_requests.remove(&request) {
+                    if result.is_err() {
+                        match action {
+                            Action::CreateLink(out, input) => {
+                                if let Some(setup) = &self.active_setup {
+                                    if let Some(route) = setup.routes.iter().find(|route| {
+                                        self.graph.resolve(&route.output)
+                                            == crate::graph::identity::Resolution::Unique(out)
+                                            && self.graph.resolve(&route.input)
+                                                == crate::graph::identity::Resolution::Unique(input)
+                                    }) {
+                                        reconcile::create_failed(&mut self.reconcile_state, route, Instant::now());
+                                    }
+                                }
+                            }
+                            Action::RemoveLink(id) => reconcile::remove_failed(&mut self.reconcile_state, id),
+                        }
+                        self.notice = Some(format!("Setup enforcement failed: {}", result.as_ref().unwrap_err()));
+                        self.enforce_setup(cx);
                     }
                 }
                 if let Some((transaction, replay)) = self.native_pending.remove(&request) {
@@ -3450,6 +3678,7 @@ impl Program for Musubi {
                         }
                     }
                 }
+                self.finish_activation();
                 self.refresh_layouts();
             }
         }

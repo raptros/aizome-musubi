@@ -1,10 +1,23 @@
+use aizome_kit::testing::Harness;
+use aizome_musubi::{
+    app::{Msg, Musubi},
+    backend::{Backend, Command, fake::FakeBackend},
+};
 use aizome_musubi::{
     graph::{
         ClientRecord, DeviceRecord, Direction, Graph, GraphDelta, LinkRecord, LinkState, NativeProps, NodeRecord,
         PortRecord, Properties, Upsert, identity::Resolution,
     },
-    setups::{Active, End, Route, RouteStatus, Setup, VERSION, paths::Paths, plan, store::Store},
+    setups::{
+        Active, End, Route, RouteStatus, Setup, VERSION,
+        paths::Paths,
+        plan,
+        reconcile::{self, Action, State},
+        store::Store,
+    },
 };
+use std::time::{Duration, Instant};
+use std::{cell::RefCell, rc::Rc};
 use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
@@ -168,6 +181,158 @@ fn foreign_links_touch_only_uniquely_named_setup_ports() {
     let result = plan(&graph, &saved);
     assert_eq!(result.routes, vec![RouteStatus::Linked(100)]);
     assert_eq!(result.foreign_links, vec![101, 102]);
+}
+
+#[test]
+fn negotiating_link_is_linked() {
+    let initial = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let saved = setup(&initial, 12, 22);
+    let graph = fixture(
+        2,
+        [
+            hardware(10, Some("usb-serial")),
+            target(20),
+            vec![Upsert::Link(LinkRecord {
+                id: 100,
+                output: 12,
+                input: 22,
+                state: LinkState::Negotiating,
+                props: Properties::new(),
+            })],
+        ]
+        .concat(),
+    );
+    assert_eq!(plan(&graph, &saved).routes, vec![RouteStatus::Linked(100)]);
+    assert!(reconcile::step(&graph, &saved, State::default(), Instant::now()).actions.is_empty());
+}
+
+#[test]
+fn keep_recreates_after_node_replacement_without_repeating_inflight() {
+    let initial = fixture(1, [hardware(10, Some("usb-serial")), target(20), vec![link(90, 12, 22)]].concat());
+    let saved = setup(&initial, 12, 22);
+    let now = Instant::now();
+    assert!(reconcile::step(&initial, &saved, State::default(), now).actions.is_empty());
+    let replaced = fixture(2, [hardware(100, Some("usb-serial")), target(200)].concat());
+    let second = reconcile::step(&replaced, &saved, State::default(), now);
+    assert_eq!(second.actions, vec![Action::CreateLink(102, 202)]);
+    let third = reconcile::step(&replaced, &saved, second.state, now);
+    assert!(third.actions.is_empty());
+    let observed = fixture(2, [hardware(100, Some("usb-serial")), target(200), vec![link(300, 102, 202)]].concat());
+    assert!(reconcile::step(&observed, &saved, third.state, now).actions.is_empty());
+}
+
+#[test]
+fn exclusive_limits_each_stable_foreign_pair_and_notices() {
+    let initial = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let mut saved = setup(&initial, 12, 22);
+    saved.keep_connected = false;
+    let now = Instant::now();
+    let mut state = State::default();
+    for attempt in 0..4 {
+        let id = 100 + attempt;
+        let graph = fixture(
+            2,
+            [
+                hardware(10, Some("usb-serial")),
+                target(20),
+                vec![
+                    device(30, "other", None),
+                    node(31, "other.input", Some(30), None, ""),
+                    port(32, 31, Direction::Input),
+                    link(id, 12, 32),
+                ],
+            ]
+            .concat(),
+        );
+        let result = reconcile::step(&graph, &saved, state, now + Duration::from_secs(attempt as u64));
+        assert_eq!(result.actions, if attempt < 3 { vec![Action::RemoveLink(id)] } else { vec![] });
+        assert_eq!(!result.notices.is_empty(), attempt == 3);
+        state = result.state;
+    }
+}
+
+#[test]
+fn create_failure_backoff_and_ambiguous_route_no_action() {
+    let graph = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let saved = setup(&graph, 12, 22);
+    let now = Instant::now();
+    let mut state = State::default();
+    for (delay, previous) in [(1, 0), (5, 1), (30, 6)] {
+        let attempted = reconcile::step(&graph, &saved, state, now + Duration::from_secs(previous));
+        assert_eq!(attempted.actions, vec![Action::CreateLink(12, 22)]);
+        state = attempted.state;
+        reconcile::create_failed(&mut state, &saved.routes[0], now + Duration::from_secs(previous));
+        assert_eq!(
+            reconcile::next_retry(&state, now + Duration::from_secs(previous)),
+            Some(Duration::from_secs(delay))
+        );
+        let waiting =
+            reconcile::step(&graph, &saved, state, now + Duration::from_secs(previous) + Duration::from_millis(500));
+        assert!(waiting.actions.is_empty());
+        state = waiting.state;
+    }
+    let ambiguous =
+        fixture(2, [hardware(10, Some("usb-serial")), hardware(100, Some("usb-serial")), target(20)].concat());
+    assert!(reconcile::step(&ambiguous, &saved, State::default(), now).actions.is_empty());
+}
+
+#[test]
+fn activation_is_one_observed_undo_transaction_and_switch_stops_enforcement() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let route = |from, to| {
+        let fake = fake.borrow();
+        let graph = &fake.graph;
+        Route {
+            output: graph.stable_port_id(&graph.ports[&from]).unwrap(),
+            input: graph.stable_port_id(&graph.ports[&to]).unwrap(),
+        }
+    };
+    let a = Setup {
+        version: VERSION,
+        id: "a".into(),
+        name: "A".into(),
+        routes: vec![route(100, 104), route(101, 105)],
+        keep_connected: true,
+        exclusive: false,
+    };
+    let b = Setup {
+        version: VERSION,
+        id: "b".into(),
+        name: "B".into(),
+        routes: vec![route(100, 120)],
+        keep_connected: true,
+        exclusive: false,
+    };
+    store.save(&a).unwrap();
+    store.save(&b).unwrap();
+    let mut h = Harness::new(Musubi::with_fake_setups(fake.clone(), paths));
+    h.send(Msg::ActivateSetup("a".into()));
+    assert_eq!(h.program().transactions.len(), 1);
+    assert_eq!(h.program().transactions[0].intents.len(), 2);
+    assert!(h.program().transactions[0].intents.iter().all(|intent| intent.observed));
+    assert_eq!(store.active().unwrap().unwrap().id, "a");
+    h.send(Msg::ActivateSetup("b".into()));
+    assert_eq!(store.active().unwrap().unwrap().id, "b");
+    let a_link = *h.program().graph.links_by_pair[&(100, 104)].first().unwrap();
+    fake.borrow_mut().remove(a_link);
+    loop {
+        let event = fake.borrow_mut().next_event();
+        let Some(event) = event else { break };
+        h.send(Msg::Backend(event));
+    }
+    assert!(!h.program().graph.links_by_pair.contains_key(&(100, 104)));
+    assert!(h.program().graph.links_by_pair.contains_key(&(100, 120)));
+    h.send(Msg::DeactivateSetup);
+    assert!(store.active().unwrap().is_none());
+    assert!(h.program().graph.links_by_pair.contains_key(&(100, 120)));
+    assert_eq!(fake.borrow().commands.iter().filter(|cmd| matches!(cmd, Command::Connect { .. })).count(), 3);
+    h.send(Msg::Undo);
+    assert!(!h.program().graph.links_by_pair.contains_key(&(100, 120)));
+    h.send(Msg::Undo);
+    assert!(!h.program().graph.links_by_pair.contains_key(&(101, 105)));
 }
 
 #[test]

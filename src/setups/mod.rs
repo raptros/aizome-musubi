@@ -1,5 +1,6 @@
 //! Persisted setup routes and read-only matching against the observed graph.
 pub mod paths;
+pub mod reconcile;
 pub mod store;
 
 use crate::graph::{
@@ -69,11 +70,6 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                 ambiguous.extend(candidates.iter().copied());
             }
         }
-        for resolved in [&out, &input] {
-            if let Resolution::Unique(id) = resolved {
-                named.insert(*id);
-            }
-        }
         let status = match (out, input) {
             (Resolution::Ambiguous(candidates), _) => RouteStatus::Ambiguous { which: End::Output, candidates },
             (_, Resolution::Ambiguous(candidates)) => RouteStatus::Ambiguous { which: End::Input, candidates },
@@ -85,7 +81,10 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                     ids.iter()
                         .copied()
                         .filter(|id| {
-                            graph.links.get(id).is_some_and(|link| link.state == crate::graph::LinkState::Active)
+                            graph
+                                .links
+                                .get(id)
+                                .is_some_and(|link| !matches!(link.state, crate::graph::LinkState::Error(_)))
                         })
                         .min()
                 });
@@ -101,6 +100,17 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                 }
             }
         };
+        match &status {
+            RouteStatus::Linked(id) => {
+                if let Some(link) = graph.links.get(id) {
+                    named.extend([link.output, link.input]);
+                }
+            }
+            RouteStatus::Linkable(out, input) => {
+                named.extend([*out, *input]);
+            }
+            _ => {}
+        }
         routes.push(status);
     }
     let mut foreign_links: Vec<_> = graph
