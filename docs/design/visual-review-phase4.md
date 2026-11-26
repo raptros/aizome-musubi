@@ -107,3 +107,63 @@ I opened all 8 Setups goldens, the house-style references (`effects-five-night`,
 | `10-setup-deleted.png` | fail | Major 6; Minor 2 |
 | `02-audio-linked.png` | uncertain | No setup chip visible while there are 0 setups; Minor 10 |
 | `effects-*`, `devices-*`, `clock-forced-night.png` | pass | Used as house-style references |
+
+## Re-review after fixes (`f37dd38`)
+
+Reviewer: `sekka-visual` (OMP, anthropic/claude-opus-5-5), 2026-11-25. Recorded verbatim.
+
+The blocker and all seven majors are resolved. Most of the earlier minors are fixed too, and nothing new and serious showed up. I opened all 12 images.
+
+## Resolved / not resolved
+- **Blocker 1 (rows look the same): resolved.**
+  - Harness: the rows now read "Firefox · FL", "Firefox · ambiguous-port" and "USB Keyboard · capture_FL", each going to "Built-in Audio · FL".
+  - VM (`09`): "pw-cat · FL → musubi-vm-default · FL" and "pw-cat · FL → musubi-vm-patch · FL" are different rows you can tell apart. The VM nodes still show raw-looking names (see minors).
+- **Major 1 (route text size): resolved.** Route and status cells are now the same size as the Out/In/Status headers and match the Effects BANDS table.
+- **Major 2 (Day contrast): resolved by eye.** "Connected" (dark green) and "Ambiguous: 2 matches" (crimson) read clearly on the lavender table fill. I didn't measure the pixels.
+- **Major 3 (columns): resolved.**
+  - The route is now split into Out and In columns, and the headers line up with the cells (x 470 / 742 / 1014). The "Action" header is gone.
+  - At 1044px (`09`) there's about 18px between the end of "musubi-vm-default · FR" and Status (it was 9px). No collision is visible. No image shows how a longer name gets cut off.
+- **Major 4 (Undo): resolved.** "↶ Undo" sits next to the header in every golden and in both VM shots, where it's enabled after save and after delete.
+- **Major 5 (delete wording): resolved.**
+  - The dialog says `Remove "Studio" and its file?`, then "File in …/setups:" with "studio.json" on its own indented line.
+  - The long /tmp path is accepted. It now breaks after a "/", not in the middle of a folder name.
+- **Major 6 (empty state): resolved.**
+  - The heading is "No setups yet" with the Effects-style explanation under it, in the goldens and in `10`.
+  - The button names its source: "New setup from Audio…".
+- **Major 7 (keeper line): resolved.** Off: "Keeper: off — turn on Keep connected to hold these links while Musubi is closed." On (`09`): "Keeper: on — holds these links while Musubi is closed."
+- **New and serious:** none.
+
+These earlier minors are also fixed:
+- "1 setup" singular in the status bar.
+- Status dot in the list row: hollow when inactive, green when active.
+- Muted caption "Active · kept · 3 routes".
+- One-line explanation under the title.
+- Muted "Name" label.
+- "Delete setup…" moved to the top right, as in Effects.
+- Exclusive dialog wording.
+
+## Remaining minors
+- The header count differs between builds: the harness says "Setups · 1 setup" / "0 setups", the VM says "Setups · 1" / "Setups · 0" with no noun.
+- Port names are mixed in the harness fixture: "FL" next to "capture_FL" and "ambiguous-port".
+- The VM shows raw node names ("pw-cat", "musubi-vm-default", "musubi-vm-patch"). They may simply have no description in the VM; I can't tell from the image.
+- Columns are equal thirds, not sized to content. At 1044px the In column has about 18px to spare while Status has about 115px of empty space after "Connected". No image shows long labels being cut off with "…".
+- In the harness empty state Undo is greyed out right after "Setup deleted.", but in VM `10` it's enabled.
+- `mixer-page-night`: Setups now always shows (0). Effects is missing from that sidebar, but it's also missing in `devices-page-night`, so it looks tied to the test fixture.
+- Exclusive dialog overlapping the checkbox row: accepted, not counted.
+- No image shows the Exclusive-on state or a long label being cut off.
+
+## Per-image verdict
+| Image | Verdict |
+|---|---|
+| `setups-page-night.png` | pass |
+| `setups-page-day.png` | pass |
+| `setups-empty-night.png` | pass (minor: Undo greyed after delete) |
+| `setups-empty-day.png` | pass (same minor) |
+| `setups-delete-night.png` | pass |
+| `setups-delete-day.png` | pass |
+| `setups-exclusive-night.png` | pass |
+| `setups-exclusive-day.png` | pass |
+| `effects-five-night.png` | pass (house-style reference) |
+| `mixer-page-night.png` | pass (Setups shown; Effects missing, apparently a fixture effect) |
+| `09-setup-kept.png` | pass (minors: header count without the noun, raw node names, tight In column) |
+| `10-setup-deleted.png` | pass (minor: header count without the noun) |
