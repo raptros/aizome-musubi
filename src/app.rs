@@ -4049,10 +4049,10 @@ impl Program for Musubi {
         ]
         .spacing(8.)
         .width(Fill);
-        for (page, icon, title) in Page::ALL
-            .into_iter()
-            .filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock))
-        {
+        for (page, icon, title) in Page::ALL.into_iter().filter(|(page, _, _)| {
+            !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock)
+                && (*page != Page::Setups || self.setup_store.is_some())
+        }) {
             let count = if page == Page::Setups {
                 self.setup_entries.len()
             } else {
