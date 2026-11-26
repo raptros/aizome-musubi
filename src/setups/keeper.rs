@@ -53,7 +53,7 @@ impl Handover {
         }
         Ok(dir.join("setups.lock"))
     }
-    pub fn try_acquire(path: &Path) -> io::Result<Option<Self>> {
+    fn open(path: &Path) -> io::Result<File> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -64,6 +64,10 @@ impl Handover {
         if !file.metadata()?.is_file() {
             return Err(io::Error::other("unsafe setup lock file"));
         }
+        Ok(file)
+    }
+    pub fn try_acquire(path: &Path) -> io::Result<Option<Self>> {
+        let file = Self::open(path)?;
         let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result == 0 {
             Ok(Some(Self { file }))
@@ -72,12 +76,17 @@ impl Handover {
             if e.kind() == io::ErrorKind::WouldBlock { Ok(None) } else { Err(e) }
         }
     }
+    /// Blocks in the kernel queue, so the app wins the keeper's brief release.
     pub fn acquire(path: &Path) -> io::Result<Self> {
+        let file = Self::open(path)?;
         loop {
-            if let Some(lock) = Self::try_acquire(path)? {
-                return Ok(lock);
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(Self { file });
             }
-            std::thread::sleep(Duration::from_millis(25));
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                return Err(e);
+            }
         }
     }
 }

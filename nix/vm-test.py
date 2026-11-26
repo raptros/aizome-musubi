@@ -467,8 +467,8 @@ try:
                                    and p.get("port.name") == "playback_FL")
 
         def identity(port_id):
-            port, node = next((p, n) for p, n in ports() if p["id"] == port_id)
-            props = json.loads(user("pw-dump | jq -c --argjson id " + node["id"]
+            port = next(p for p, _ in ports() if p["id"] == port_id)
+            props = json.loads(user("pw-dump | jq -c --argjson id " + port["node.id"]
                                     + " '[.[] | select(.id == $id)] | first | .info.props'"))
             client = json.loads(user("pw-dump | jq -c --argjson id " + str(props.get("client.id", -1))
                                      + " '[.[] | select(.id == $id)] | first | .info.props // {}'"))
