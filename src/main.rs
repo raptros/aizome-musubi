@@ -3,7 +3,7 @@ use aizome_musubi::effects::{
     service::{EffectsService, Systemd},
 };
 use aizome_musubi::setups::{
-    keeper::{self, Handover, UNIT},
+    keeper::{self, Handover},
     paths::Paths as SetupPaths,
     store::Store,
 };
@@ -52,16 +52,8 @@ fn setups(args: &[String]) -> io::Result<()> {
 }
 
 fn stop_keeper() -> io::Result<()> {
-    use aizome_musubi::effects::service::Units;
     let units = Systemd::user().map_err(io::Error::other)?;
-    let mut errors = Vec::new();
-    if let Err(e) = units.stop(UNIT) {
-        errors.push(e);
-    }
-    if let Err(e) = units.disable(UNIT) {
-        errors.push(e);
-    }
-    if errors.is_empty() { Ok(()) } else { Err(io::Error::other(errors.join("; "))) }
+    aizome_musubi::effects::service::keeper_unit(&units, false).map_err(io::Error::other)
 }
 
 fn effects(args: &[String]) -> io::Result<()> {
@@ -135,7 +127,7 @@ fn main() {
         Ok(lock) => Some(lock),
         Err(error) => {
             eprintln!("Musubi: setup handover: {error}");
-            return;
+            std::process::exit(1);
         }
     };
     aizome_kit::run(app);

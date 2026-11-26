@@ -157,10 +157,10 @@ impl Units for Systemd {
 /// Stop and disable are both attempted even if the other fails (D22).
 pub fn keeper_unit<U: Units>(units: &U, enabled: bool) -> Result<(), String> {
     let name = crate::setups::keeper::UNIT;
+    if !units.owned(name)? {
+        return Err(format!("{name} is not Musubi's unit"));
+    }
     if enabled {
-        if !units.owned(name)? {
-            return Err(format!("{name} is not Musubi's unit"));
-        }
         units.enable(name)?;
         units.start(name)
     } else {

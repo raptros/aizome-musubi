@@ -35,11 +35,11 @@ impl Units for KeeperUnits {
     }
     fn stop(&self, name: &str) -> Result<(), String> {
         self.0.borrow_mut().push(format!("stop {name}"));
-        Ok(())
+        if self.0.borrow().iter().any(|call| call == "fail-stop") { Err("stop failed".into()) } else { Ok(()) }
     }
     fn disable(&self, name: &str) -> Result<(), String> {
         self.0.borrow_mut().push(format!("disable {name}"));
-        Ok(())
+        if self.0.borrow().iter().any(|call| call == "fail-disable") { Err("disable failed".into()) } else { Ok(()) }
     }
     fn listed(&self) -> Result<Vec<String>, String> {
         Ok(vec![])
@@ -48,7 +48,7 @@ impl Units for KeeperUnits {
         Ok(UnitState::default())
     }
     fn owned(&self, _: &str) -> Result<bool, String> {
-        Ok(true)
+        Ok(!self.0.borrow().iter().any(|call| call == "foreign"))
     }
 }
 use std::time::{Duration, Instant};
@@ -410,6 +410,89 @@ fn keeper_unit_follows_active_opt_in_and_remove_all() {
     assert_eq!(&*units.0.borrow(), &[format!("stop {UNIT}"), format!("disable {UNIT}")]);
     assert!(store.list().unwrap().is_empty());
     assert!(store.active().unwrap().is_none());
+}
+
+#[test]
+fn foreign_keeper_is_never_stopped_or_disabled() {
+    let units = KeeperUnits::default();
+    units.0.borrow_mut().push("foreign".into());
+    assert!(keeper_unit(&units, false).unwrap_err().contains("not Musubi"));
+    assert_eq!(&*units.0.borrow(), &["foreign"]);
+}
+
+#[test]
+fn active_setup_delete_attempts_file_removal_after_keeper_errors() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    store
+        .save(&Setup {
+            version: VERSION,
+            id: "studio".into(),
+            name: "Studio".into(),
+            routes: vec![],
+            keep_connected: true,
+            exclusive: false,
+        })
+        .unwrap();
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let units = KeeperUnits::default();
+    let mut h = Harness::new(Musubi::with_fake_setups_units(
+        fake,
+        paths,
+        EffectPaths::under(tmp.path().into()),
+        Box::new(units.clone()),
+    ));
+    h.send(Msg::ActivateSetup("studio".into()));
+    units.0.borrow_mut().extend(["fail-stop".into(), "fail-disable".into()]);
+    h.send(Msg::SetupDeleteConfirmed("studio".into()));
+    assert!(store.list().unwrap().is_empty());
+    assert!(store.active().unwrap().is_none());
+    assert!(units.0.borrow().iter().any(|call| call == &format!("stop {UNIT}")));
+    assert!(units.0.borrow().iter().any(|call| call == &format!("disable {UNIT}")));
+    let status = h.program().status_sentence().unwrap();
+    assert!(status.contains("stop failed") && status.contains("disable failed"), "{status}");
+}
+
+#[test]
+fn undo_activation_restores_previous_setup_before_disconnect_and_redo_reactivates() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let route = |from, to| {
+        let graph = &fake.borrow().graph;
+        Route {
+            output: graph.stable_port_id(&graph.ports[&from]).unwrap(),
+            input: graph.stable_port_id(&graph.ports[&to]).unwrap(),
+        }
+    };
+    for (id, from, to) in [("a", 100, 104), ("b", 101, 105)] {
+        store
+            .save(&Setup {
+                version: VERSION,
+                id: id.into(),
+                name: id.into(),
+                routes: vec![route(from, to)],
+                keep_connected: true,
+                exclusive: false,
+            })
+            .unwrap();
+    }
+    let mut h = Harness::new(Musubi::with_fake_setups(fake.clone(), paths));
+    h.send(Msg::ActivateSetup("a".into()));
+    h.send(Msg::ActivateSetup("b".into()));
+    h.send(Msg::Undo);
+    assert_eq!(store.active().unwrap().unwrap().id, "a");
+    assert!(!h.program().graph.links_by_pair.contains_key(&(101, 105)));
+    assert!(h.program().graph.links_by_pair.contains_key(&(100, 104)));
+    h.send(Msg::Redo);
+    assert_eq!(store.active().unwrap().unwrap().id, "b");
+    assert!(h.program().graph.links_by_pair.contains_key(&(101, 105)));
+    h.send(Msg::Undo);
+    h.send(Msg::Undo);
+    assert!(store.active().unwrap().is_none());
+    assert!(!h.program().graph.links_by_pair.contains_key(&(100, 104)));
 }
 
 #[test]

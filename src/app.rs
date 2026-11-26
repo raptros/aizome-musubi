@@ -152,13 +152,16 @@ fn run_effects(
             }
             EffectRequest::SetupDelete(id, paths, active) => {
                 let store = setups::store::Store { paths };
-                let result = (|| {
-                    if active {
-                        effects::service::keeper_unit(&service.units, false).map_err(std::io::Error::other)?;
+                let mut errors = Vec::new();
+                if active {
+                    if let Err(error) = effects::service::keeper_unit(&service.units, false) {
+                        errors.push(format!("keeper: {error}"));
                     }
-                    store.delete(&id)
-                })()
-                .map_err(|error| error.to_string());
+                }
+                if let Err(error) = store.delete(&id) {
+                    errors.push(format!("setup: {error}"));
+                }
+                let result = if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) };
                 EffectResponse::SetupDelete(id, result)
             }
         };
@@ -279,6 +282,7 @@ pub struct LinkIntent {
 pub struct Transaction {
     pub intents: Vec<LinkIntent>,
     pub mixer: Option<MixerIntent>,
+    pub activation: Option<(Option<String>, String)>,
 }
 
 impl Transaction {
@@ -1057,6 +1061,7 @@ impl Musubi {
                 return;
             }
         };
+        let previous = self.active_setup.as_ref().map(|setup| setup.id.clone());
         if let Err(error) = store.set_active(&Active { id }) {
             self.notice = Some(format!("Setup: {error}"));
             return;
@@ -1080,6 +1085,9 @@ impl Musubi {
             })
             .collect();
         self.activation_pending = self.submit_pairs(pairs, cx);
+        if let Some(index) = self.activation_pending {
+            self.transactions[index].activation = Some((previous, setup.id.clone()));
+        }
         self.finish_activation();
         self.enforce_setup(cx);
         self.notice.get_or_insert(format!("Setup “{}” active.", setup.name));
@@ -1793,7 +1801,7 @@ impl Musubi {
             self.record_success(index);
         }
         let index = self.transactions.len();
-        self.transactions.push(Transaction { intents: Vec::new(), mixer: Some(intent) });
+        self.transactions.push(Transaction { intents: Vec::new(), mixer: Some(intent), activation: None });
         self.mixer_current = Some(index);
         if burst {
             self.mixer_pending = Some(index);
@@ -2121,6 +2129,32 @@ impl Musubi {
             self.notice = Some(format!("{} waiting for PipeWire.", if undo { "Undo" } else { "Redo" }));
             return;
         }
+        let activation = self.transactions[index].activation.clone();
+        if let Some((previous, activated)) = &activation {
+            let Some(store) = &self.setup_store else {
+                self.history.defer(index, undo);
+                return;
+            };
+            let target = if undo { previous.as_ref() } else { Some(activated) };
+            let restored = target.map(|id| store.load(id)).transpose();
+            let persisted = restored.as_ref().map_err(|error| error.to_string()).and_then(|_| {
+                match target {
+                    Some(id) => store.set_active(&Active { id: id.clone() }),
+                    None => store.clear_active(),
+                }
+                .map_err(|error| error.to_string())
+            });
+            if let Err(error) = persisted {
+                self.history.defer(index, undo);
+                self.notice = Some(format!("Setup: {error}"));
+                return;
+            }
+            self.active_setup = restored.expect("restored setup loaded");
+            self.reconcile_state = reconcile::State::default();
+            self.reconcile_requests.clear();
+            self.reload_setups();
+            self.sync_keeper();
+        }
         let mut pairs = Vec::new();
         let mut skipped = Vec::new();
         for intent in &self.transactions[index].intents {
@@ -2146,6 +2180,9 @@ impl Musubi {
             }
         }
         let replay = self.submit_pairs(pairs, cx);
+        if let (Some(activation), Some(replay)) = (activation, replay) {
+            self.transactions[replay].activation = Some(activation);
+        }
         if undo {
             self.history.after_undo(replay);
         } else {
@@ -2813,14 +2850,18 @@ impl Program for Musubi {
                             self.notice = Some("Effects thread stopped.".into());
                         }
                     } else {
-                        let result = (|| {
-                            if active {
-                                if let Some(service) = &self.effects_service {
-                                    effects::service::keeper_unit(&service.units, false).map_err(std::io::Error::other)?;
+                        let mut errors = Vec::new();
+                        if active {
+                            if let Some(service) = &self.effects_service {
+                                if let Err(error) = effects::service::keeper_unit(&service.units, false) {
+                                    errors.push(format!("keeper: {error}"));
                                 }
                             }
-                            store.delete(&id)
-                        })().map_err(|error| error.to_string());
+                        }
+                        if let Err(error) = store.delete(&id) {
+                            errors.push(format!("setup: {error}"));
+                        }
+                        let result = if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) };
                         self.setup_deleted(id, result);
                     }
                 }
