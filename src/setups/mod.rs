@@ -19,6 +19,20 @@ pub const VERSION: u32 = 1;
 pub struct Route {
     pub output: StableId,
     pub input: StableId,
+    /// The user approved this MIDI↔MIDI 2.0 conversion when the route was saved.
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+impl Route {
+    /// The route for a live link. A conversion link exists only because the user approved it.
+    pub fn for_link(graph: &Graph, output: GlobalId, input: GlobalId) -> Option<Self> {
+        Some(Self {
+            output: graph.stable_port_id(graph.ports.get(&output)?)?,
+            input: graph.stable_port_id(graph.ports.get(&input)?)?,
+            confirmed: matches!(legal::can_link(graph, output, input), LinkLegality::NeedsConfirmation(_)),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +115,7 @@ pub fn plan(graph: &Graph, setup: &Setup) -> SetupPlan {
                 } else {
                     match legal::can_link(graph, out, input) {
                         LinkLegality::Allowed => RouteStatus::Linkable(out, input),
+                        LinkLegality::NeedsConfirmation(_) if route.confirmed => RouteStatus::Linkable(out, input),
                         LinkLegality::Forbidden(reason) | LinkLegality::NeedsConfirmation(reason) => {
                             RouteStatus::Illegal { reason }
                         }

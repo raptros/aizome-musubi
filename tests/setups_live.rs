@@ -51,10 +51,7 @@ fn keep_restores_removed_link_and_exclusive_removes_stray_link() {
         version: VERSION,
         id: "live-keep".into(),
         name: "Live keep".into(),
-        routes: vec![Route {
-            output: graph.stable_port_id(&graph.ports[&out]).unwrap(),
-            input: graph.stable_port_id(&graph.ports[&input]).unwrap(),
-        }],
+        routes: vec![Route::for_link(&graph, out, input).unwrap()],
         keep_connected: true,
         exclusive: true,
     };

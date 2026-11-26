@@ -128,9 +128,10 @@ pub fn run() -> io::Result<()> {
     let path = Handover::path()?;
     let store = Store { paths: Paths::from_environment()? };
     STOP.store(false, Ordering::Relaxed);
+    let handler = signal_stop as extern "C" fn(libc::c_int) as libc::sighandler_t;
     unsafe {
-        libc::signal(libc::SIGTERM, signal_stop as libc::sighandler_t);
-        libc::signal(libc::SIGINT, signal_stop as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, handler);
+        libc::signal(libc::SIGINT, handler);
     }
     let mut backend = PipeWireBackend::channel().map_err(io::Error::other)?;
     let mut lock = None;
@@ -212,7 +213,8 @@ pub fn run() -> io::Result<()> {
                     Action::CreateLink(out, input) => Command::Connect {
                         out: Handle { epoch, id: out },
                         input: Handle { epoch, id: input },
-                        confirmed: false,
+                        // `plan` makes a route Linkable only when allowed or approved when saved.
+                        confirmed: true,
                         request,
                     },
                     Action::RemoveLink(id) => Command::Disconnect { link: Handle { epoch, id }, request },

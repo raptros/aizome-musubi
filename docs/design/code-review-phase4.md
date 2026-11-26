@@ -22,8 +22,11 @@ Items 4–7 fixed in `fb9e74c4e6` (Exclusive conflict and endpoint scope, errore
 9. **Confirmed MIDI conversions can't be restored.** `src/setups/mod.rs:97-100`: `NeedsConfirmation` is grouped with `Forbidden`, so a pinned, user-approved MIDI↔MIDI 2.0 route is always Illegal once absent. Fix: persist the approval on the route (`confirmed: bool`, serde default false) and allow it when set.
 10. **Retry timer not rescheduled.** `src/app.rs:1023-1027`: an outstanding 30 s timer keeps `setup_retry_scheduled` set after a newer 1 s deadline appears. Fix: generation-tag scheduled retries, or reschedule when the earliest deadline moves earlier.
 
+Items 8–10 fixed by the coordinator (commit after this note): a second activation is refused while one is settling, with a status-bar notice; routes persist `confirmed` from the live link's legality (`Route::for_link`), and `plan` restores approved conversions; `reconcile::retry_timer` replaces a later timer when an earlier deadline appears. Regression tests: `second_activation_waits_for_the_first_to_settle`, `approved_midi_conversion_is_restored_and_unapproved_is_not`, `earlier_retry_deadline_replaces_a_later_timer`.
+
 ## Minors
 11. **Lock failure exits 0.** `src/main.rs:134-139`: the GUI doesn't open, but `main` returns success. Fix: exit non-zero after the message.
+Item 11 fixed in `99ac447`.
 12. (C) **The Harness hides Setups from the sidebar to keep old goldens** (`8ecc904`, `src/app.rs` sidebar filter on `setup_store.is_some()`). The real app always shows it, so every other page's golden stops matching the product. Fix: always show it; regenerate the affected goldens.
 13. (C) **Route labels are raw identities.** The setups page shows `alsa_card.pci.analog · playback_FL`, while every other page shows `node.description`. Two different routes in the fixture render identically. Fix: store a display label per endpoint when pinning or saving (description plus port), shown when the port is missing; use the live description when present; disambiguate duplicates.
 14. (C) Status bar says "1 setups"; the keeper line "Not needed" needs context ("Keeper not needed: Keep connected and Exclusive are off").

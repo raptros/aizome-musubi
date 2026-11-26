@@ -522,7 +522,8 @@ pub struct Musubi {
     pub active_setup: Option<Setup>,
     reconcile_state: reconcile::State,
     reconcile_requests: HashMap<RequestId, Action>,
-    setup_retry_scheduled: bool,
+    /// The pending retry timer and when it fires; replaced when an earlier deadline appears.
+    setup_retry: Option<(Instant, TimerHandle)>,
     setup_selected: Option<String>,
     setup_name_input: String,
     setup_new_name: String,
@@ -1024,11 +1025,12 @@ impl Musubi {
         let Some(setup) = &self.active_setup else { return };
         let outcome = reconcile::step(&self.graph, setup, std::mem::take(&mut self.reconcile_state), Instant::now());
         self.reconcile_state = outcome.state;
-        if !self.setup_retry_scheduled {
-            if let Some(delay) = reconcile::next_retry(&self.reconcile_state, Instant::now()) {
-                self.setup_retry_scheduled = true;
-                cx.after(delay, Msg::SetupRetry);
+        let now = Instant::now();
+        if let Some(delay) = reconcile::retry_timer(&self.reconcile_state, now, self.setup_retry.map(|(due, _)| due)) {
+            if let Some((_, timer)) = self.setup_retry.take() {
+                cx.cancel(timer);
             }
+            self.setup_retry = Some((now + delay, cx.after(delay, Msg::SetupRetry)));
         }
         for notice in outcome.notices {
             self.notice = Some(notice);
@@ -1041,7 +1043,8 @@ impl Musubi {
                 Action::CreateLink(out, input) => Command::Connect {
                     out: Handle { epoch, id: out },
                     input: Handle { epoch, id: input },
-                    confirmed: false,
+                    // `plan` makes a route Linkable only when allowed or approved when saved.
+                    confirmed: true,
                     request,
                 },
                 Action::RemoveLink(id) => Command::Disconnect { link: Handle { epoch, id }, request },
@@ -1053,6 +1056,11 @@ impl Musubi {
     }
 
     fn activate_setup(&mut self, id: String, cx: &mut Cx<Msg>) {
+        // One activation transaction at a time, so its undo entry is never lost.
+        if self.activation_pending.is_some() {
+            self.notice = Some("Wait for the current setup to finish connecting, then activate again.".into());
+            return;
+        }
         let Some(store) = &self.setup_store else { return };
         let setup = match store.load(&id) {
             Ok(setup) => setup,
@@ -2084,7 +2092,8 @@ impl Musubi {
                 Command::Connect {
                     out: Handle { epoch, id: from },
                     input: Handle { epoch, id: to },
-                    confirmed: self.conversion_confirmed,
+                    // Setup activation only submits routes `plan` allowed or the user approved.
+                    confirmed: activation || self.conversion_confirmed,
                     request,
                 }
             } else {
@@ -2773,7 +2782,7 @@ impl Program for Musubi {
         }
         match msg {
             Msg::SetupRetry => {
-                self.setup_retry_scheduled = false;
+                self.setup_retry = None;
                 self.enforce_setup(cx);
             }
             Msg::SetupSelect(id) => {
@@ -2833,10 +2842,9 @@ impl Program for Musubi {
                             && self.graph.kind(link.input).is_some_and(|port| kind.accepts(port)))
                         .collect();
                     links.sort_by_key(|link| link.id);
-                    let routes = links.into_iter().filter_map(|link| Some(Route {
-                        output: self.graph.stable_port_id(self.graph.ports.get(&link.output)?)?,
-                        input: self.graph.stable_port_id(self.graph.ports.get(&link.input)?)?,
-                    })).collect();
+                    let routes = links.into_iter()
+                        .filter_map(|link| Route::for_link(&self.graph, link.output, link.input))
+                        .collect();
                     let setup = Setup { version: setups::VERSION, id: id.clone(), name: name.to_owned(),
                         routes, keep_connected: false, exclusive: false };
                     self.update(Msg::SaveSetup(setup), cx);
@@ -2937,20 +2945,9 @@ impl Program for Musubi {
                 if let Some(store) = &self.setup_store {
                     let result = store.load(&id).and_then(|mut setup| {
                         let link = self.graph.links.get(&link).ok_or_else(|| std::io::Error::other("link is gone"))?;
-                        let output = self
-                            .graph
-                            .ports
-                            .get(&link.output)
-                            .and_then(|port| self.graph.stable_port_id(port))
-                            .ok_or_else(|| std::io::Error::other("output has no stable identity"))?;
-                        let input = self
-                            .graph
-                            .ports
-                            .get(&link.input)
-                            .and_then(|port| self.graph.stable_port_id(port))
-                            .ok_or_else(|| std::io::Error::other("input has no stable identity"))?;
-                        let route = Route { output, input };
-                        if !setup.routes.contains(&route) {
+                        let route = Route::for_link(&self.graph, link.output, link.input)
+                            .ok_or_else(|| std::io::Error::other("link has no stable identity"))?;
+                        if !setup.routes.iter().any(|r| r.output == route.output && r.input == route.input) {
                             setup.routes.push(route);
                         }
                         store.save(&setup)?;

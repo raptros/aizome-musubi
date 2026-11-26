@@ -127,10 +127,7 @@ fn setup(graph: &Graph, output: u32, input: u32) -> Setup {
         version: VERSION,
         id: "studio".into(),
         name: "Studio".into(),
-        routes: vec![Route {
-            output: graph.stable_port_id(&graph.ports[&output]).unwrap(),
-            input: graph.stable_port_id(&graph.ports[&input]).unwrap(),
-        }],
+        routes: vec![Route::for_link(&graph, output, input).unwrap()],
         keep_connected: true,
         exclusive: true,
     }
@@ -377,10 +374,7 @@ fn activation_submits_when_only_existing_link_is_errored() {
     let route = {
         let borrowed = fake.borrow();
         let graph = &borrowed.graph;
-        Route {
-            output: graph.stable_port_id(&graph.ports[&100]).unwrap(),
-            input: graph.stable_port_id(&graph.ports[&104]).unwrap(),
-        }
+        Route::for_link(&graph, 100, 104).unwrap()
     };
     store
         .save(&Setup {
@@ -463,6 +457,95 @@ fn create_failure_backoff_and_ambiguous_route_no_action() {
 }
 
 #[test]
+fn earlier_retry_deadline_replaces_a_later_timer() {
+    let graph = fixture(1, [hardware(10, Some("usb-serial")), target(20)].concat());
+    let saved = setup(&graph, 12, 22);
+    let now = Instant::now();
+    let mut state = reconcile::step(&graph, &saved, State::default(), now).state;
+    reconcile::create_failed(&mut state, &saved.routes[0], now);
+    // A stale 30 s timer must not hold back the new 1 s retry.
+    assert_eq!(reconcile::retry_timer(&state, now, Some(now + Duration::from_secs(30))), Some(Duration::from_secs(1)));
+    assert_eq!(reconcile::retry_timer(&state, now, None), Some(Duration::from_secs(1)));
+    assert_eq!(reconcile::retry_timer(&state, now, Some(now + Duration::from_millis(500))), None);
+}
+
+#[test]
+fn approved_midi_conversion_is_restored_and_unapproved_is_not() {
+    let midi = |id, node_id, direction, dsp: &str| {
+        Upsert::Port(PortRecord {
+            id,
+            node_id: Some(node_id),
+            direction,
+            enum_formats: vec![],
+            props: props(&[("port.name", "midi"), ("format.dsp", dsp)]),
+        })
+    };
+    let ends = || {
+        vec![
+            device(1, "alsa_card.usb-keys", Some("keys-1")),
+            node(2, "keys", Some(1), None, ""),
+            midi(3, 2, Direction::Output, "8 bit raw midi"),
+            device(4, "alsa_card.usb-synth", Some("synth-1")),
+            node(5, "synth", Some(4), None, ""),
+            midi(6, 5, Direction::Input, "32 bit raw UMP"),
+        ]
+    };
+    let linked = fixture(1, [ends(), vec![link(7, 3, 6)]].concat());
+    let approved = Route::for_link(&linked, 3, 6).unwrap();
+    assert!(approved.confirmed, "an existing conversion link was approved by the user");
+    let unlinked = fixture(2, ends());
+    let with = |route: Route| Setup {
+        version: VERSION,
+        id: "keys".into(),
+        name: "Keys".into(),
+        routes: vec![route],
+        keep_connected: true,
+        exclusive: false,
+    };
+    assert_eq!(plan(&unlinked, &with(approved.clone())).routes, vec![RouteStatus::Linkable(3, 6)]);
+    let unapproved = Route { confirmed: false, ..approved };
+    assert!(matches!(plan(&unlinked, &with(unapproved)).routes[0], RouteStatus::Illegal { .. }));
+}
+
+#[test]
+fn second_activation_waits_for_the_first_to_settle() {
+    let tmp = Temp::new();
+    let paths = Paths::under(tmp.path().into());
+    let store = Store { paths: paths.clone() };
+    let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
+    let route = |from, to| Route::for_link(&fake.borrow().graph, from, to).unwrap();
+    for (id, from, to) in [("a", 100, 104), ("b", 100, 120)] {
+        store
+            .save(&Setup {
+                version: VERSION,
+                id: id.into(),
+                name: id.to_uppercase(),
+                routes: vec![route(from, to)],
+                keep_connected: false,
+                exclusive: false,
+            })
+            .unwrap();
+    }
+    let mut h = Harness::new(Musubi::with_fake_setups(fake.clone(), paths));
+    fake.borrow_mut().defer_next_connect();
+    h.send(Msg::ActivateSetup("a".into()));
+    h.send(Msg::ActivateSetup("b".into()));
+    assert_eq!(store.active().unwrap().unwrap().id, "a", "B waits until A's links settle");
+    let id = fake.borrow().graph.links_by_pair[&(100, 104)][0];
+    fake.borrow_mut().transition_link(id, LinkState::Active);
+    while let Some(event) = fake.borrow_mut().next_event() {
+        h.send(Msg::Backend(event));
+    }
+    h.send(Msg::ActivateSetup("b".into()));
+    assert_eq!(store.active().unwrap().unwrap().id, "b");
+    h.send(Msg::Undo);
+    assert_eq!(store.active().unwrap().unwrap().id, "a", "undoing B restores A (A11)");
+    h.send(Msg::Undo);
+    assert!(store.active().unwrap().is_none(), "A's activation kept its own undo entry");
+    assert!(!h.program().graph.has_active_link((100, 104)));
+}
+
+#[test]
 fn activation_is_one_observed_undo_transaction_and_switch_stops_enforcement() {
     let tmp = Temp::new();
     let paths = Paths::under(tmp.path().into());
@@ -471,10 +554,7 @@ fn activation_is_one_observed_undo_transaction_and_switch_stops_enforcement() {
     let route = |from, to| {
         let fake = fake.borrow();
         let graph = &fake.graph;
-        Route {
-            output: graph.stable_port_id(&graph.ports[&from]).unwrap(),
-            input: graph.stable_port_id(&graph.ports[&to]).unwrap(),
-        }
+        Route::for_link(&graph, from, to).unwrap()
     };
     let a = Setup {
         version: VERSION,
@@ -613,10 +693,7 @@ fn undo_activation_restores_previous_setup_before_disconnect_and_redo_reactivate
     let fake = Rc::new(RefCell::new(FakeBackend::from_dump(include_str!("fixtures/studio.json"), 1).unwrap()));
     let route = |from, to| {
         let graph = &fake.borrow().graph;
-        Route {
-            output: graph.stable_port_id(&graph.ports[&from]).unwrap(),
-            input: graph.stable_port_id(&graph.ports[&to]).unwrap(),
-        }
+        Route::for_link(&graph, from, to).unwrap()
     };
     for (id, from, to) in [("a", 100, 104), ("b", 101, 105)] {
         store

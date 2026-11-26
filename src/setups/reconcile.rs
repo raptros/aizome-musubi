@@ -55,6 +55,12 @@ pub fn next_retry(state: &State, now: Instant) -> Option<Duration> {
         .min()
 }
 
+/// The delay for a new retry timer, or None when the one already due at `scheduled` fires soon enough.
+pub fn retry_timer(state: &State, now: Instant, scheduled: Option<Instant>) -> Option<Duration> {
+    let delay = next_retry(state, now)?;
+    scheduled.is_none_or(|due| now + delay < due).then_some(delay)
+}
+
 pub fn remove_failed(state: &mut State, id: GlobalId) {
     state.removes.remove(&id);
 }
