@@ -1,0 +1,16 @@
+# Phase 4 log
+
+What each slice delivered, with evidence. Workspace logs live outside the repo under `runs/2026-11-25/patchbay/phase4/<slice>/` (Sekka contribution workspace).
+
+| Slice | Commits | Delivered | Evidence (level) |
+|---|---|---|---|
+| Plan, user answers | `60363e2`, `2a29c3f` | semantics written before code; D24 one active setup, D25 Exclusive only on the setup's ports, D26 explicit pin/unpin | — |
+| S1 model and matching | `5ef0e37` | `src/setups/`: versioned routes by stable identity, hardened store (no symlinks, 0600/0700, atomic, foreign files kept), `plan()` with linked/linkable/missing/ambiguous/illegal and D25 foreign links, `setups list/remove/remove-all`, README recovery; A10: app streams match by `application.name` and binary, never `media.name` | unit: replug, identical devices without serial, app restart, two app instances, scope, damaged JSON, symlink, remove-all |
+| S2 activation and enforcement | `5426137` | headless `reconcile::step` (in-flight tracking, 1/5/30 s create backoff, Exclusive rate limit); activation as one observed undo transaction; enforcement kept out of history; negotiating links count as linked | unit, Harness; live (private PipeWire): restore and stray-link removal |
+| S3 keeper | `782608d`, `cce68b8`, `bac4b5b`, `57a0c85` | `aizome-musubi --keeper` user unit, installed but not enabled; app/keeper handover through `flock` (the app waits in the kernel queue); Musubi enables the keeper only while the active setup has Keep or Exclusive | unit; VM: with Musubi closed, the keeper re-links a WirePlumber-managed stream after the player restarts; Exclusive removed WirePlumber's default link and WirePlumber did not re-create it; remove-all leaves nothing (VM) |
+| S4 Setups page | `44157da`, `8ecc904` | PATCHBAY ▸ Setups: list, detail, route table, Activate, Keep, Exclusive with warning, Delete, Save Setup sheet, pin/unpin from the matrix and inspector, toolbar chip | Harness, Night/Day goldens; VM drives the whole keeper flow through the page (VM) |
+| Reviews | `09fbd0f` | code review: 2 blockers, 8 majors; visual review: 1 blocker, 7 majors; A11 activation undo | `docs/design/code-review-phase4.md`, `visual-review-phase4.md` |
+| S5a code-review fixes | `99ac447`, `fb9e74c`, `5e69c74`, `e723f4b` | keeper ownership before stop/disable; A11 undo restores the previous active setup first; delete continues past keeper failure; Exclusive conflict stays stopped; per-endpoint Exclusive scope; error-only links don't strand activation; CLI remove with damaged `active.json`; one activation at a time; approved MIDI conversions restore; earlier retries reschedule; lock failure exits 1 | unit (a regression test per item); VM all 7 subtests at `e723f4b` (VM) |
+| S5b visual fixes | `f37dd38` | routes show live port names (else saved labels) in Out/In columns at body size; page Undo for setup edits; delete and Exclusive dialogs name the setup; keeper line, empty state, counts, status dot, Delete beside toggles; Setups always in the sidebar | Harness goldens regenerated and inspected; VM all 7 subtests at `f37dd38` (VM) |
+
+Open: none blocking. Exclusive's give-up after 3 removals a minute is proven by unit tests only. WirePlumber didn't fight in the VM.

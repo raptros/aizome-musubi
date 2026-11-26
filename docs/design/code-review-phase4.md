@@ -30,5 +30,6 @@ Item 11 fixed in `99ac447`.
 12. (C) **The Harness hides Setups from the sidebar to keep old goldens** (`8ecc904`, `src/app.rs` sidebar filter on `setup_store.is_some()`). The real app always shows it, so every other page's golden stops matching the product. Fix: always show it; regenerate the affected goldens.
 13. (C) **Route labels are raw identities.** The setups page shows `alsa_card.pci.analog · playback_FL`, while every other page shows `node.description`. Two different routes in the fixture render identically. Fix: store a display label per endpoint when pinning or saving (description plus port), shown when the port is missing; use the live description when present; disambiguate duplicates.
 14. (C) Status bar says "1 setups"; the keeper line "Not needed" needs context ("Keeper not needed: Keep connected and Exclusive are off").
+Items 12–14 fixed with the visual review (`f37dd38`): the Setups entry always shows; routes save `output_label`/`input_label` and show live port names first; plural-aware counts; the keeper line names itself and its state.
 
 Tests cover ordinary activation, a short Exclusive burst and keeper restoration. They don't exercise these failure and boundary paths: each fix needs a regression test.
