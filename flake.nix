@@ -57,7 +57,7 @@
           musubiModule = self.nixosModules.default;
         };
       };
-      nixosModules.default = { config, lib, pkgs, ... }: {
+      nixosModules.default = { config, lib, pkgs, utils, ... }: {
         options.programs.musubi.enable = lib.mkEnableOption "Musubi, the PipeWire patchbay for Aizome";
         config = lib.mkIf config.programs.musubi.enable {
           environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.musubi ];
@@ -75,10 +75,8 @@
           };
           systemd.user.services.aizome-musubi-keeper = {
             description = "Musubi setup keeper";
-            extraConfig = ''
-              [Install]
-              WantedBy=default.target
-            '';
+            # NixOS wantedBy creates a stateless .wants link, which would start
+            # the keeper for everyone. Retain only the enableable Install stanza.
             after = [ "pipewire.service" ];
             wants = [ "pipewire.service" ];
             serviceConfig = {
@@ -86,6 +84,10 @@
               Restart = "on-failure";
             };
           };
+          systemd.user.units."aizome-musubi-keeper.service".text = lib.mkForce (
+            (utils.systemdUtils.lib.serviceToUnit config.systemd.user.services.aizome-musubi-keeper).text
+            + "\n[Install]\nWantedBy=default.target\n"
+          );
         };
       };
     };
