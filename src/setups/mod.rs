@@ -22,6 +22,11 @@ pub struct Route {
     /// The user approved this MIDI↔MIDI 2.0 conversion when the route was saved.
     #[serde(default)]
     pub confirmed: bool,
+    /// What the ports were called when saved, shown while they are missing.
+    #[serde(default)]
+    pub output_label: Option<String>,
+    #[serde(default)]
+    pub input_label: Option<String>,
 }
 
 impl Route {
@@ -31,6 +36,8 @@ impl Route {
             output: graph.stable_port_id(graph.ports.get(&output)?)?,
             input: graph.stable_port_id(graph.ports.get(&input)?)?,
             confirmed: matches!(legal::can_link(graph, output, input), LinkLegality::NeedsConfirmation(_)),
+            output_label: Some(crate::routes::port_name(graph, output)),
+            input_label: Some(crate::routes::port_name(graph, input)),
         })
     }
 }

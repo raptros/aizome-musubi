@@ -92,9 +92,21 @@ fn fixture(label: &str, day: bool, populated: bool) -> (Harness<Musubi>, Store, 
                 id: "studio".into(),
                 name: "Studio".into(),
                 routes: vec![
-                    Route { output: output.clone(), input: input.clone(), confirmed: false },
-                    Route { output: waiting, input: input.clone(), confirmed: false },
-                    Route { output: ambiguous, input, confirmed: false },
+                    Route {
+                        output: output.clone(),
+                        input: input.clone(),
+                        confirmed: false,
+                        output_label: None,
+                        input_label: None,
+                    },
+                    Route {
+                        output: waiting,
+                        input: input.clone(),
+                        confirmed: false,
+                        output_label: Some("USB Keyboard · capture_FL".into()),
+                        input_label: None,
+                    },
+                    Route { output: ambiguous, input, confirmed: false, output_label: None, input_label: None },
                 ],
                 keep_connected: false,
                 exclusive: false,
@@ -142,6 +154,17 @@ fn page_actions_persist_and_confirm() {
     assert!(store.list().unwrap().is_empty());
     assert!(store.active().unwrap().is_none());
     assert!(units.0.borrow().iter().any(|call| call.starts_with("disable ")));
+}
+#[test]
+fn unpin_is_undone_from_the_setups_toolbar() {
+    let (mut h, store, _) = fixture("unpin-undo", false, true);
+    let routes = store.load("studio").unwrap().routes;
+    click(&mut h, "setup-unpin-1");
+    assert_eq!(store.load("studio").unwrap().routes.len(), routes.len() - 1);
+    click(&mut h, "undo");
+    assert_eq!(store.load("studio").unwrap().routes, routes, "Undo restores the unpinned route in place");
+    h.send(Msg::Redo);
+    assert_eq!(store.load("studio").unwrap().routes.len(), routes.len() - 1);
 }
 #[test]
 fn goldens_night_and_day() {

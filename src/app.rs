@@ -524,6 +524,9 @@ pub struct Musubi {
     reconcile_requests: HashMap<RequestId, Action>,
     /// The pending retry timer and when it fires; replaced when an earlier deadline appears.
     setup_retry: Option<(Instant, TimerHandle)>,
+    /// Setup file edits made on the Setups page (before, after), undone there like Effects edits.
+    setup_undo: Vec<(Setup, Setup)>,
+    setup_redo: Vec<(Setup, Setup)>,
     setup_selected: Option<String>,
     setup_name_input: String,
     setup_new_name: String,
@@ -762,6 +765,9 @@ fn toolbar_controls(config: &ToolbarConfig, compact: bool, very_narrow: bool) ->
         return toolbar(controls).into();
     }
     if config.page == Page::Setups {
+        controls.push(
+            button("Undo").icon(Icon::Undo2).toolbar().enabled(config.can_undo).on_press(Msg::Undo).id("undo").into(),
+        );
         return toolbar(controls).into();
     }
     if config.page == Page::Effects {
@@ -2805,48 +2811,79 @@ impl Program for Musubi {
                     self.update(Msg::SaveSetup(setup), cx);
                 }
             }
-            Msg::SetupExclusive(true) => cx.alert(self.window,
-                Alert::new("Exclusive setup", "Exclusive removes other links on this setup’s ports. WirePlumber may re-create its automatic links.")
-                    .default_button("Turn on Exclusive", Msg::SetupExclusiveConfirmed).cancel_button("Cancel")),
+            Msg::SetupExclusive(true) => {
+                let name = self.selected_setup().map_or_else(String::new, |setup| setup.name.clone());
+                cx.alert(
+                    self.window,
+                    Alert::new(
+                        format!("Turn on Exclusive for “{name}”?"),
+                        "While this setup is active, Musubi disconnects any other links on its ports. \
+                         WirePlumber may reconnect its automatic links.",
+                    )
+                    .default_button("Turn on Exclusive", Msg::SetupExclusiveConfirmed)
+                    .cancel_button("Cancel"),
+                );
+            }
             Msg::SetupExclusiveConfirmed | Msg::SetupExclusive(false) => {
                 let enabled = matches!(msg, Msg::SetupExclusiveConfirmed);
                 if let Some(mut setup) = self.selected_setup().cloned() {
                     setup.exclusive = enabled;
                     self.update(Msg::SaveSetup(setup), cx);
                     self.notice = Some(if enabled {
-                        "Exclusive removes other links on these ports; WirePlumber may re-create automatic links.".into()
-                    } else { "Exclusive turned off.".into() });
+                        "Exclusive removes other links on these ports; WirePlumber may re-create automatic links."
+                            .into()
+                    } else {
+                        "Exclusive turned off.".into()
+                    });
                 }
             }
             Msg::SetupKeeperRetry => self.sync_keeper(),
             Msg::SetupNew => {
                 if self.setup_store.is_some() {
-                    if self.page != Page::Setups { self.setup_new_page = self.page; }
+                    if self.page != Page::Setups {
+                        self.setup_new_page = self.page;
+                    }
                     self.setup_new_name.clear();
                     self.setup_sheet = Some(cx.show_sheet(self.window));
                 }
             }
             Msg::SetupNewName(name) => self.setup_new_name = name,
             Msg::SetupNewCancel => {
-                if let Some(sheet) = self.setup_sheet.take() { cx.close_window(sheet); }
+                if let Some(sheet) = self.setup_sheet.take() {
+                    cx.close_window(sheet);
+                }
             }
             Msg::SetupNewCommit => {
                 let name = self.setup_new_name.trim();
                 if !name.is_empty() {
-                    let id = (1..).map(|n| format!("setup-{n}"))
-                        .find(|id| !self.setup_entries.iter().any(|(existing, _)| existing == id)).unwrap();
+                    let id = (1..)
+                        .map(|n| format!("setup-{n}"))
+                        .find(|id| !self.setup_entries.iter().any(|(existing, _)| existing == id))
+                        .unwrap();
                     let kind = self.setup_new_page;
-                    let mut links: Vec<_> = self.graph.links.values()
-                        .filter(|link| matches!(link.state, LinkState::Active)
-                            && self.graph.kind(link.output).is_some_and(|port| kind.accepts(port))
-                            && self.graph.kind(link.input).is_some_and(|port| kind.accepts(port)))
+                    let mut links: Vec<_> = self
+                        .graph
+                        .links
+                        .values()
+                        .filter(|link| {
+                            matches!(link.state, LinkState::Active)
+                                && self.graph.kind(link.output).is_some_and(|port| kind.accepts(port))
+                                && self.graph.kind(link.input).is_some_and(|port| kind.accepts(port))
+                        })
                         .collect();
                     links.sort_by_key(|link| link.id);
-                    let routes = links.into_iter()
+                    let routes = links
+                        .into_iter()
                         .filter_map(|link| Route::for_link(&self.graph, link.output, link.input))
                         .collect();
-                    let setup = Setup { version: setups::VERSION, id: id.clone(), name: name.to_owned(),
-                        routes, keep_connected: false, exclusive: false };
+                    let setup = Setup {
+                        version: setups::VERSION,
+                        id: id.clone(),
+                        name: name.to_owned(),
+                        routes,
+                        keep_connected: false,
+                        exclusive: false,
+                    };
                     self.update(Msg::SaveSetup(setup), cx);
                     if self.setup_entries.iter().any(|(existing, _)| existing == &id) {
                         self.setup_selected = Some(id);
@@ -2857,9 +2894,25 @@ impl Program for Musubi {
             }
             Msg::SetupDelete(id) => {
                 if let Some(store) = &self.setup_store {
-                    let file = store.paths.json(&id).map(|path| home_relative(&path)).unwrap_or_default();
-                    cx.alert(self.window, Alert::new("Delete setup", format!("Remove this setup and its file?\n{file}"))
-                        .destructive_button("Delete setup", Msg::SetupDeleteConfirmed(id)).cancel_button("Cancel"));
+                    let name = self.stored_setup(&id).map_or_else(|| id.clone(), |setup| setup.name);
+                    let (dir, file) = store.paths.json(&id).map_or_else(
+                        |_| (String::new(), String::new()),
+                        |path| {
+                            (
+                                path.parent().map(home_relative).unwrap_or_default(),
+                                path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+                            )
+                        },
+                    );
+                    cx.alert(
+                        self.window,
+                        Alert::new(
+                            "Delete setup",
+                            format!("Remove “{name}” and its file?\n\nFile in {dir}:\n    {file}"),
+                        )
+                        .destructive_button("Delete setup", Msg::SetupDeleteConfirmed(id))
+                        .cancel_button("Cancel"),
+                    );
                 }
             }
             Msg::SetupDeleteConfirmed(id) => {
@@ -2889,22 +2942,35 @@ impl Program for Musubi {
             Msg::SetupPin(link) => {
                 if let Some(setup) = &self.active_setup {
                     self.update(Msg::PinLink(setup.id.clone(), link), cx);
-                } else { self.notice = Some("Activate a setup to pin links.".into()); }
+                } else {
+                    self.notice = Some("Activate a setup to pin links.".into());
+                }
             }
             Msg::SetupUnpin(link) => {
                 if let Some(setup) = &self.active_setup {
                     if let Some(link) = self.graph.links.get(&link) {
-                        let route = self.graph.ports.get(&link.output).and_then(|port| self.graph.stable_port_id(port))
-                            .zip(self.graph.ports.get(&link.input).and_then(|port| self.graph.stable_port_id(port)));
+                        let route =
+                            self.graph.ports.get(&link.output).and_then(|port| self.graph.stable_port_id(port)).zip(
+                                self.graph.ports.get(&link.input).and_then(|port| self.graph.stable_port_id(port)),
+                            );
                         if let Some((output, input)) = route {
-                            if let Some(index) = setup.routes.iter().position(|route| route.output == output && route.input == input) {
+                            if let Some(index) =
+                                setup.routes.iter().position(|route| route.output == output && route.input == input)
+                            {
                                 self.update(Msg::UnpinRoute(setup.id.clone(), index), cx);
                             }
                         }
                     }
-                } else { self.notice = Some("Activate a setup to unpin routes.".into()); }
+                } else {
+                    self.notice = Some("Activate a setup to unpin routes.".into());
+                }
             }
-            Msg::ActivateSetup(id) => self.activate_setup(id, cx),
+            Msg::ActivateSetup(id) => {
+                // Activation is a graph transaction; earlier file edits no longer undo in order.
+                self.setup_undo.clear();
+                self.setup_redo.clear();
+                self.activate_setup(id, cx);
+            }
             Msg::DeactivateSetup => {
                 if let Some(store) = &self.setup_store {
                     match store.clear_active() {
@@ -2921,23 +2987,11 @@ impl Program for Musubi {
                 }
             }
             Msg::SaveSetup(setup) => {
-                if let Some(store) = &self.setup_store {
-                    match store.save(&setup) {
-                        Ok(()) => {
-                            if self.active_setup.as_ref().is_some_and(|active| active.id == setup.id) {
-                                let exclusive_changed =
-                                    self.active_setup.as_ref().is_some_and(|active| active.exclusive != setup.exclusive);
-                                self.active_setup = Some(setup);
-                                self.sync_keeper();
-                                if exclusive_changed {
-                                    self.reconcile_state = reconcile::State::default();
-                                }
-                                self.enforce_setup(cx);
-                            }
-                            self.notice = Some("Setup saved.".into());
-                            self.reload_setups();
-                        }
-                        Err(error) => self.notice = Some(format!("Setup: {error}")),
+                let before = self.stored_setup(&setup.id);
+                if self.save_setup(setup.clone(), cx) {
+                    if let Some(before) = before.filter(|before| *before != setup) {
+                        self.setup_undo.push((before, setup));
+                        self.setup_redo.clear();
                     }
                 }
             }
@@ -2965,29 +3019,14 @@ impl Program for Musubi {
                     }
                 }
             }
-            Msg::UnpinRoute(id, index) => {
-                if let Some(store) = &self.setup_store {
-                    let result = store.load(&id).and_then(|mut setup| {
-                        if index >= setup.routes.len() {
-                            return Err(std::io::Error::other("route is gone"));
-                        }
-                        setup.routes.remove(index);
-                        store.save(&setup)?;
-                        Ok(setup)
-                    });
-                    match result {
-                        Ok(setup) => {
-                            if self.active_setup.as_ref().is_some_and(|active| active.id == id) {
-                                self.active_setup = Some(setup);
-                                self.reconcile_state = reconcile::State::default();
-                            }
-                            self.notice = Some("Route unpinned from setup.".into());
-                            self.reload_setups();
-                        }
-                        Err(error) => self.notice = Some(format!("Setup: {error}")),
-                    }
+            Msg::UnpinRoute(id, index) => match self.stored_setup(&id) {
+                Some(mut setup) if index < setup.routes.len() => {
+                    setup.routes.remove(index);
+                    self.update(Msg::SaveSetup(setup), cx);
+                    self.notice = Some("Route unpinned. Undo restores it.".into());
                 }
-            }
+                _ => self.notice = Some("Setup: route is gone".into()),
+            },
             Msg::ClockRate(rate) if self.clock_settings.valid_rate(rate) => {
                 self.apply_clock((Some(rate), self.clock_settings.force_quantum), None)
             }
@@ -3824,6 +3863,8 @@ impl Program for Musubi {
             }
             Msg::Undo if self.page == Page::Effects => self.replay_effect(true),
             Msg::Redo if self.page == Page::Effects => self.replay_effect(false),
+            Msg::Undo if self.page == Page::Setups => self.replay_setup(true, cx),
+            Msg::Redo if self.page == Page::Setups => self.replay_setup(false, cx),
             Msg::Undo if self.page == Page::Clock => {
                 if let Some(change) = self.clock_undo.last().cloned() {
                     self.apply_clock(change.before, Some(true));
@@ -4085,7 +4126,7 @@ impl Program for Musubi {
             );
         }
         if self.setup_sheet == Some(window) {
-            return setups::page::new_sheet(&self.setup_new_name);
+            return setups::page::new_sheet(&self.setup_new_name, self.setup_new_page);
         }
         let mut side = column![
             row![
@@ -4103,10 +4144,10 @@ impl Program for Musubi {
         ]
         .spacing(8.)
         .width(Fill);
-        for (page, icon, title) in Page::ALL.into_iter().filter(|(page, _, _)| {
-            !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock)
-                && (*page != Page::Setups || self.setup_store.is_some())
-        }) {
+        for (page, icon, title) in Page::ALL
+            .into_iter()
+            .filter(|(page, _, _)| !matches!(page, Page::Mixer | Page::Effects | Page::Devices | Page::Clock))
+        {
             let count = if page == Page::Setups {
                 self.setup_entries.len()
             } else {
@@ -4241,14 +4282,15 @@ impl Program for Musubi {
         } else if self.page == Page::Clock {
             clock::page::view(&self.clock_settings, &self.clock_load, self.clock_persistent)
         } else if self.page == Page::Setups {
-            setups::page::view(
-                &self.graph,
-                &self.setup_entries,
-                self.setup_selected.as_deref(),
-                self.active_setup.as_ref(),
-                &self.setup_name_input,
-                self.setup_keeper_error.as_deref(),
-            )
+            setups::page::view(setups::page::View {
+                graph: &self.graph,
+                entries: &self.setup_entries,
+                selected: self.setup_selected.as_deref(),
+                active: self.active_setup.as_ref(),
+                name_input: &self.setup_name_input,
+                keeper_error: self.setup_keeper_error.as_deref(),
+                new_page: self.setup_new_page,
+            })
         } else if self.page == Page::Effects {
             let outputs = self
                 .audio
@@ -4385,7 +4427,7 @@ impl Program for Musubi {
                 } else if self.page == Page::Clock {
                     "Clock & Load".into()
                 } else if self.page == Page::Setups {
-                    format!("Setups · {}", self.setup_entries.len())
+                    format!("Setups · {}", setups_label(self.setup_entries.len()))
                 } else {
                     title
                 },
@@ -4398,7 +4440,7 @@ impl Program for Musubi {
                 } else if self.page == Page::Clock {
                     "Clock & Load".into()
                 } else if self.page == Page::Setups {
-                    "Setups".into()
+                    format!("Setups · {}", self.setup_entries.len())
                 } else {
                     short_title
                 },
@@ -4416,6 +4458,8 @@ impl Program for Musubi {
                     !self.clock_undo.is_empty()
                 } else if self.page == Page::Effects {
                     !self.effect_undo.is_empty()
+                } else if self.page == Page::Setups {
+                    !self.setup_undo.is_empty() || self.history.undo_label(&self.transactions).is_some()
                 } else {
                     self.history.undo_label(&self.transactions).is_some()
                 },
@@ -4475,7 +4519,7 @@ impl Program for Musubi {
         } else if self.page == Page::Effects {
             chains_label(self.effect_chains.len())
         } else if self.page == Page::Setups {
-            format!("{} setups", self.setup_entries.len())
+            setups_label(self.setup_entries.len())
         } else if self.page == Page::Clock {
             // The forced values are the left-hand sentence; don't repeat them.
             format!("DSP {:.1}%", self.clock_load.current_percent())
@@ -4579,6 +4623,58 @@ impl Program for Musubi {
 
 fn chains_label(count: usize) -> String {
     format!("{count} {}", if count == 1 { "chain" } else { "chains" })
+}
+
+fn setups_label(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "setup" } else { "setups" })
+}
+
+impl Musubi {
+    fn stored_setup(&self, id: &str) -> Option<Setup> {
+        self.setup_entries.iter().find(|(entry, _)| entry == id).and_then(|(_, result)| result.as_ref().ok()).cloned()
+    }
+
+    /// Writes the setup file; an active setup's enforcement and keeper follow it.
+    fn save_setup(&mut self, setup: Setup, cx: &mut Cx<Msg>) -> bool {
+        let Some(store) = &self.setup_store else { return false };
+        if let Err(error) = store.save(&setup) {
+            self.notice = Some(format!("Setup: {error}"));
+            return false;
+        }
+        if self.active_setup.as_ref().is_some_and(|active| active.id == setup.id) {
+            let exclusive_changed =
+                self.active_setup.as_ref().is_some_and(|active| active.exclusive != setup.exclusive);
+            let routes_changed = self.active_setup.as_ref().is_some_and(|active| active.routes != setup.routes);
+            self.active_setup = Some(setup);
+            self.sync_keeper();
+            if exclusive_changed || routes_changed {
+                self.reconcile_state = reconcile::State::default();
+            }
+            self.enforce_setup(cx);
+        }
+        self.notice = Some("Setup saved.".into());
+        self.reload_setups();
+        true
+    }
+
+    /// Setup edits undo first; activation clears them, so graph undo (activation) follows in order.
+    fn replay_setup(&mut self, undo: bool, cx: &mut Cx<Msg>) {
+        let entry = if undo { self.setup_undo.pop() } else { self.setup_redo.pop() };
+        let Some((before, after)) = entry else { return self.replay(undo, cx) };
+        let (current, desired) = if undo { (&after, &before) } else { (&before, &after) };
+        if self.stored_setup(&current.id).as_ref() != Some(current) {
+            self.notice = Some("Setup changed since this undo entry.".into());
+            return;
+        }
+        if self.save_setup(desired.clone(), cx) {
+            self.notice = Some(if undo { "Setup change undone." } else { "Setup change redone." }.into());
+            if undo { self.setup_redo.push((before, after)) } else { self.setup_undo.push((before, after)) }
+        } else if undo {
+            self.setup_undo.push((before, after));
+        } else {
+            self.setup_redo.push((before, after));
+        }
+    }
 }
 
 /// `~/…` for paths under the home directory, as people read them.
